@@ -7,11 +7,19 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 
 export class PhysicsWorld {
-  private world: RAPIER.World;
+  private world!: RAPIER.World;
+  private initialized = false;
   
-  constructor() {
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    
+    console.log('Initializing Rapier physics...');
+    await RAPIER.init();
+    console.log('Rapier initialized!');
+    
     // Create world with gravity
     this.world = new RAPIER.World({ x: 0, y: -20, z: 0 });
+    this.initialized = true;
   }
   
   /**

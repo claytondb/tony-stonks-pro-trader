@@ -4,7 +4,6 @@
  */
 
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from '../input/InputManager';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { CameraController } from '../rendering/CameraController';
@@ -61,20 +60,43 @@ export class Game {
   }
   
   async init(): Promise<void> {
-    // Initialize physics first (async WASM load)
-    await RAPIER.init();
+    console.log('Game.init() starting...');
     
-    this.initRenderer();
-    this.initScene();
-    this.initPhysics();
-    this.initInput();
-    this.initTricks();
-    this.initUI();
-    this.initPlayer();
-    this.initEnvironment();
-    
-    // Handle window resize
-    window.addEventListener('resize', this.onResize.bind(this));
+    try {
+      this.initRenderer();
+      console.log('Renderer initialized');
+      
+      this.initScene();
+      console.log('Scene initialized');
+      
+      // Initialize physics (async WASM load)
+      this.physics = new PhysicsWorld();
+      await this.physics.init();
+      console.log('Physics initialized');
+      
+      this.initInput();
+      console.log('Input initialized');
+      
+      this.initTricks();
+      console.log('Tricks initialized');
+      
+      this.initUI();
+      console.log('UI initialized');
+      
+      this.initPlayer();
+      console.log('Player initialized');
+      
+      this.initEnvironment();
+      console.log('Environment initialized');
+      
+      // Handle window resize
+      window.addEventListener('resize', this.onResize.bind(this));
+      
+      console.log('Game.init() complete!');
+    } catch (error) {
+      console.error('Error in Game.init():', error);
+      throw error;
+    }
   }
   
   private initRenderer(): void {
@@ -129,9 +151,7 @@ export class Game {
     this.cameraController = new CameraController(this.camera);
   }
   
-  private initPhysics(): void {
-    this.physics = new PhysicsWorld();
-  }
+  // Physics is now initialized in init() before other systems
   
   private initInput(): void {
     this.input = new InputManager();

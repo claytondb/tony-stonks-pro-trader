@@ -1,9 +1,15 @@
 import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
 import { resolve } from 'path';
+import wasm from 'vite-plugin-wasm';
+import topLevelAwait from 'vite-plugin-top-level-await';
 
 export default defineConfig({
-  plugins: [preact()],
+  plugins: [
+    preact(),
+    wasm(),
+    topLevelAwait()
+  ],
   base: process.env.BASE_URL || '/',
   resolve: {
     alias: {
@@ -26,9 +32,6 @@ export default defineConfig({
         }
       }
     }
-  },
-  optimizeDeps: {
-    exclude: ['@dimforge/rapier3d-compat']
   },
   publicDir: 'public',
   server: {

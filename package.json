@@ -27,6 +27,8 @@
     "@types/howler": "^2.2.11",
     "typescript": "^5.4.2",
     "vite": "^5.2.0",
+    "vite-plugin-wasm": "^3.3.0",
+    "vite-plugin-top-level-await": "^1.4.1",
     "vitest": "^1.4.0",
     "@vitest/coverage-v8": "^1.4.0",
     "eslint": "^8.57.0",
