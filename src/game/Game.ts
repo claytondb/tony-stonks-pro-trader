@@ -256,7 +256,7 @@ export class Game {
         const model = await this.playerModel.load();
         
         // Position player on/behind chair
-        model.position.set(0, 0.1, -0.15);
+        model.position.set(0, 0.15, 0);  // Centered on chair
         model.rotation.y = 0;
         
         this.chair.add(model);
@@ -558,8 +558,45 @@ export class Game {
   }
   
   private initEnvironment(): void {
+    const groundSize = 200;  // Much bigger ground
+    
+    // Sky color
+    this.scene.background = new THREE.Color(0x87CEEB);
+    
+    // Add gradient sky sphere
+    const skyGeometry = new THREE.SphereGeometry(500, 32, 32);
+    const skyMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        topColor: { value: new THREE.Color(0x4A90D9) },
+        bottomColor: { value: new THREE.Color(0xFFFFFF) },
+        offset: { value: 20 },
+        exponent: { value: 0.6 }
+      },
+      vertexShader: `
+        varying vec3 vWorldPosition;
+        void main() {
+          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+          vWorldPosition = worldPosition.xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 topColor;
+        uniform vec3 bottomColor;
+        uniform float offset;
+        uniform float exponent;
+        varying vec3 vWorldPosition;
+        void main() {
+          float h = normalize(vWorldPosition + offset).y;
+          gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);
+        }
+      `,
+      side: THREE.BackSide
+    });
+    const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+    this.scene.add(sky);
+    
     // Ground plane with grid texture
-    const groundSize = 100;
     const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize, 50, 50);
     
     // Create grid texture
@@ -585,7 +622,7 @@ export class Game {
     const groundTexture = new THREE.CanvasTexture(canvas);
     groundTexture.wrapS = THREE.RepeatWrapping;
     groundTexture.wrapT = THREE.RepeatWrapping;
-    groundTexture.repeat.set(20, 20);
+    groundTexture.repeat.set(40, 40);  // More repeats for bigger ground
     
     const groundMaterial = new THREE.MeshStandardMaterial({ 
       map: groundTexture,
@@ -596,8 +633,36 @@ export class Game {
     ground.receiveShadow = true;
     this.scene.add(ground);
     
-    // Add ground to physics
-    this.physics.createGround();
+    // Add visible walls around the perimeter
+    const wallHeight = 3;
+    const wallMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0x888888,
+      roughness: 0.8
+    });
+    
+    // Create walls (visual)
+    const halfSize = groundSize / 2;
+    const wallGeometry = new THREE.BoxGeometry(groundSize, wallHeight, 1);
+    
+    const northWall = new THREE.Mesh(wallGeometry, wallMaterial);
+    northWall.position.set(0, wallHeight/2, halfSize);
+    this.scene.add(northWall);
+    
+    const southWall = new THREE.Mesh(wallGeometry, wallMaterial);
+    southWall.position.set(0, wallHeight/2, -halfSize);
+    this.scene.add(southWall);
+    
+    const eastWallGeom = new THREE.BoxGeometry(1, wallHeight, groundSize);
+    const eastWall = new THREE.Mesh(eastWallGeom, wallMaterial);
+    eastWall.position.set(halfSize, wallHeight/2, 0);
+    this.scene.add(eastWall);
+    
+    const westWall = new THREE.Mesh(eastWallGeom, wallMaterial);
+    westWall.position.set(-halfSize, wallHeight/2, 0);
+    this.scene.add(westWall);
+    
+    // Add ground and walls to physics
+    this.physics.createGround(halfSize);
     
     // Create skate park elements
     this.createRails();
@@ -1133,7 +1198,7 @@ export class Game {
     
     // Ground detection - check if body is near ground level
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 0.4 && vel.y > -0.5;
+    this.playerState.isGrounded = pos.y < 0.6 && vel.y > -0.5;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track air time
@@ -1172,8 +1237,7 @@ export class Game {
   
   private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
     // THPS-style physics - snappy and responsive
-    const accelSpeed = 0.4;      // W - velocity boost per frame
-    const brakeStrength = 0.92;  // S - multiplier to slow down (0-1)
+    const accelSpeed = 0.4;      // W/S - velocity boost per frame
     const turnTorque = 5;        // A/D - turning (reduced for smoother control)
     const airTurnTorque = 2;     // Reduced turning in air
     const jumpImpulse = 8;       // Space - ollie
@@ -1199,11 +1263,15 @@ export class Game {
       }
     }
     
-    // BRAKE (S) - Slow down by reducing velocity directly
-    if (input.brake && this.playerState.isGrounded && currentSpeed > 0.3) {
-      const newVel = velocity.clone().multiplyScalar(brakeStrength);
-      newVel.y = velocity.y; // Don't affect vertical velocity
-      this.physics.setVelocity(this.chairBody, newVel);
+    // BACKWARD (S) - Move backward
+    if (input.brake && this.playerState.isGrounded) {
+      if (currentSpeed < maxSpeed) {
+        const boost = forward.clone().multiplyScalar(-accelSpeed * 0.6); // Slower backward
+        const newVel = velocity.clone();
+        newVel.x += boost.x;
+        newVel.z += boost.z;
+        this.physics.setVelocity(this.chairBody, newVel);
+      }
     }
     
     // TURNING (A/D) - Rotate left/right

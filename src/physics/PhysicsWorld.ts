@@ -30,18 +30,18 @@ export class PhysicsWorld {
     // Create dynamic rigid body
     // Only Y rotation allowed (chair stays upright)
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(position.x, position.y + 0.5, position.z)
+      .setTranslation(position.x, position.y + 0.8, position.z)
       .setLinearDamping(0.15)  // Very low damping = more sliding
       .setAngularDamping(3.0)  // Moderate angular damping
       .enabledRotations(false, true, false); // Only Y rotation allowed
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Cylinder collider - sits on ground at y=0
-    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.2, 0.35)
-      .setTranslation(0, 0.2, 0)  // Center at 0.2, bottom at 0
+    // Cylinder collider
+    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.25, 0.4)
+      .setTranslation(0, 0.3, 0)  // Raised up more
       .setMass(50)
-      .setFriction(0.3)  // Low friction for sliding
+      .setFriction(0.3)
       .setRestitution(0.0);
     
     this.world.createCollider(bodyCollider, body);
@@ -50,19 +50,40 @@ export class PhysicsWorld {
   }
   
   /**
-   * Create ground plane
+   * Create ground plane with walls
    */
-  createGround(): void {
+  createGround(size = 50): void {
+    // Ground
     const groundDesc = RAPIER.RigidBodyDesc.fixed()
-      .setTranslation(0, -0.1, 0);  // Ground surface at y=0
-    
+      .setTranslation(0, -0.1, 0);
     const groundBody = this.world.createRigidBody(groundDesc);
-    
-    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100)
-      .setFriction(0.5)  // Moderate friction
+    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(size, 0.1, size)
+      .setFriction(0.5)
       .setRestitution(0.0);
-    
     this.world.createCollider(groundColliderDesc, groundBody);
+    
+    // Walls (invisible barriers)
+    const wallHeight = 5;
+    const wallThickness = 1;
+    
+    // North wall (+Z)
+    this.createWall(0, wallHeight/2, size + wallThickness, size, wallHeight, wallThickness);
+    // South wall (-Z)
+    this.createWall(0, wallHeight/2, -size - wallThickness, size, wallHeight, wallThickness);
+    // East wall (+X)
+    this.createWall(size + wallThickness, wallHeight/2, 0, wallThickness, wallHeight, size);
+    // West wall (-X)
+    this.createWall(-size - wallThickness, wallHeight/2, 0, wallThickness, wallHeight, size);
+  }
+  
+  private createWall(x: number, y: number, z: number, halfW: number, halfH: number, halfD: number): void {
+    const wallDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(x, y, z);
+    const wallBody = this.world.createRigidBody(wallDesc);
+    const wallCollider = RAPIER.ColliderDesc.cuboid(halfW, halfH, halfD)
+      .setFriction(0.3)
+      .setRestitution(0.3);
+    this.world.createCollider(wallCollider, wallBody);
   }
   
   /**
