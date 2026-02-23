@@ -8,6 +8,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from '../input/InputManager';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
+import { GrindSystem } from '../physics/GrindSystem';
 import { CameraController } from '../rendering/CameraController';
 import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
 import { ComboSystem } from '../tricks/ComboSystem';
@@ -33,6 +34,7 @@ export class Game {
   // Systems
   private input!: InputManager;
   private physics!: PhysicsWorld;
+  private grindSystem!: GrindSystem;
   private cameraController!: CameraController;
   private trickDetector!: TrickDetector;
   private comboSystem!: ComboSystem;
@@ -81,6 +83,9 @@ export class Game {
       
       this.initInput();
       console.log('Input initialized');
+      
+      this.grindSystem = new GrindSystem();
+      console.log('Grind system initialized');
       
       this.initTricks();
       console.log('Tricks initialized');
@@ -628,6 +633,11 @@ export class Game {
       new THREE.Vector3(x, 0.8, z),
       new THREE.Vector3(length / 2, 0.04, 0.04)
     );
+    
+    // Register with grind system (rail runs along X axis)
+    const start = new THREE.Vector3(x - length / 2, 0.8, z);
+    const end = new THREE.Vector3(x + length / 2, 0.8, z);
+    this.grindSystem.addRail(start, end, `rail_${x}_${z}`, rail);
   }
   
   private createRailAngled(x: number, z: number, length: number, rotation: number, material: THREE.Material): void {
@@ -644,6 +654,14 @@ export class Game {
       new THREE.Vector3(length / 2, 0.04, 0.04),
       new THREE.Euler(0, rotation, 0)
     );
+    
+    // Register with grind system (calculate rotated endpoints)
+    const halfLen = length / 2;
+    const dx = Math.cos(rotation) * halfLen;
+    const dz = Math.sin(rotation) * halfLen;
+    const start = new THREE.Vector3(x - dx, 0.8, z - dz);
+    const end = new THREE.Vector3(x + dx, 0.8, z + dz);
+    this.grindSystem.addRail(start, end, `rail_angled_${x}_${z}`, rail);
   }
   
   private createRamps(): void {
@@ -830,8 +848,48 @@ export class Game {
       this.hud?.setSpecial(this.specialMeter);
     }
     
-    // Apply movement forces
-    this.applyMovement(input, dt);
+    // Check for grind initiation
+    if (!this.grindSystem.isGrinding()) {
+      const pos = this.physics.getPosition(this.chairBody);
+      const vel = this.physics.getVelocity(this.chairBody);
+      const startedGrind = this.grindSystem.tryStartGrind(pos, vel, input.grind);
+      
+      if (startedGrind) {
+        this.playerState.isGrinding = true;
+        this.grindBalance = 0.5;
+      }
+    }
+    
+    // Update grind if active
+    if (this.grindSystem.isGrinding()) {
+      // Balance input from A/D keys
+      let balanceInput = 0;
+      if (input.turnLeft) balanceInput = -1;
+      if (input.turnRight) balanceInput = 1;
+      
+      // Jump off rail
+      if (input.jump) {
+        this.grindSystem.forceEndGrind();
+        this.playerState.isGrinding = false;
+        // Apply jump impulse
+        this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, 10, 0));
+      } else {
+        // Update grind physics
+        this.grindSystem.updateGrind(dt, balanceInput, this.physics, this.chairBody);
+        
+        // Update balance display
+        const grindState = this.grindSystem.getState();
+        this.grindBalance = grindState.balance;
+        
+        // Check if grind ended
+        if (!this.grindSystem.isGrinding()) {
+          this.playerState.isGrinding = false;
+        }
+      }
+    } else {
+      // Apply normal movement forces
+      this.applyMovement(input, dt);
+    }
     
     // Step physics
     this.physics.step(dt);

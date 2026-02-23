@@ -160,4 +160,38 @@ export class PhysicsWorld {
   setVelocity(body: RAPIER.RigidBody, velocity: THREE.Vector3): void {
     body.setLinvel({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
   }
+  
+  /**
+   * Set position directly
+   */
+  setPosition(body: RAPIER.RigidBody, position: THREE.Vector3): void {
+    body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
+  }
+  
+  /**
+   * Set Y rotation only (for grinding along rails)
+   */
+  setRotationY(body: RAPIER.RigidBody, angle: number): void {
+    // Create quaternion from Y rotation only
+    const quat = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      angle
+    );
+    body.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w }, true);
+  }
+  
+  /**
+   * Get angular velocity
+   */
+  getAngularVelocity(body: RAPIER.RigidBody): THREE.Vector3 {
+    const angvel = body.angvel();
+    return new THREE.Vector3(angvel.x, angvel.y, angvel.z);
+  }
+  
+  /**
+   * Set angular velocity
+   */
+  setAngularVelocity(body: RAPIER.RigidBody, angvel: THREE.Vector3): void {
+    body.setAngvel({ x: angvel.x, y: angvel.y, z: angvel.z }, true);
+  }
 }
