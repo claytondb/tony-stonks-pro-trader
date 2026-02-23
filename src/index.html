@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#2D2D2D" />
+    <title>Tony Stonks Pro Trader</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #2D2D2D;
+        font-family: 'Roboto Mono', 'Consolas', monospace;
+      }
+      
+      #app {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+      
+      #game-canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      
+      #ui-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+      }
+      
+      #ui-overlay > * {
+        pointer-events: auto;
+      }
+      
+      #loading {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: #00FF88;
+        font-size: 24px;
+        text-align: center;
+      }
+      
+      #loading .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid #333;
+        border-top-color: #00FF88;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 16px;
+      }
+      
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game-canvas"></canvas>
+      <div id="ui-overlay"></div>
+      <div id="loading">
+        <div class="spinner"></div>
+        <div>Loading Tony Stonks...</div>
+      </div>
+    </div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

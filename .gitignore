@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Test coverage
+coverage/
+
+# Capacitor
+ios/
+android/
+.capacitor/
+
+# Electron
+electron/dist/
+
+# Vite
+*.cache
+
+# TypeScript
+*.tsbuildinfo
+
+# Assets (large files - use Git LFS or separate hosting)
+# assets/models/*.glb
+# assets/audio/*.mp3
