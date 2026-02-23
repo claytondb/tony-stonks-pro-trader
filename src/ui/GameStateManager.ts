@@ -38,6 +38,7 @@ export class GameStateManager {
   
   private currentLevelId: string = '';
   private lastResult: LevelResult | null = null;
+  private titleGlitchTimeout: number | null = null;
   
   constructor(container: HTMLElement, callbacks: GameStateCallbacks = {}) {
     this.uiContainer = container;
@@ -190,61 +191,221 @@ export class GameStateManager {
   }
   
   private renderTitle(): void {
+    // Clean up any existing glitch timeout
+    if (this.titleGlitchTimeout) {
+      clearTimeout(this.titleGlitchTimeout);
+      this.titleGlitchTimeout = null;
+    }
+    
     this.uiContainer.innerHTML = `
-      <div style="
+      <div id="title-screen" style="
         position: absolute;
         top: 0;
         left: 0;
         width: 100%;
         height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        overflow: hidden;
         pointer-events: auto;
       ">
-        <div style="
-          font-size: 64px;
-          font-weight: bold;
-          color: #00FF88;
-          text-shadow: 4px 4px 0px #004422, 8px 8px 0px rgba(0,0,0,0.3);
-          font-family: 'Impact', sans-serif;
-          letter-spacing: 4px;
-          margin-bottom: 10px;
-        ">TONY STONKS</div>
-        
-        <div style="
-          font-size: 32px;
-          color: #FFD700;
-          font-family: 'Impact', sans-serif;
-          text-shadow: 2px 2px 0px #665500;
-          margin-bottom: 60px;
-        ">PRO TRADER</div>
-        
-        <div style="
-          font-size: 18px;
-          color: #ffffff;
-          animation: blink 1s infinite;
-          font-family: 'Courier New', monospace;
-        ">PRESS SPACE TO START</div>
-        
+        <!-- Background image -->
         <div style="
           position: absolute;
-          bottom: 40px;
-          color: #666;
-          font-size: 12px;
-          font-family: 'Courier New', monospace;
-        ">© 2026 Diamond Hands Studios</div>
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: url('./ui/titlebg.png') center center / cover no-repeat;
+          background-color: #1a1a2e;
+        "></div>
+        
+        <!-- Content container -->
+        <div style="
+          position: relative;
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: flex-start;
+          padding-top: 5vh;
+        ">
+          <!-- Tony character image with float animation -->
+          <img 
+            id="tony-float"
+            src="./ui/tony1.png" 
+            alt="Tony"
+            style="
+              max-width: 80%;
+              max-height: 45vh;
+              object-fit: contain;
+              animation: gentleFloat 6s ease-in-out infinite;
+              filter: drop-shadow(0 10px 30px rgba(0,0,0,0.5));
+            "
+          />
+          
+          <!-- Logotype with glitch effect -->
+          <div id="logo-container" style="
+            position: relative;
+            margin-top: 2vh;
+          ">
+            <img 
+              id="logotype"
+              src="./ui/logotype.png" 
+              alt="Tony Stonks Pro Trader"
+              style="
+                max-width: 70vw;
+                max-height: 20vh;
+                object-fit: contain;
+                filter: drop-shadow(0 4px 20px rgba(0,255,136,0.3));
+              "
+            />
+            <!-- Glitch layers (hidden until glitch triggers) -->
+            <img 
+              id="logotype-glitch-r"
+              src="./ui/logotype.png" 
+              alt=""
+              style="
+                position: absolute;
+                top: 0;
+                left: 0;
+                max-width: 70vw;
+                max-height: 20vh;
+                object-fit: contain;
+                opacity: 0;
+                pointer-events: none;
+              "
+            />
+            <img 
+              id="logotype-glitch-b"
+              src="./ui/logotype.png" 
+              alt=""
+              style="
+                position: absolute;
+                top: 0;
+                left: 0;
+                max-width: 70vw;
+                max-height: 20vh;
+                object-fit: contain;
+                opacity: 0;
+                pointer-events: none;
+              "
+            />
+          </div>
+          
+          <!-- Press to start -->
+          <div style="
+            margin-top: 5vh;
+            font-size: clamp(14px, 3vw, 20px);
+            color: #ffffff;
+            animation: blink 1.2s infinite;
+            font-family: 'Courier New', monospace;
+            text-shadow: 0 0 10px rgba(0,255,136,0.5);
+            letter-spacing: 2px;
+          ">PRESS SPACE TO START</div>
+          
+          <!-- Copyright -->
+          <div style="
+            position: absolute;
+            bottom: 20px;
+            color: rgba(255,255,255,0.4);
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+          ">© 2026 Diamond Hands Studios</div>
+        </div>
       </div>
       
       <style>
         @keyframes blink {
-          0%, 50% { opacity: 1; }
-          51%, 100% { opacity: 0.3; }
+          0%, 45% { opacity: 1; }
+          50%, 100% { opacity: 0.3; }
+        }
+        
+        @keyframes gentleFloat {
+          0%, 100% { 
+            transform: translateY(0) rotate(0deg); 
+          }
+          25% { 
+            transform: translateY(-8px) rotate(0.5deg); 
+          }
+          50% { 
+            transform: translateY(-4px) rotate(-0.3deg); 
+          }
+          75% { 
+            transform: translateY(-12px) rotate(0.3deg); 
+          }
+        }
+        
+        @keyframes glitchShake {
+          0% { transform: translate(0); }
+          20% { transform: translate(-3px, 2px); }
+          40% { transform: translate(2px, -2px); }
+          60% { transform: translate(-2px, 1px); }
+          80% { transform: translate(3px, -1px); }
+          100% { transform: translate(0); }
         }
       </style>
     `;
+    
+    // Set up random glitch effect for the logotype
+    this.setupLogoGlitch();
+  }
+  
+  private setupLogoGlitch(): void {
+    const triggerGlitch = () => {
+      const logo = document.getElementById('logotype');
+      const glitchR = document.getElementById('logotype-glitch-r');
+      const glitchB = document.getElementById('logotype-glitch-b');
+      const container = document.getElementById('logo-container');
+      
+      if (!logo || !glitchR || !glitchB || !container) return;
+      
+      // Random glitch intensity
+      const intensity = Math.random() * 8 + 4;
+      
+      // Apply glitch
+      container.style.animation = 'glitchShake 0.1s linear';
+      
+      // Red channel offset
+      glitchR.style.opacity = '0.8';
+      glitchR.style.transform = `translate(${intensity}px, ${-intensity/2}px)`;
+      glitchR.style.filter = 'hue-rotate(-60deg) saturate(2)';
+      glitchR.style.mixBlendMode = 'screen';
+      
+      // Blue channel offset
+      glitchB.style.opacity = '0.8';
+      glitchB.style.transform = `translate(${-intensity}px, ${intensity/2}px)`;
+      glitchB.style.filter = 'hue-rotate(60deg) saturate(2)';
+      glitchB.style.mixBlendMode = 'screen';
+      
+      // Add scan lines effect to main logo
+      logo.style.filter = `drop-shadow(0 4px 20px rgba(0,255,136,0.3)) brightness(1.2) contrast(1.1)`;
+      
+      // Clear glitch after short duration (50-150ms)
+      const glitchDuration = Math.random() * 100 + 50;
+      setTimeout(() => {
+        container.style.animation = '';
+        glitchR.style.opacity = '0';
+        glitchB.style.opacity = '0';
+        logo.style.filter = 'drop-shadow(0 4px 20px rgba(0,255,136,0.3))';
+      }, glitchDuration);
+    };
+    
+    // Trigger glitch randomly every 2-5 seconds
+    const scheduleNextGlitch = () => {
+      const delay = Math.random() * 3000 + 2000; // 2-5 seconds
+      this.titleGlitchTimeout = window.setTimeout(() => {
+        if (this.state === 'title') {
+          triggerGlitch();
+          scheduleNextGlitch();
+        }
+      }, delay);
+    };
+    
+    // Start the glitch cycle
+    scheduleNextGlitch();
+    
+    // Trigger one glitch shortly after load for immediate feedback
+    setTimeout(triggerGlitch, 500);
   }
   
   private renderMenu(): void {
