@@ -1020,8 +1020,9 @@ export class Game {
     const maxSpeed = 25;         // Cap forward speed
     
     // Get chair orientation and velocity
+    // Note: Chair model is rotated 180° so visual "front" faces -Z in physics space
     const chairRotation = this.physics.getRotation(this.chairBody);
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(chairRotation);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(chairRotation);
     const velocity = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
     

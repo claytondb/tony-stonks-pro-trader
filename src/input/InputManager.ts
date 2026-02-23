@@ -36,7 +36,7 @@ export interface InputState {
 
 export class InputManager {
   private keys: Set<string> = new Set();
-  private prevKeys: Set<string> = new Set();
+  private justPressedKeys: Set<string> = new Set();
   private gamepad: Gamepad | null = null;
   
   constructor() {
@@ -50,6 +50,10 @@ export class InputManager {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ControlLeft', 'ControlRight'].includes(e.code)) {
         e.preventDefault();
       }
+      // Track just-pressed keys (not already held)
+      if (!this.keys.has(e.code)) {
+        this.justPressedKeys.add(e.code);
+      }
       this.keys.add(e.code);
     });
     
@@ -60,6 +64,7 @@ export class InputManager {
     // Clear keys when window loses focus
     window.addEventListener('blur', () => {
       this.keys.clear();
+      this.justPressedKeys.clear();
     });
   }
   
@@ -76,7 +81,8 @@ export class InputManager {
   }
   
   update(): void {
-    this.prevKeys = new Set(this.keys);
+    // Clear just-pressed keys from last frame
+    this.justPressedKeys.clear();
     
     // Refresh gamepad state
     const gamepads = navigator.getGamepads();
@@ -86,7 +92,7 @@ export class InputManager {
   }
   
   private justPressed(code: string): boolean {
-    return this.keys.has(code) && !this.prevKeys.has(code);
+    return this.justPressedKeys.has(code);
   }
   
   private isHeld(code: string): boolean {
