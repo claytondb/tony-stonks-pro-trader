@@ -1131,9 +1131,9 @@ export class Game {
     const pos = this.physics.getPosition(this.chairBody);
     const vel = this.physics.getVelocity(this.chairBody);
     
-    // Ground detection
+    // Ground detection - check if body is near ground level
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 0.55 && vel.y > -0.5;
+    this.playerState.isGrounded = pos.y < 0.8 && vel.y > -0.5;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track air time
@@ -1172,13 +1172,13 @@ export class Game {
   
   private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
     // THPS-style physics - snappy and responsive
-    const pushImpulse = 1.8;     // W - immediate push (impulse, not force)
-    const brakeStrength = 0.85;  // S - multiplier to slow down (0-1)
-    const turnTorque = 15;       // A/D - turning
+    const pushImpulse = 3.5;     // W - immediate push (impulse, not force)
+    const brakeStrength = 0.9;   // S - multiplier to slow down (0-1)
+    const turnTorque = 12;       // A/D - turning
     const airTurnTorque = 4;     // Reduced turning in air
     const jumpImpulse = 10;      // Space - ollie
     const spinTorque = 8;        // Q/E - spin in air
-    const maxSpeed = 18;         // Cap forward speed (tighter control)
+    const maxSpeed = 20;         // Cap forward speed
     
     // Get chair orientation and velocity
     // +Z is forward (away from camera), matching CameraController expectations

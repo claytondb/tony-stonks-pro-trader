@@ -30,18 +30,18 @@ export class PhysicsWorld {
     // Create dynamic rigid body
     // Only Y rotation allowed (chair stays upright)
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(position.x, position.y + 0.5, position.z)
-      .setLinearDamping(3.0)   // High damping = quick stop when not pushing
-      .setAngularDamping(8.0)  // High angular damping = crisp turning
+      .setTranslation(position.x, position.y + 0.6, position.z)
+      .setLinearDamping(1.5)   // Moderate damping
+      .setAngularDamping(5.0)  // Angular damping for crisp turning
       .enabledRotations(false, true, false); // Only Y rotation allowed
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Main body collider - simple cylinder centered on body
-    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.25, 0.35)
-      .setTranslation(0, 0.3, 0)
-      .setMass(60)        // Lighter = more responsive
-      .setFriction(1.2)   // High friction = grip the ground
+    // Main body collider - cylinder for the chair
+    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.2, 0.3)
+      .setTranslation(0, 0.25, 0)
+      .setMass(50)
+      .setFriction(0.7)
       .setRestitution(0.0);
     
     this.world.createCollider(bodyCollider, body);
@@ -59,7 +59,7 @@ export class PhysicsWorld {
     const groundBody = this.world.createRigidBody(groundDesc);
     
     const groundColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100)
-      .setFriction(1.5)   // High friction for grip
+      .setFriction(0.8)
       .setRestitution(0.0);
     
     this.world.createCollider(groundColliderDesc, groundBody);
