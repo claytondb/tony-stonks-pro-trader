@@ -1171,14 +1171,14 @@ export class Game {
   }
   
   private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
-    // THPS-style physics constants
-    const pushForce = 25;        // W - push forward
-    const brakeForce = 15;       // S - brake/slow down  
-    const turnTorque = 10;       // A/D - turning
-    const airTurnTorque = 3;     // Reduced turning in air
-    const jumpImpulse = 12;      // Space - ollie
+    // THPS-style physics - snappy and responsive
+    const pushImpulse = 1.8;     // W - immediate push (impulse, not force)
+    const brakeStrength = 0.85;  // S - multiplier to slow down (0-1)
+    const turnTorque = 15;       // A/D - turning
+    const airTurnTorque = 4;     // Reduced turning in air
+    const jumpImpulse = 10;      // Space - ollie
     const spinTorque = 8;        // Q/E - spin in air
-    const maxSpeed = 25;         // Cap forward speed
+    const maxSpeed = 18;         // Cap forward speed (tighter control)
     
     // Get chair orientation and velocity
     // +Z is forward (away from camera), matching CameraController expectations
@@ -1187,21 +1187,21 @@ export class Game {
     const velocity = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
     
-    // FORWARD (W) - Push in facing direction
+    // FORWARD (W) - Push in facing direction (impulse for instant response)
     if (input.forward && this.playerState.isGrounded) {
-      // Only push if not at max speed
       if (currentSpeed < maxSpeed) {
-        const force = forward.clone().multiplyScalar(pushForce);
-        this.physics.applyForce(this.chairBody, force);
+        // Scale push by how much room we have to accelerate
+        const speedRatio = 1 - (currentSpeed / maxSpeed);
+        const impulse = forward.clone().multiplyScalar(pushImpulse * (0.3 + speedRatio * 0.7));
+        this.physics.applyImpulse(this.chairBody, impulse);
       }
     }
     
-    // BRAKE (S) - Slow down
-    if (input.brake && this.playerState.isGrounded && currentSpeed > 0.5) {
-      // Apply force opposite to current velocity
-      const brakeDir = new THREE.Vector3(velocity.x, 0, velocity.z).normalize().negate();
-      const force = brakeDir.multiplyScalar(brakeForce);
-      this.physics.applyForce(this.chairBody, force);
+    // BRAKE (S) - Slow down by reducing velocity directly
+    if (input.brake && this.playerState.isGrounded && currentSpeed > 0.3) {
+      const newVel = velocity.clone().multiplyScalar(brakeStrength);
+      newVel.y = velocity.y; // Don't affect vertical velocity
+      this.physics.setVelocity(this.chairBody, newVel);
     }
     
     // TURNING (A/D) - Rotate left/right
