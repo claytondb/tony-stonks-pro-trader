@@ -227,9 +227,9 @@ export class Game {
       const chairGltf = await loader.loadAsync('./models/chair.glb');
       const chairModel = chairGltf.scene;
       
-      // Chair at 1/4 size as requested
-      chairModel.scale.set(0.2, 0.2, 0.2);
-      chairModel.position.set(0, -0.1, 0);  // Lower to sit on ground
+      // Chair model - larger scale
+      chairModel.scale.set(0.35, 0.35, 0.35);
+      chairModel.position.set(0, 0, 0);
       // Model's natural +Z should face forward (away from camera)
       
       // Enable shadows
@@ -1132,9 +1132,8 @@ export class Game {
     const vel = this.physics.getVelocity(this.chairBody);
     
     // Ground detection - check if body is near ground level
-    // Cylinder collider has bottom at body origin, so grounded when y is low
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 0.5 && vel.y > -0.5;
+    this.playerState.isGrounded = pos.y < 0.4 && vel.y > -0.5;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track air time

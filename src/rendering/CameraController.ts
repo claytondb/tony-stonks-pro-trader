@@ -10,10 +10,10 @@ export class CameraController {
   private target: THREE.Object3D | null = null;
   
   // Camera settings
-  private offset = new THREE.Vector3(0, 4, -8);
-  private lookAhead = 2;
-  private smoothSpeed = 4;
-  private rotationSmooth = 2;
+  private offset = new THREE.Vector3(0, 3, -5);  // Closer and lower
+  private lookAhead = 1.5;
+  private smoothSpeed = 5;
+  private rotationSmooth = 3;
   
   // Current state
   private currentOffset = new THREE.Vector3();

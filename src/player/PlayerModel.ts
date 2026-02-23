@@ -45,7 +45,7 @@ export class PlayerModel {
     this.model = gltf.scene;
     
     // Scale and position the model
-    this.model.scale.set(0.4, 0.4, 0.4); // Smaller scale to fit chair
+    this.model.scale.set(0.6, 0.6, 0.6); // Larger scale
     this.model.position.set(0, 0, 0);
     // Model should face +Z (forward direction, away from camera)
     
