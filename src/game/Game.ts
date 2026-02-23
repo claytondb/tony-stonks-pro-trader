@@ -229,7 +229,7 @@ export class Game {
       
       // Chair at 1/4 size as requested
       chairModel.scale.set(0.2, 0.2, 0.2);
-      chairModel.position.set(0, 0, 0);
+      chairModel.position.set(0, -0.1, 0);  // Lower to sit on ground
       // Model's natural +Z should face forward (away from camera)
       
       // Enable shadows
@@ -1132,8 +1132,9 @@ export class Game {
     const vel = this.physics.getVelocity(this.chairBody);
     
     // Ground detection - check if body is near ground level
+    // Cylinder collider has bottom at body origin, so grounded when y is low
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 0.8 && vel.y > -0.5;
+    this.playerState.isGrounded = pos.y < 0.5 && vel.y > -0.5;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track air time
@@ -1172,13 +1173,13 @@ export class Game {
   
   private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
     // THPS-style physics - snappy and responsive
-    const accelSpeed = 0.5;      // W - velocity boost per frame
-    const brakeStrength = 0.9;   // S - multiplier to slow down (0-1)
-    const turnTorque = 12;       // A/D - turning
-    const airTurnTorque = 4;     // Reduced turning in air
-    const jumpImpulse = 10;      // Space - ollie
-    const spinTorque = 8;        // Q/E - spin in air
-    const maxSpeed = 20;         // Cap forward speed
+    const accelSpeed = 0.4;      // W - velocity boost per frame
+    const brakeStrength = 0.92;  // S - multiplier to slow down (0-1)
+    const turnTorque = 5;        // A/D - turning (reduced for smoother control)
+    const airTurnTorque = 2;     // Reduced turning in air
+    const jumpImpulse = 8;       // Space - ollie
+    const spinTorque = 6;        // Q/E - spin in air
+    const maxSpeed = 18;         // Cap forward speed
     
     // Get chair orientation and velocity
     // +Z is forward (away from camera), matching CameraController expectations
