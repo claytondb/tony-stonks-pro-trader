@@ -182,11 +182,11 @@ export class Game {
   private initPlayer(): void {
     // Create visual chair
     this.chair = this.createChairMesh();
-    this.chair.position.set(0, 0, 0);
+    this.chair.position.set(0, 0.5, 5); // Start in the middle of the skate area
     this.scene.add(this.chair);
     
-    // Create physics body
-    this.chairBody = this.physics.createChairBody(this.chair.position);
+    // Create physics body at same position
+    this.chairBody = this.physics.createChairBody(new THREE.Vector3(0, 0, 5));
     
     // Set camera target
     this.cameraController.setTarget(this.chair);
@@ -304,149 +304,170 @@ export class Game {
     
     // ========== PLAYER CHARACTER ==========
     // Office worker riding the chair like a scooter
+    // Using hierarchical groups so limbs stay connected
     
-    // Skin color
-    const skinMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0xffdbac,
-      roughness: 0.8
-    });
+    // Materials
+    const skinMaterial = new THREE.MeshStandardMaterial({ color: 0xffdbac, roughness: 0.8 });
+    const shirtMaterial = new THREE.MeshStandardMaterial({ color: 0x4a6fa5, roughness: 0.7 });
+    const pantsMaterial = new THREE.MeshStandardMaterial({ color: 0xc4a35a, roughness: 0.8 });
+    const shoeMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 });
+    const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x3d2314, roughness: 0.9 });
     
-    // Shirt (blue dress shirt)
-    const shirtMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x4a6fa5,
-      roughness: 0.7
-    });
+    // Main player group
+    const player = new THREE.Group();
+    player.position.set(0, 0.55, 0); // On chair seat level
     
-    // Pants (khakis)
-    const pantsMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0xc4a35a,
-      roughness: 0.8
-    });
+    // === TORSO (main body pivot) ===
+    const torsoGroup = new THREE.Group();
+    torsoGroup.position.set(0, 0.4, 0);
+    torsoGroup.rotation.x = 0.2; // Lean forward slightly
     
-    // Shoes
-    const shoeMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x2a2a2a,
-      roughness: 0.9
-    });
+    const torsoGeo = new THREE.BoxGeometry(0.32, 0.4, 0.18);
+    const torso = new THREE.Mesh(torsoGeo, shirtMaterial);
+    torso.castShadow = true;
+    torsoGroup.add(torso);
+    
+    // === HEAD (attached to torso) ===
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0, 0.28, 0);
+    
+    const headGeo = new THREE.SphereGeometry(0.11, 12, 10);
+    const head = new THREE.Mesh(headGeo, skinMaterial);
+    head.castShadow = true;
+    headGroup.add(head);
     
     // Hair
-    const hairMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x3d2314,
-      roughness: 0.9
-    });
-    
-    // Player group (attached to chair)
-    const player = new THREE.Group();
-    player.position.set(0, 0, -0.15); // Slightly behind center
-    
-    // TORSO - leaning forward
-    const torsoGeometry = new THREE.BoxGeometry(0.35, 0.45, 0.2);
-    const torso = new THREE.Mesh(torsoGeometry, shirtMaterial);
-    torso.position.set(0, 1.0, 0);
-    torso.rotation.x = 0.3; // Lean forward
-    torso.castShadow = true;
-    player.add(torso);
-    
-    // HEAD
-    const headGeometry = new THREE.SphereGeometry(0.12, 16, 12);
-    const head = new THREE.Mesh(headGeometry, skinMaterial);
-    head.position.set(0, 1.38, -0.08);
-    head.castShadow = true;
-    player.add(head);
-    
-    // HAIR (on top of head)
-    const hairGeometry = new THREE.SphereGeometry(0.13, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.5);
-    const hair = new THREE.Mesh(hairGeometry, hairMaterial);
-    hair.position.set(0, 1.42, -0.06);
+    const hairGeo = new THREE.SphereGeometry(0.115, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.55);
+    const hair = new THREE.Mesh(hairGeo, hairMaterial);
+    hair.position.y = 0.02;
     hair.castShadow = true;
-    player.add(hair);
+    headGroup.add(hair);
     
-    // LEFT ARM (on armrest)
-    const upperArmGeo = new THREE.CylinderGeometry(0.05, 0.045, 0.25);
+    torsoGroup.add(headGroup);
+    
+    // === LEFT ARM (attached to torso) ===
+    const leftArmGroup = new THREE.Group();
+    leftArmGroup.position.set(-0.18, 0.12, 0); // Shoulder position
+    leftArmGroup.rotation.z = 0.4;
+    leftArmGroup.rotation.x = 0.8;
+    
+    const upperArmGeo = new THREE.CapsuleGeometry(0.04, 0.18, 4, 8);
     const leftUpperArm = new THREE.Mesh(upperArmGeo, shirtMaterial);
-    leftUpperArm.position.set(-0.22, 0.9, 0.05);
-    leftUpperArm.rotation.z = 0.3;
-    leftUpperArm.rotation.x = 0.5;
+    leftUpperArm.position.y = -0.12;
     leftUpperArm.castShadow = true;
-    player.add(leftUpperArm);
+    leftArmGroup.add(leftUpperArm);
     
-    const forearmGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.22);
+    // Forearm (attached to upper arm)
+    const forearmGroup = new THREE.Group();
+    forearmGroup.position.set(0, -0.22, 0);
+    forearmGroup.rotation.x = -1.0;
+    
+    const forearmGeo = new THREE.CapsuleGeometry(0.035, 0.16, 4, 8);
     const leftForearm = new THREE.Mesh(forearmGeo, skinMaterial);
-    leftForearm.position.set(-0.32, 0.72, 0.15);
-    leftForearm.rotation.x = 1.2;
+    leftForearm.position.y = -0.1;
     leftForearm.castShadow = true;
-    player.add(leftForearm);
+    forearmGroup.add(leftForearm);
     
-    // LEFT HAND
+    // Hand
     const handGeo = new THREE.SphereGeometry(0.04, 8, 6);
     const leftHand = new THREE.Mesh(handGeo, skinMaterial);
-    leftHand.position.set(-0.32, 0.62, 0.25);
+    leftHand.position.y = -0.2;
     leftHand.castShadow = true;
-    player.add(leftHand);
+    forearmGroup.add(leftHand);
     
-    // RIGHT ARM (on armrest)
+    leftArmGroup.add(forearmGroup);
+    torsoGroup.add(leftArmGroup);
+    
+    // === RIGHT ARM (mirror of left) ===
+    const rightArmGroup = new THREE.Group();
+    rightArmGroup.position.set(0.18, 0.12, 0);
+    rightArmGroup.rotation.z = -0.4;
+    rightArmGroup.rotation.x = 0.8;
+    
     const rightUpperArm = new THREE.Mesh(upperArmGeo, shirtMaterial);
-    rightUpperArm.position.set(0.22, 0.9, 0.05);
-    rightUpperArm.rotation.z = -0.3;
-    rightUpperArm.rotation.x = 0.5;
+    rightUpperArm.position.y = -0.12;
     rightUpperArm.castShadow = true;
-    player.add(rightUpperArm);
+    rightArmGroup.add(rightUpperArm);
+    
+    const rightForearmGroup = new THREE.Group();
+    rightForearmGroup.position.set(0, -0.22, 0);
+    rightForearmGroup.rotation.x = -1.0;
     
     const rightForearm = new THREE.Mesh(forearmGeo, skinMaterial);
-    rightForearm.position.set(0.32, 0.72, 0.15);
-    rightForearm.rotation.x = 1.2;
+    rightForearm.position.y = -0.1;
     rightForearm.castShadow = true;
-    player.add(rightForearm);
+    rightForearmGroup.add(rightForearm);
     
-    // RIGHT HAND
     const rightHand = new THREE.Mesh(handGeo, skinMaterial);
-    rightHand.position.set(0.32, 0.62, 0.25);
+    rightHand.position.y = -0.2;
     rightHand.castShadow = true;
-    player.add(rightHand);
+    rightForearmGroup.add(rightHand);
     
-    // LEFT LEG (knee on chair)
-    const thighGeo = new THREE.CylinderGeometry(0.07, 0.06, 0.35);
+    rightArmGroup.add(rightForearmGroup);
+    torsoGroup.add(rightArmGroup);
+    
+    player.add(torsoGroup);
+    
+    // === LEFT LEG (knee on chair - bent) ===
+    const leftLegGroup = new THREE.Group();
+    leftLegGroup.position.set(-0.08, 0.1, 0.1); // Hip position
+    leftLegGroup.rotation.x = 1.4; // Thigh forward/horizontal
+    
+    const thighGeo = new THREE.CapsuleGeometry(0.055, 0.28, 4, 8);
     const leftThigh = new THREE.Mesh(thighGeo, pantsMaterial);
-    leftThigh.position.set(-0.1, 0.65, 0.15);
-    leftThigh.rotation.x = Math.PI / 2 - 0.3; // Horizontal-ish (knee on seat)
-    leftThigh.rotation.z = 0.1;
+    leftThigh.position.y = -0.16;
     leftThigh.castShadow = true;
-    player.add(leftThigh);
+    leftLegGroup.add(leftThigh);
     
-    const calfGeo = new THREE.CylinderGeometry(0.055, 0.05, 0.35);
-    const leftCalf = new THREE.Mesh(calfGeo, pantsMaterial);
-    leftCalf.position.set(-0.1, 0.58, 0.42);
-    leftCalf.rotation.x = 0.2;
-    leftCalf.castShadow = true;
-    player.add(leftCalf);
+    // Lower leg (shin)
+    const shinGroup = new THREE.Group();
+    shinGroup.position.set(0, -0.32, 0);
+    shinGroup.rotation.x = -1.8; // Bent back
     
-    // LEFT FOOT (on chair)
-    const footGeo = new THREE.BoxGeometry(0.08, 0.05, 0.15);
+    const shinGeo = new THREE.CapsuleGeometry(0.045, 0.26, 4, 8);
+    const leftShin = new THREE.Mesh(shinGeo, pantsMaterial);
+    leftShin.position.y = -0.15;
+    leftShin.castShadow = true;
+    shinGroup.add(leftShin);
+    
+    // Foot
+    const footGeo = new THREE.BoxGeometry(0.07, 0.04, 0.14);
     const leftFoot = new THREE.Mesh(footGeo, shoeMaterial);
-    leftFoot.position.set(-0.1, 0.45, 0.55);
+    leftFoot.position.set(0, -0.3, 0.03);
     leftFoot.castShadow = true;
-    player.add(leftFoot);
+    shinGroup.add(leftFoot);
     
-    // RIGHT LEG (pushing leg - extended back)
+    leftLegGroup.add(shinGroup);
+    player.add(leftLegGroup);
+    
+    // === RIGHT LEG (pushing leg - extended back) ===
+    const rightLegGroup = new THREE.Group();
+    rightLegGroup.position.set(0.08, 0.1, -0.05);
+    rightLegGroup.rotation.x = -0.5; // Angled back
+    
     const rightThigh = new THREE.Mesh(thighGeo, pantsMaterial);
-    rightThigh.position.set(0.12, 0.55, -0.1);
-    rightThigh.rotation.x = -0.6; // Angled back
-    rightThigh.rotation.z = -0.1;
+    rightThigh.position.y = -0.16;
     rightThigh.castShadow = true;
-    player.add(rightThigh);
+    rightLegGroup.add(rightThigh);
     
-    const rightCalf = new THREE.Mesh(calfGeo, pantsMaterial);
-    rightCalf.position.set(0.12, 0.32, -0.35);
-    rightCalf.rotation.x = -0.3;
-    rightCalf.castShadow = true;
-    player.add(rightCalf);
+    // Lower leg
+    const rightShinGroup = new THREE.Group();
+    rightShinGroup.position.set(0, -0.32, 0);
+    rightShinGroup.rotation.x = 0.3; // Slightly bent
     
-    // RIGHT FOOT (pushing off ground)
+    const rightShin = new THREE.Mesh(shinGeo, pantsMaterial);
+    rightShin.position.y = -0.15;
+    rightShin.castShadow = true;
+    rightShinGroup.add(rightShin);
+    
     const rightFoot = new THREE.Mesh(footGeo, shoeMaterial);
-    rightFoot.position.set(0.12, 0.12, -0.52);
-    rightFoot.rotation.x = -0.5;
+    rightFoot.position.set(0, -0.3, 0.03);
+    rightFoot.rotation.x = 0.3;
     rightFoot.castShadow = true;
-    player.add(rightFoot);
+    rightShinGroup.add(rightFoot);
+    
+    rightLegGroup.add(rightShinGroup);
+    player.add(rightLegGroup);
     
     chair.add(player);
     
