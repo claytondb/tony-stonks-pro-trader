@@ -11,6 +11,7 @@ import { CameraController } from '../rendering/CameraController';
 import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
 import { ComboSystem } from '../tricks/ComboSystem';
 import { HUD } from '../ui/HUD';
+import { PlayerModel } from '../player/PlayerModel';
 
 export class Game {
   // Core
@@ -35,10 +36,12 @@ export class Game {
   private trickDetector!: TrickDetector;
   private comboSystem!: ComboSystem;
   private hud!: HUD;
+  private playerModel!: PlayerModel;
   
   // Game objects
   private chair!: THREE.Group;
   private chairBody!: RAPIER.RigidBody;
+  private useGLBModel = true; // Set to false to use primitive shapes
   
   // Player state
   private playerState: PlayerTrickState = {
@@ -84,7 +87,7 @@ export class Game {
       this.initUI();
       console.log('UI initialized');
       
-      this.initPlayer();
+      await this.initPlayer();
       console.log('Player initialized');
       
       this.initEnvironment();
@@ -179,11 +182,35 @@ export class Game {
     }
   }
   
-  private initPlayer(): void {
+  private async initPlayer(): Promise<void> {
     // Create visual chair
     this.chair = this.createChairMesh();
     this.chair.position.set(0, 0.5, 5); // Start in the middle of the skate area
     this.scene.add(this.chair);
+    
+    // Load GLB player model if enabled
+    if (this.useGLBModel) {
+      try {
+        this.playerModel = new PlayerModel();
+        const model = await this.playerModel.load();
+        
+        // Position on chair
+        model.position.set(0, 0.05, -0.1);
+        model.rotation.y = 0; // Face forward (Z direction)
+        
+        // Remove primitive player if exists, add GLB model
+        const primitivePlayer = this.chair.getObjectByName('primitivePlayer');
+        if (primitivePlayer) {
+          this.chair.remove(primitivePlayer);
+        }
+        this.chair.add(model);
+        
+        console.log('GLB player model attached to chair');
+      } catch (error) {
+        console.warn('Failed to load GLB model, using primitives:', error);
+        this.useGLBModel = false;
+      }
+    }
     
     // Create physics body at same position
     this.chairBody = this.physics.createChairBody(new THREE.Vector3(0, 0, 5));
@@ -808,6 +835,56 @@ export class Game {
       this.hud?.setBalance(this.playerState.isGrinding ? this.grindBalance : this.manualBalance);
     } else {
       this.hud?.setBalanceVisible(false);
+    }
+    
+    // Update player model animations
+    if (this.playerModel && this.useGLBModel) {
+      this.playerModel.update(dt);
+      this.updatePlayerAnimation(input);
+    }
+  }
+  
+  /**
+   * Update player animation based on game state
+   */
+  private updatePlayerAnimation(input: ReturnType<InputManager['getState']>): void {
+    if (!this.playerModel) return;
+    
+    const currentAnim = this.playerModel.getCurrentAnimation();
+    const vel = this.physics.getVelocity(this.chairBody);
+    const speed = new THREE.Vector3(vel.x, 0, vel.z).length();
+    
+    // Priority: fall > jump > trick > push > slide > idle
+    
+    // Airborne
+    if (this.playerState.isAirborne) {
+      // Check if doing a trick
+      if (input.flip || input.grab) {
+        if (currentAnim !== 'trick') {
+          this.playerModel.play('trick', { loop: false });
+        }
+      } else if (currentAnim !== 'jump' && currentAnim !== 'trick') {
+        this.playerModel.play('jump', { loop: false });
+      }
+      return;
+    }
+    
+    // Grounded
+    if (input.forward && speed > 0.5) {
+      // Pushing forward
+      if (currentAnim !== 'push') {
+        this.playerModel.play('push', { loop: true });
+      }
+    } else if (speed > 2) {
+      // Rolling/sliding
+      if (currentAnim !== 'slide') {
+        this.playerModel.play('slide', { loop: true });
+      }
+    } else {
+      // Idle
+      if (currentAnim !== 'idle') {
+        this.playerModel.play('idle', { loop: true });
+      }
     }
   }
   
