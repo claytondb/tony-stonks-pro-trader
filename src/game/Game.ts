@@ -255,8 +255,8 @@ export class Game {
         this.playerModel = new PlayerModel();
         const model = await this.playerModel.load();
         
-        // Position player centered on chair
-        model.position.set(-0.2, -0.1, 0);  // Shift LEFT and down
+        // Position player centered on chair (handled by PlayerModel.update to prevent root motion drift)
+        this.playerModel.setLocalPosition(-0.2, -0.1, 0);
         model.rotation.y = 0;
         
         this.chair.add(model);

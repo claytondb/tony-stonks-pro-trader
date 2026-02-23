@@ -160,12 +160,27 @@ export class PlayerModel {
     this.mixer?.addEventListener('finished', onFinish);
   }
   
+  // Store the intended local position
+  private localPosition = new THREE.Vector3(-0.2, -0.1, 0);
+  
+  /**
+   * Set the local position offset for the model
+   */
+  setLocalPosition(x: number, y: number, z: number): void {
+    this.localPosition.set(x, y, z);
+  }
+  
   /**
    * Update animation mixer
    */
   update(deltaTime: number): void {
     if (this.mixer) {
       this.mixer.update(deltaTime);
+    }
+    
+    // Reset position after animation update to prevent root motion drift
+    if (this.model) {
+      this.model.position.copy(this.localPosition);
     }
   }
   
