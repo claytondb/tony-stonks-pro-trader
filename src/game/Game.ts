@@ -678,39 +678,74 @@ export class Game {
   }
   
   private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
-    const moveForce = 20;
-    const turnTorque = 8;
-    const jumpImpulse = 12;
-    const spinSpeed = 6;
+    // THPS-style physics constants
+    const pushForce = 25;        // W - push forward
+    const brakeForce = 15;       // S - brake/slow down  
+    const turnTorque = 10;       // A/D - turning
+    const airTurnTorque = 3;     // Reduced turning in air
+    const jumpImpulse = 12;      // Space - ollie
+    const spinTorque = 8;        // Q/E - spin in air
+    const maxSpeed = 25;         // Cap forward speed
     
-    // Get chair orientation
+    // Get chair orientation and velocity
     const chairRotation = this.physics.getRotation(this.chairBody);
     const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(chairRotation);
+    const velocity = this.physics.getVelocity(this.chairBody);
+    const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
     
-    // Movement
-    if (input.moveY !== 0) {
-      const force = forward.clone().multiplyScalar(input.moveY * moveForce);
+    // FORWARD (W) - Push in facing direction
+    if (input.forward && this.playerState.isGrounded) {
+      // Only push if not at max speed
+      if (currentSpeed < maxSpeed) {
+        const force = forward.clone().multiplyScalar(pushForce);
+        this.physics.applyForce(this.chairBody, force);
+      }
+    }
+    
+    // BRAKE (S) - Slow down
+    if (input.brake && this.playerState.isGrounded && currentSpeed > 0.5) {
+      // Apply force opposite to current velocity
+      const brakeDir = new THREE.Vector3(velocity.x, 0, velocity.z).normalize().negate();
+      const force = brakeDir.multiplyScalar(brakeForce);
       this.physics.applyForce(this.chairBody, force);
     }
     
-    // Turning (only when grounded or slow in air)
-    if (input.moveX !== 0 && (this.playerState.isGrounded || this.playerState.airTime < 100)) {
-      this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -input.moveX * turnTorque, 0));
+    // TURNING (A/D) - Rotate left/right
+    if (this.playerState.isGrounded) {
+      // Turn faster when moving
+      const turnMultiplier = Math.min(1, currentSpeed / 5);
+      if (input.turnLeft) {
+        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, turnTorque * turnMultiplier, 0));
+      }
+      if (input.turnRight) {
+        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -turnTorque * turnMultiplier, 0));
+      }
+    } else {
+      // Limited air control for turning
+      if (input.turnLeft) {
+        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, airTurnTorque, 0));
+      }
+      if (input.turnRight) {
+        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -airTurnTorque, 0));
+      }
     }
     
-    // Jumping
+    // JUMP (Space) - Ollie
     if (input.jump && this.playerState.isGrounded) {
       this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, jumpImpulse, 0));
+      // Add slight forward boost when jumping
+      const forwardBoost = forward.clone().multiplyScalar(3);
+      this.physics.applyImpulse(this.chairBody, forwardBoost);
     }
     
-    // Spinning in air
+    // SPIN (Q/E) - Rotate in air
     if (this.playerState.isAirborne) {
       if (input.spinLeft) {
-        this.spinRotation = spinSpeed;
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, spinSpeed, 0));
+        this.spinRotation = spinTorque;
+        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, spinTorque, 0));
       } else if (input.spinRight) {
-        this.spinRotation = -spinSpeed;
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -spinSpeed, 0));
+        this.spinRotation = -spinTorque;
+        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -spinTorque, 0));
       } else {
         this.spinRotation = 0;
       }

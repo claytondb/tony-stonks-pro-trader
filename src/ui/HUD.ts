@@ -285,10 +285,12 @@ export class HUD {
     const controls = document.createElement('div');
     controls.className = 'hud-controls';
     controls.innerHTML = `
-      WASD - Move<br>
-      SPACE - Jump<br>
-      ARROWS - Tricks<br>
-      SHIFT + ARROWS - Grabs<br>
+      W - Push forward<br>
+      S - Brake<br>
+      A/D - Turn<br>
+      SPACE - Ollie<br>
+      ← + WASD - Flip tricks<br>
+      → + WASD - Grab tricks<br>
       Q/E - Spin
     `;
     hud.appendChild(controls);
