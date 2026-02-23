@@ -144,8 +144,8 @@ export class InputManager {
     const leftX = gp.axes[0] || 0;
     const leftY = gp.axes[1] || 0;
     
-    // Deadzone
-    const deadzone = 0.15;
+    // Deadzone (increased to prevent stick drift issues)
+    const deadzone = 0.25;
     
     // Buttons (Xbox layout)
     // 0=A, 1=B, 2=X, 3=Y, 4=LB, 5=RB, 6=LT, 7=RT

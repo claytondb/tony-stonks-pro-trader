@@ -27,31 +27,25 @@ export class PhysicsWorld {
    * Locked to stay upright (only Y rotation allowed)
    */
   createChairBody(position: THREE.Vector3): RAPIER.RigidBody {
-    // Create dynamic rigid body with locked rotations
+    // Create dynamic rigid body
+    // Only Y rotation allowed (chair stays upright)
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y + 0.5, position.z)
       .setLinearDamping(0.8)
-      .setAngularDamping(3.0)
-      // Lock X and Z rotation - chair stays upright!
-      .lockRotations()
+      .setAngularDamping(5.0) // Higher damping to reduce unwanted rotation
       .enabledRotations(false, true, false); // Only Y rotation allowed
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Main body collider - wider base for stability
-    const seatDesc = RAPIER.ColliderDesc.cylinder(0.15, 0.35)
+    // Single combined collider - simpler is better for stability
+    // Using a capsule instead of cylinders for smoother ground contact
+    const bodyCollider = RAPIER.ColliderDesc.capsule(0.2, 0.3)
       .setTranslation(0, 0.35, 0)
-      .setMass(80); // 80kg player + chair
-    
-    this.world.createCollider(seatDesc, body);
-    
-    // Single ground contact collider (simplified)
-    const baseDesc = RAPIER.ColliderDesc.cylinder(0.05, 0.3)
-      .setTranslation(0, 0.05, 0)
+      .setMass(80)
       .setFriction(0.6)
       .setRestitution(0.0);
     
-    this.world.createCollider(baseDesc, body);
+    this.world.createCollider(bodyCollider, body);
     
     return body;
   }

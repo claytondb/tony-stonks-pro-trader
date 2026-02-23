@@ -1205,22 +1205,32 @@ export class Game {
     }
     
     // TURNING (A/D) - Rotate left/right
+    const isTurning = input.turnLeft || input.turnRight;
+    
     if (this.playerState.isGrounded) {
       // Turn faster when moving
       const turnMultiplier = Math.min(1, currentSpeed / 5);
       if (input.turnLeft) {
         this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, turnTorque * turnMultiplier, 0));
-      }
-      if (input.turnRight) {
+      } else if (input.turnRight) {
         this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -turnTorque * turnMultiplier, 0));
       }
     } else {
       // Limited air control for turning
       if (input.turnLeft) {
         this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, airTurnTorque, 0));
-      }
-      if (input.turnRight) {
+      } else if (input.turnRight) {
         this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -airTurnTorque, 0));
+      }
+    }
+    
+    // Active rotation damping when not turning - prevents drift
+    if (!isTurning && this.playerState.isGrounded) {
+      const angVel = this.physics.getAngularVelocity(this.chairBody);
+      if (Math.abs(angVel.y) > 0.01) {
+        // Apply counter-torque to stop unwanted rotation
+        const dampingTorque = -angVel.y * 8;
+        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, dampingTorque, 0));
       }
     }
     
