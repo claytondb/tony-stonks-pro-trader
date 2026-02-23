@@ -4,6 +4,7 @@ import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [preact()],
+  base: process.env.BASE_URL || '/',
   resolve: {
     alias: {
       '@': resolve(__dirname, './src')
@@ -14,6 +15,9 @@ export default defineConfig({
     minify: 'terser',
     sourcemap: true,
     rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html')
+      },
       output: {
         manualChunks: {
           three: ['three'],
@@ -26,6 +30,7 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@dimforge/rapier3d-compat']
   },
+  publicDir: 'public',
   server: {
     port: 3000,
     open: true
