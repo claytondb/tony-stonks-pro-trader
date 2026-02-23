@@ -677,7 +677,7 @@ export class Game {
     }
   }
   
-  private applyMovement(input: ReturnType<InputManager['getState']>, dt: number): void {
+  private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
     const moveForce = 20;
     const turnTorque = 8;
     const jumpImpulse = 12;
