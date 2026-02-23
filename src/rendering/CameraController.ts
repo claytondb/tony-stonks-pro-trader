@@ -19,6 +19,12 @@ export class CameraController {
   private currentOffset = new THREE.Vector3();
   private currentLookAt = new THREE.Vector3();
   
+  // Shake state
+  private shakeIntensity = 0;
+  private shakeDuration = 0;
+  private shakeTimeRemaining = 0;
+  private shakeOffset = new THREE.Vector3();
+  
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
     this.currentOffset.copy(this.offset);
@@ -63,6 +69,25 @@ export class CameraController {
     // Smooth camera movement
     this.camera.position.lerp(desiredPosition, this.smoothSpeed * dt);
     
+    // Apply camera shake
+    if (this.shakeTimeRemaining > 0) {
+      this.shakeTimeRemaining -= dt;
+      
+      // Calculate shake decay (linear falloff)
+      const shakeProgress = this.shakeTimeRemaining / this.shakeDuration;
+      const currentIntensity = this.shakeIntensity * shakeProgress;
+      
+      // Random shake offset (Perlin-like smoothing via interpolation)
+      this.shakeOffset.set(
+        (Math.random() - 0.5) * 2 * currentIntensity,
+        (Math.random() - 0.5) * 2 * currentIntensity,
+        (Math.random() - 0.5) * 2 * currentIntensity
+      );
+      
+      // Smooth the shake for less jarring effect
+      this.camera.position.add(this.shakeOffset);
+    }
+    
     // Look at target with slight offset up and look-ahead
     const lookAheadOffset = targetForward.clone().multiplyScalar(this.lookAhead);
     const desiredLookAt = new THREE.Vector3()
@@ -78,9 +103,16 @@ export class CameraController {
   
   /**
    * Shake camera (for impacts, bails)
+   * @param intensity - Shake strength (0.1 = subtle, 1 = strong)
+   * @param duration - Shake duration in seconds
    */
-  shake(_intensity = 1, _duration = 0.3): void {
-    // TODO: Implement camera shake
+  shake(intensity = 0.5, duration = 0.3): void {
+    // Only start new shake if it would be more intense
+    if (intensity > this.shakeIntensity * (this.shakeTimeRemaining / this.shakeDuration)) {
+      this.shakeIntensity = intensity;
+      this.shakeDuration = duration;
+      this.shakeTimeRemaining = duration;
+    }
   }
   
   /**

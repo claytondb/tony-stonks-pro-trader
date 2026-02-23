@@ -207,6 +207,8 @@ export class Game {
           proceduralSounds.playComboLanded(state.multiplier);
         } else if (event.type === 'combo_failed') {
           proceduralSounds.playBail();
+          // Shake camera on bail
+          this.cameraController.shake(0.8, 0.4);
         }
       });
     }
@@ -1150,6 +1152,12 @@ export class Game {
         // playComboLanded is called via combo event
       }
       this.spinRotation = 0;
+      
+      // Small camera shake on impact (stronger for bigger air)
+      const impactShake = Math.min(0.3, this.playerState.airTime / 2000);
+      if (impactShake > 0.05) {
+        this.cameraController.shake(impactShake, 0.15);
+      }
     }
     
     // Update special availability
