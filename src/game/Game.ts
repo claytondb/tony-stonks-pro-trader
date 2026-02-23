@@ -255,8 +255,8 @@ export class Game {
         this.playerModel = new PlayerModel();
         const model = await this.playerModel.load();
         
-        // Position player on/behind chair
-        model.position.set(0, 0.15, 0);  // Centered on chair
+        // Position player centered on chair
+        model.position.set(0, 0.2, 0.1);  // Slightly forward and up
         model.rotation.y = 0;
         
         this.chair.add(model);
@@ -1198,7 +1198,7 @@ export class Game {
     
     // Ground detection - check if body is near ground level
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 0.6 && vel.y > -0.5;
+    this.playerState.isGrounded = pos.y < 0.5 && Math.abs(vel.y) < 1.0;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track air time
@@ -1238,8 +1238,6 @@ export class Game {
   private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
     // THPS-style physics - snappy and responsive
     const accelSpeed = 0.4;      // W/S - velocity boost per frame
-    const turnTorque = 5;        // A/D - turning (reduced for smoother control)
-    const airTurnTorque = 2;     // Reduced turning in air
     const jumpImpulse = 8;       // Space - ollie
     const spinTorque = 6;        // Q/E - spin in air
     const maxSpeed = 18;         // Cap forward speed
@@ -1274,43 +1272,31 @@ export class Game {
       }
     }
     
-    // TURNING (A/D) - Rotate left/right
-    const isTurning = input.turnLeft || input.turnRight;
+    // TURNING (A/D) - Rotate left/right (direct angular velocity)
+    const turnSpeed = 2.5;  // Radians per second
+    const airTurnSpeed = 1.5;
     
-    if (this.playerState.isGrounded) {
-      // Turn faster when moving
-      const turnMultiplier = Math.min(1, currentSpeed / 5);
-      if (input.turnLeft) {
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, turnTorque * turnMultiplier, 0));
-      } else if (input.turnRight) {
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -turnTorque * turnMultiplier, 0));
-      }
+    if (input.turnLeft) {
+      const speed = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
+      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, speed, 0));
+    } else if (input.turnRight) {
+      const speed = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
+      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, -speed, 0));
     } else {
-      // Limited air control for turning
-      if (input.turnLeft) {
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, airTurnTorque, 0));
-      } else if (input.turnRight) {
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -airTurnTorque, 0));
-      }
-    }
-    
-    // Active rotation damping when not turning - prevents drift
-    if (!isTurning && this.playerState.isGrounded) {
-      const angVel = this.physics.getAngularVelocity(this.chairBody);
-      if (Math.abs(angVel.y) > 0.01) {
-        // Apply counter-torque to stop unwanted rotation
-        const dampingTorque = -angVel.y * 8;
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, dampingTorque, 0));
-      }
+      // Stop rotation when not turning
+      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
     }
     
     // JUMP (Space) - Ollie
     if (input.jump && this.playerState.isGrounded) {
       proceduralSounds.playJump();
-      this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, jumpImpulse, 0));
-      // Add slight forward boost when jumping
-      const forwardBoost = forward.clone().multiplyScalar(3);
-      this.physics.applyImpulse(this.chairBody, forwardBoost);
+      // Set vertical velocity directly for reliable jumping
+      const newVel = velocity.clone();
+      newVel.y = jumpImpulse;
+      // Add slight forward boost
+      newVel.x += forward.x * 2;
+      newVel.z += forward.z * 2;
+      this.physics.setVelocity(this.chairBody, newVel);
     }
     
     // SPIN (Q/E) - Rotate in air
