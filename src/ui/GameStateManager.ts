@@ -243,18 +243,19 @@ export class GameStateManager {
             "
           />
           
-          <!-- Logotype with glitch effect -->
+          <!-- Logotype with glitch effect - larger and overlapping tony image -->
           <div id="logo-container" style="
             position: relative;
-            margin-top: 2vh;
+            margin-top: -8vh;
+            z-index: 10;
           ">
             <img 
               id="logotype"
               src="./ui/logotype.png" 
               alt="Tony Stonks Pro Trader"
               style="
-                max-width: 70vw;
-                max-height: 20vh;
+                max-width: 90vw;
+                max-height: 30vh;
                 object-fit: contain;
                 filter: drop-shadow(0 4px 20px rgba(0,255,136,0.3));
               "
@@ -268,8 +269,8 @@ export class GameStateManager {
                 position: absolute;
                 top: 0;
                 left: 0;
-                max-width: 70vw;
-                max-height: 20vh;
+                max-width: 90vw;
+                max-height: 30vh;
                 object-fit: contain;
                 opacity: 0;
                 pointer-events: none;
@@ -283,8 +284,8 @@ export class GameStateManager {
                 position: absolute;
                 top: 0;
                 left: 0;
-                max-width: 70vw;
-                max-height: 20vh;
+                max-width: 90vw;
+                max-height: 30vh;
                 object-fit: contain;
                 opacity: 0;
                 pointer-events: none;
@@ -292,24 +293,34 @@ export class GameStateManager {
             />
           </div>
           
-          <!-- Press to start -->
+          <!-- Press to start - black text with white outline -->
           <div style="
-            margin-top: 5vh;
-            font-size: clamp(14px, 3vw, 20px);
-            color: #ffffff;
+            margin-top: 4vh;
+            font-size: clamp(16px, 3.5vw, 24px);
+            font-weight: 600;
+            color: #000000;
             animation: blink 1.2s infinite;
-            font-family: 'Courier New', monospace;
-            text-shadow: 0 0 10px rgba(0,255,136,0.5);
-            letter-spacing: 2px;
+            font-family: 'Space Grotesk', sans-serif;
+            letter-spacing: 3px;
+            text-shadow: 
+              -2px -2px 0 #fff,
+              2px -2px 0 #fff,
+              -2px 2px 0 #fff,
+              2px 2px 0 #fff,
+              0 -2px 0 #fff,
+              0 2px 0 #fff,
+              -2px 0 0 #fff,
+              2px 0 0 #fff;
           ">PRESS SPACE TO START</div>
           
           <!-- Copyright -->
           <div style="
             position: absolute;
             bottom: 20px;
-            color: rgba(255,255,255,0.4);
-            font-size: 11px;
-            font-family: 'Courier New', monospace;
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            font-family: 'Space Grotesk', sans-serif;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
           ">© 2026 Diamond Hands Studios</div>
         </div>
       </div>
