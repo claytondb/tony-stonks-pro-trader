@@ -4,8 +4,8 @@ import { resolve } from 'path';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 
-// Use GitHub Pages base URL in CI, otherwise root
-const base = process.env.GITHUB_ACTIONS ? '/tony-stonks-pro-trader/' : '/';
+// Always use relative paths for GitHub Pages compatibility
+const base = './';
 
 export default defineConfig({
   plugins: [
