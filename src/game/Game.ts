@@ -302,6 +302,154 @@ export class Game {
       chair.add(housing);
     }
     
+    // ========== PLAYER CHARACTER ==========
+    // Office worker riding the chair like a scooter
+    
+    // Skin color
+    const skinMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0xffdbac,
+      roughness: 0.8
+    });
+    
+    // Shirt (blue dress shirt)
+    const shirtMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0x4a6fa5,
+      roughness: 0.7
+    });
+    
+    // Pants (khakis)
+    const pantsMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0xc4a35a,
+      roughness: 0.8
+    });
+    
+    // Shoes
+    const shoeMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0x2a2a2a,
+      roughness: 0.9
+    });
+    
+    // Hair
+    const hairMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0x3d2314,
+      roughness: 0.9
+    });
+    
+    // Player group (attached to chair)
+    const player = new THREE.Group();
+    player.position.set(0, 0, -0.15); // Slightly behind center
+    
+    // TORSO - leaning forward
+    const torsoGeometry = new THREE.BoxGeometry(0.35, 0.45, 0.2);
+    const torso = new THREE.Mesh(torsoGeometry, shirtMaterial);
+    torso.position.set(0, 1.0, 0);
+    torso.rotation.x = 0.3; // Lean forward
+    torso.castShadow = true;
+    player.add(torso);
+    
+    // HEAD
+    const headGeometry = new THREE.SphereGeometry(0.12, 16, 12);
+    const head = new THREE.Mesh(headGeometry, skinMaterial);
+    head.position.set(0, 1.38, -0.08);
+    head.castShadow = true;
+    player.add(head);
+    
+    // HAIR (on top of head)
+    const hairGeometry = new THREE.SphereGeometry(0.13, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.5);
+    const hair = new THREE.Mesh(hairGeometry, hairMaterial);
+    hair.position.set(0, 1.42, -0.06);
+    hair.castShadow = true;
+    player.add(hair);
+    
+    // LEFT ARM (on armrest)
+    const upperArmGeo = new THREE.CylinderGeometry(0.05, 0.045, 0.25);
+    const leftUpperArm = new THREE.Mesh(upperArmGeo, shirtMaterial);
+    leftUpperArm.position.set(-0.22, 0.9, 0.05);
+    leftUpperArm.rotation.z = 0.3;
+    leftUpperArm.rotation.x = 0.5;
+    leftUpperArm.castShadow = true;
+    player.add(leftUpperArm);
+    
+    const forearmGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.22);
+    const leftForearm = new THREE.Mesh(forearmGeo, skinMaterial);
+    leftForearm.position.set(-0.32, 0.72, 0.15);
+    leftForearm.rotation.x = 1.2;
+    leftForearm.castShadow = true;
+    player.add(leftForearm);
+    
+    // LEFT HAND
+    const handGeo = new THREE.SphereGeometry(0.04, 8, 6);
+    const leftHand = new THREE.Mesh(handGeo, skinMaterial);
+    leftHand.position.set(-0.32, 0.62, 0.25);
+    leftHand.castShadow = true;
+    player.add(leftHand);
+    
+    // RIGHT ARM (on armrest)
+    const rightUpperArm = new THREE.Mesh(upperArmGeo, shirtMaterial);
+    rightUpperArm.position.set(0.22, 0.9, 0.05);
+    rightUpperArm.rotation.z = -0.3;
+    rightUpperArm.rotation.x = 0.5;
+    rightUpperArm.castShadow = true;
+    player.add(rightUpperArm);
+    
+    const rightForearm = new THREE.Mesh(forearmGeo, skinMaterial);
+    rightForearm.position.set(0.32, 0.72, 0.15);
+    rightForearm.rotation.x = 1.2;
+    rightForearm.castShadow = true;
+    player.add(rightForearm);
+    
+    // RIGHT HAND
+    const rightHand = new THREE.Mesh(handGeo, skinMaterial);
+    rightHand.position.set(0.32, 0.62, 0.25);
+    rightHand.castShadow = true;
+    player.add(rightHand);
+    
+    // LEFT LEG (knee on chair)
+    const thighGeo = new THREE.CylinderGeometry(0.07, 0.06, 0.35);
+    const leftThigh = new THREE.Mesh(thighGeo, pantsMaterial);
+    leftThigh.position.set(-0.1, 0.65, 0.15);
+    leftThigh.rotation.x = Math.PI / 2 - 0.3; // Horizontal-ish (knee on seat)
+    leftThigh.rotation.z = 0.1;
+    leftThigh.castShadow = true;
+    player.add(leftThigh);
+    
+    const calfGeo = new THREE.CylinderGeometry(0.055, 0.05, 0.35);
+    const leftCalf = new THREE.Mesh(calfGeo, pantsMaterial);
+    leftCalf.position.set(-0.1, 0.58, 0.42);
+    leftCalf.rotation.x = 0.2;
+    leftCalf.castShadow = true;
+    player.add(leftCalf);
+    
+    // LEFT FOOT (on chair)
+    const footGeo = new THREE.BoxGeometry(0.08, 0.05, 0.15);
+    const leftFoot = new THREE.Mesh(footGeo, shoeMaterial);
+    leftFoot.position.set(-0.1, 0.45, 0.55);
+    leftFoot.castShadow = true;
+    player.add(leftFoot);
+    
+    // RIGHT LEG (pushing leg - extended back)
+    const rightThigh = new THREE.Mesh(thighGeo, pantsMaterial);
+    rightThigh.position.set(0.12, 0.55, -0.1);
+    rightThigh.rotation.x = -0.6; // Angled back
+    rightThigh.rotation.z = -0.1;
+    rightThigh.castShadow = true;
+    player.add(rightThigh);
+    
+    const rightCalf = new THREE.Mesh(calfGeo, pantsMaterial);
+    rightCalf.position.set(0.12, 0.32, -0.35);
+    rightCalf.rotation.x = -0.3;
+    rightCalf.castShadow = true;
+    player.add(rightCalf);
+    
+    // RIGHT FOOT (pushing off ground)
+    const rightFoot = new THREE.Mesh(footGeo, shoeMaterial);
+    rightFoot.position.set(0.12, 0.12, -0.52);
+    rightFoot.rotation.x = -0.5;
+    rightFoot.castShadow = true;
+    player.add(rightFoot);
+    
+    chair.add(player);
+    
     return chair;
   }
   

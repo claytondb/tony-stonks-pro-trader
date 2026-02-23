@@ -24,40 +24,34 @@ export class PhysicsWorld {
   
   /**
    * Create the player's chair physics body
+   * Locked to stay upright (only Y rotation allowed)
    */
   createChairBody(position: THREE.Vector3): RAPIER.RigidBody {
-    // Create dynamic rigid body
+    // Create dynamic rigid body with locked rotations
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y + 0.5, position.z)
-      .setLinearDamping(0.5)
-      .setAngularDamping(2.0);
+      .setLinearDamping(0.8)
+      .setAngularDamping(3.0)
+      // Lock X and Z rotation - chair stays upright!
+      .lockRotations()
+      .enabledRotations(false, true, false); // Only Y rotation allowed
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Main body collider (capsule for seat area)
-    const seatDesc = RAPIER.ColliderDesc.capsule(0.2, 0.25)
-      .setTranslation(0, 0.3, 0)
+    // Main body collider - wider base for stability
+    const seatDesc = RAPIER.ColliderDesc.cylinder(0.15, 0.35)
+      .setTranslation(0, 0.35, 0)
       .setMass(80); // 80kg player + chair
     
     this.world.createCollider(seatDesc, body);
     
-    // Wheel colliders for more realistic ground contact
-    const wheelPositions = [
-      { x: 0.25, z: 0 },
-      { x: -0.25, z: 0 },
-      { x: 0.12, z: 0.22 },
-      { x: -0.12, z: 0.22 },
-      { x: 0, z: -0.25 }
-    ];
+    // Single ground contact collider (simplified)
+    const baseDesc = RAPIER.ColliderDesc.cylinder(0.05, 0.3)
+      .setTranslation(0, 0.05, 0)
+      .setFriction(0.6)
+      .setRestitution(0.0);
     
-    for (const pos of wheelPositions) {
-      const wheelDesc = RAPIER.ColliderDesc.ball(0.05)
-        .setTranslation(pos.x, 0.05, pos.z)
-        .setFriction(0.3)
-        .setRestitution(0.1);
-      
-      this.world.createCollider(wheelDesc, body);
-    }
+    this.world.createCollider(baseDesc, body);
     
     return body;
   }
