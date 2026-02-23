@@ -217,7 +217,7 @@ export class TrickDetector {
   /**
    * Detect grind type based on approach angle
    */
-  detectGrindType(approachAngle: number, isSwitch: boolean): TrickDefinition | null {
+  detectGrindType(approachAngle: number, _isSwitch?: boolean): TrickDefinition | null {
     // Normalize angle to 0-360
     const angle = ((approachAngle % 360) + 360) % 360;
     

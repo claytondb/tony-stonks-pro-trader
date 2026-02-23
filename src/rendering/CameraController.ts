@@ -79,7 +79,7 @@ export class CameraController {
   /**
    * Shake camera (for impacts, bails)
    */
-  shake(intensity: number = 1, duration: number = 0.3): void {
+  shake(_intensity = 1, _duration = 0.3): void {
     // TODO: Implement camera shake
   }
   

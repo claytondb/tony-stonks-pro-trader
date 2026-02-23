@@ -4,6 +4,7 @@
  */
 
 import * as THREE from 'three';
+import type RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from '../input/InputManager';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { CameraController } from '../rendering/CameraController';
@@ -716,7 +717,7 @@ export class Game {
     }
   }
   
-  private render(): void {
+  private render(_alpha?: number): void {
     this.renderer.render(this.scene, this.camera);
   }
   

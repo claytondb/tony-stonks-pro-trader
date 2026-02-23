@@ -127,7 +127,6 @@ export class InputManager {
     // 0=A, 1=B, 2=X, 3=Y, 4=LB, 5=RB, 6=LT, 7=RT
     // 8=Back, 9=Start, 12=DpadUp, 13=DpadDown, 14=DpadLeft, 15=DpadRight
     const pressed = (i: number) => gp.buttons[i]?.pressed ?? false;
-    const justPressedGP = (i: number) => gp.buttons[i]?.pressed ?? false; // Would need prev state for "just"
     
     return {
       moveX: keyboard.moveX || applyDeadzone(leftX),
