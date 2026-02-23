@@ -4,6 +4,7 @@
  */
 
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from '../input/InputManager';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
@@ -183,10 +184,39 @@ export class Game {
   }
   
   private async initPlayer(): Promise<void> {
-    // Create visual chair
-    this.chair = this.createChairMesh();
-    this.chair.position.set(0, 0.5, 5); // Start in the middle of the skate area
+    // Create chair group
+    this.chair = new THREE.Group();
+    this.chair.position.set(0, 0, 5); // Start in the middle of the skate area
     this.scene.add(this.chair);
+    
+    const loader = new GLTFLoader();
+    
+    // Load chair GLB model
+    try {
+      const chairGltf = await loader.loadAsync('./models/chair.glb');
+      const chairModel = chairGltf.scene;
+      
+      // Adjust chair scale and position as needed
+      chairModel.scale.set(0.8, 0.8, 0.8); // Adjust scale
+      chairModel.position.set(0, 0, 0);
+      chairModel.rotation.y = Math.PI; // Face forward
+      
+      // Enable shadows
+      chairModel.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      
+      this.chair.add(chairModel);
+      console.log('Chair GLB model loaded');
+    } catch (error) {
+      console.warn('Failed to load chair GLB, using primitives:', error);
+      // Fallback to primitive chair
+      const primitiveChair = this.createChairMesh();
+      this.chair.add(primitiveChair);
+    }
     
     // Load GLB player model if enabled
     if (this.useGLBModel) {
@@ -194,15 +224,10 @@ export class Game {
         this.playerModel = new PlayerModel();
         const model = await this.playerModel.load();
         
-        // Position on chair
-        model.position.set(0, 0.05, -0.1);
+        // Position on chair - adjust based on chair model
+        model.position.set(0, 0.4, 0);
         model.rotation.y = 0; // Face forward (Z direction)
         
-        // Remove primitive player if exists, add GLB model
-        const primitivePlayer = this.chair.getObjectByName('primitivePlayer');
-        if (primitivePlayer) {
-          this.chair.remove(primitivePlayer);
-        }
         this.chair.add(model);
         
         console.log('GLB player model attached to chair');
