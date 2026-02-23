@@ -108,7 +108,7 @@ export class PhysicsWorld {
       halfExtents.x, 
       halfExtents.y, 
       halfExtents.z
-    ).setFriction(0.5);
+    ).setFriction(0.2);  // Low friction for smooth sliding
     
     this.world.createCollider(colliderDesc, body);
     

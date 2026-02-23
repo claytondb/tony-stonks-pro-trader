@@ -256,7 +256,7 @@ export class Game {
         const model = await this.playerModel.load();
         
         // Position player centered on chair
-        model.position.set(0.15, -0.1, 0);  // Shift right and down
+        model.position.set(-0.2, -0.1, 0);  // Shift LEFT and down
         model.rotation.y = 0;
         
         this.chair.add(model);
@@ -800,12 +800,12 @@ export class Game {
     rampGroup.rotation.y = rotation;
     this.scene.add(rampGroup);
     
-    // Physics (simplified as rotated box)
-    const physPos = new THREE.Vector3(x, 0.6, z);
+    // Physics - thicker collider with gentler angle for smoother riding
+    const physPos = new THREE.Vector3(x, 0.5, z);
     this.physics.createStaticBox(
       physPos,
-      new THREE.Vector3(2, 0.08, 1.5),
-      new THREE.Euler(-Math.PI / 8, rotation, 0)
+      new THREE.Vector3(2.2, 0.2, 1.8),
+      new THREE.Euler(-Math.PI / 12, rotation, 0)  // Gentler angle (15 deg instead of 22.5)
     );
   }
   
@@ -877,10 +877,10 @@ export class Game {
     topRail2.position.set(0, 0.85, -5 + 1.5);
     this.scene.add(topRail2);
     
-    // Physics
+    // Physics - make collider slightly larger for better detection
     this.physics.createStaticBox(
-      new THREE.Vector3(0, 0.4, -5),
-      new THREE.Vector3(3, 0.4, 2)
+      new THREE.Vector3(0, 0.5, -5),
+      new THREE.Vector3(3.2, 0.5, 2.2)
     );
   }
   
