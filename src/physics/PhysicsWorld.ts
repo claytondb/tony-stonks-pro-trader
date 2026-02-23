@@ -37,11 +37,11 @@ export class PhysicsWorld {
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Larger cylinder collider for better collision detection
-    // halfHeight=0.4, radius=0.5
-    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.4, 0.5)
+    // Capsule collider - slides better on ramps than cylinder
+    // halfHeight=0.3 (middle section), radius=0.4 (end caps)
+    const bodyCollider = RAPIER.ColliderDesc.capsule(0.3, 0.4)
       .setMass(50)
-      .setFriction(0.2)
+      .setFriction(0.15)  // Low friction for smooth sliding
       .setRestitution(0.0);
     
     this.world.createCollider(bodyCollider, body);

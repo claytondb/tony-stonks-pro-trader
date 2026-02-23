@@ -81,14 +81,16 @@ export class InputManager {
   }
   
   update(): void {
-    // Clear just-pressed keys from last frame
-    this.justPressedKeys.clear();
-    
     // Refresh gamepad state
     const gamepads = navigator.getGamepads();
     if (gamepads[0]) {
       this.gamepad = gamepads[0];
     }
+  }
+  
+  // Call this AFTER processing input each frame
+  clearJustPressed(): void {
+    this.justPressedKeys.clear();
   }
   
   private justPressed(code: string): boolean {

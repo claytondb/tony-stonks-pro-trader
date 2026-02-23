@@ -1085,6 +1085,9 @@ export class Game {
       this.playerModel.update(dt);
       this.updatePlayerAnimation(input);
     }
+    
+    // Clear just-pressed keys after processing
+    this.input.clearJustPressed();
   }
   
   // Animation state tracking
