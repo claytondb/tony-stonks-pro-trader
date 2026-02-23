@@ -993,12 +993,6 @@ export class Game {
     const pos = this.physics.getPosition(this.chairBody);
     const rot = this.physics.getRotation(this.chairBody);
     
-    // Debug: log position and input
-    if (this.levelTime < 5 && this.levelTime > 0.5) {
-      const vel = this.physics.getVelocity(this.chairBody);
-      console.log(`y=${pos.y.toFixed(2)} vel=(${vel.x.toFixed(2)},${vel.z.toFixed(2)}) grounded=${this.playerState.isGrounded} fwd=${input.forward}`);
-    }
-    
     this.chair.position.copy(pos);
     this.chair.quaternion.copy(rot);
     
@@ -1178,7 +1172,7 @@ export class Game {
   
   private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
     // THPS-style physics - snappy and responsive
-    const pushImpulse = 3.5;     // W - immediate push (impulse, not force)
+    const accelSpeed = 0.5;      // W - velocity boost per frame
     const brakeStrength = 0.9;   // S - multiplier to slow down (0-1)
     const turnTorque = 12;       // A/D - turning
     const airTurnTorque = 4;     // Reduced turning in air
@@ -1193,15 +1187,15 @@ export class Game {
     const velocity = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
     
-    // FORWARD (W) - Push in facing direction (impulse for instant response)
+    // FORWARD (W) - Push in facing direction
     if (input.forward && this.playerState.isGrounded) {
-      console.log('Forward pressed! Speed:', currentSpeed, 'MaxSpeed:', maxSpeed);
       if (currentSpeed < maxSpeed) {
-        // Scale push by how much room we have to accelerate
-        const speedRatio = 1 - (currentSpeed / maxSpeed);
-        const impulse = forward.clone().multiplyScalar(pushImpulse * (0.3 + speedRatio * 0.7));
-        console.log('Applying impulse:', impulse.x, impulse.y, impulse.z);
-        this.physics.applyImpulse(this.chairBody, impulse);
+        // Directly add to velocity for reliable movement
+        const boost = forward.clone().multiplyScalar(accelSpeed);
+        const newVel = velocity.clone();
+        newVel.x += boost.x;
+        newVel.z += boost.z;
+        this.physics.setVelocity(this.chairBody, newVel);
       }
     }
     
