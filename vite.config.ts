@@ -4,13 +4,16 @@ import { resolve } from 'path';
 import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 
+// Use GitHub Pages base URL in CI, otherwise root
+const base = process.env.GITHUB_ACTIONS ? '/tony-stonks-pro-trader/' : '/';
+
 export default defineConfig({
   plugins: [
     preact(),
     wasm(),
     topLevelAwait()
   ],
-  base: process.env.BASE_URL || '/',
+  base,
   resolve: {
     alias: {
       '@': resolve(__dirname, './src')
