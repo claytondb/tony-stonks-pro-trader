@@ -257,7 +257,11 @@ export class Game {
         
         // Position player centered on chair (handled by PlayerModel.update to prevent root motion drift)
         this.playerModel.setLocalPosition(-0.2, -0.1, 0);
+        model.position.set(-0.2, -0.1, 0);  // Also set initial position
         model.rotation.y = 0;
+        
+        // Now start idle animation after position is set
+        this.playerModel.play('idle');
         
         this.chair.add(model);
         

@@ -63,8 +63,8 @@ export class PlayerModel {
     // Load animations
     await this.loadAnimations();
     
-    // Start with idle animation
-    this.play('idle');
+    // DON'T start any animation yet - wait until position is set
+    // this.play('idle');
     
     console.log('Player model loaded!');
     return this.model;
