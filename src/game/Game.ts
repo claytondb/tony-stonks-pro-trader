@@ -14,6 +14,7 @@ import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
 import { ComboSystem } from '../tricks/ComboSystem';
 import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
+import { proceduralSounds } from '../audio/ProceduralSounds';
 // TODO: Integrate LevelManager
 // import { LevelManager } from '../levels/LevelManager';
 
@@ -111,6 +112,10 @@ export class Game {
       this.initEnvironment();
       console.log('Environment initialized');
       
+      // Initialize procedural audio
+      proceduralSounds.init();
+      console.log('Audio initialized');
+      
       // Handle window resize
       window.addEventListener('resize', this.onResize.bind(this));
       
@@ -196,6 +201,13 @@ export class Game {
         // Update combo display
         const state = this.comboSystem.getState();
         this.hud.updateCombo(state.tricks, state.totalPoints, state.multiplier);
+        
+        // Play sounds based on combo events
+        if (event.type === 'combo_landed' && event.totalScore) {
+          proceduralSounds.playComboLanded(state.multiplier);
+        } else if (event.type === 'combo_failed') {
+          proceduralSounds.playBail();
+        }
       });
     }
   }
@@ -911,10 +923,17 @@ export class Game {
     if (trick && performance.now() - this.lastTrickTime > trick.duration) {
       this.comboSystem.addTrick(trick);
       this.lastTrickTime = performance.now();
+      proceduralSounds.playTrick();
       
       // Add to special meter
+      const prevSpecial = this.specialMeter;
       this.specialMeter = Math.min(1, this.specialMeter + trick.basePoints / 5000);
       this.hud?.setSpecial(this.specialMeter);
+      
+      // Special meter just filled
+      if (prevSpecial < 1 && this.specialMeter >= 1) {
+        proceduralSounds.playSpecialReady();
+      }
     }
     
     // Check for grind initiation
@@ -926,6 +945,8 @@ export class Game {
       if (startedGrind) {
         this.playerState.isGrinding = true;
         this.grindBalance = 0.5;
+        proceduralSounds.playGrindStart();
+        proceduralSounds.startGrindLoop();
       }
     }
     
@@ -940,6 +961,8 @@ export class Game {
       if (input.jump) {
         this.grindSystem.forceEndGrind();
         this.playerState.isGrinding = false;
+        proceduralSounds.stopGrindLoop();
+        proceduralSounds.playJump();
         // Apply jump impulse
         this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, 10, 0));
       } else {
@@ -953,6 +976,7 @@ export class Game {
         // Check if grind ended
         if (!this.grindSystem.isGrinding()) {
           this.playerState.isGrinding = false;
+          proceduralSounds.stopGrindLoop();
         }
       }
     } else {
@@ -1120,8 +1144,10 @@ export class Game {
     // Landing detection
     if (!wasGrounded && this.playerState.isGrounded) {
       // Just landed
+      proceduralSounds.playLand();
       if (this.comboSystem.hasActiveCombo()) {
         this.comboSystem.land();
+        // playComboLanded is called via combo event
       }
       this.spinRotation = 0;
     }
@@ -1192,6 +1218,7 @@ export class Game {
     
     // JUMP (Space) - Ollie
     if (input.jump && this.playerState.isGrounded) {
+      proceduralSounds.playJump();
       this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, jumpImpulse, 0));
       // Add slight forward boost when jumping
       const forwardBoost = forward.clone().multiplyScalar(3);
