@@ -230,7 +230,7 @@ export class Game {
       // Chair at 1/4 size as requested
       chairModel.scale.set(0.2, 0.2, 0.2);
       chairModel.position.set(0, 0, 0);
-      chairModel.rotation.y = Math.PI; // Face forward
+      // Model's natural +Z should face forward (away from camera)
       
       // Enable shadows
       chairModel.traverse((child) => {
@@ -1181,9 +1181,9 @@ export class Game {
     const maxSpeed = 25;         // Cap forward speed
     
     // Get chair orientation and velocity
-    // Note: Chair model is rotated 180° so visual "front" faces -Z in physics space
+    // +Z is forward (away from camera), matching CameraController expectations
     const chairRotation = this.physics.getRotation(this.chairBody);
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(chairRotation);
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(chairRotation);
     const velocity = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
     

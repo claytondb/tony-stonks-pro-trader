@@ -47,7 +47,7 @@ export class PlayerModel {
     // Scale and position the model
     this.model.scale.set(0.4, 0.4, 0.4); // Smaller scale to fit chair
     this.model.position.set(0, 0, 0);
-    this.model.rotation.y = Math.PI; // Face forward
+    // Model should face +Z (forward direction, away from camera)
     
     // Enable shadows
     this.model.traverse((child) => {
