@@ -256,7 +256,7 @@ export class Game {
         const model = await this.playerModel.load();
         
         // Position player centered on chair
-        model.position.set(0, 0.2, 0.1);  // Slightly forward and up
+        model.position.set(0.15, -0.1, 0);  // Shift right and down
         model.rotation.y = 0;
         
         this.chair.add(model);
@@ -719,10 +719,10 @@ export class Game {
       this.scene.add(post);
     }
     
-    // Physics
+    // Physics - larger collider for better detection
     this.physics.createStaticBox(
       new THREE.Vector3(x, 0.8, z),
-      new THREE.Vector3(length / 2, 0.04, 0.04)
+      new THREE.Vector3(length / 2, 0.15, 0.15)
     );
     
     // Register with grind system (rail runs along X axis)
@@ -739,10 +739,10 @@ export class Game {
     rail.castShadow = true;
     this.scene.add(rail);
     
-    // Physics
+    // Physics - larger collider for better detection
     this.physics.createStaticBox(
       new THREE.Vector3(x, 0.8, z),
-      new THREE.Vector3(length / 2, 0.04, 0.04),
+      new THREE.Vector3(length / 2, 0.15, 0.15),
       new THREE.Euler(0, rotation, 0)
     );
     
@@ -1196,9 +1196,9 @@ export class Game {
     const pos = this.physics.getPosition(this.chairBody);
     const vel = this.physics.getVelocity(this.chairBody);
     
-    // Ground detection - check if body is near ground level
+    // Ground detection - body rests at ~0.4 when on ground (collider half-height)
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 0.5 && Math.abs(vel.y) < 1.0;
+    this.playerState.isGrounded = pos.y < 0.6 && Math.abs(vel.y) < 1.0;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track air time

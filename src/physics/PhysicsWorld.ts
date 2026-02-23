@@ -30,16 +30,16 @@ export class PhysicsWorld {
     // Create dynamic rigid body
     // Only Y rotation allowed (chair stays upright)
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(position.x, 1.0, position.z)  // Start above ground
-      .setLinearDamping(0.1)   // Low damping for sliding
-      .setAngularDamping(5.0)  // Higher for crisp turning
-      .enabledRotations(false, true, false); // Only Y rotation allowed
+      .setTranslation(position.x, 2.0, position.z)  // Start well above ground
+      .setLinearDamping(0.1)
+      .setAngularDamping(5.0)
+      .enabledRotations(false, true, false);
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Cylinder collider - bottom at y=0 when body is at y=0.4
-    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.3, 0.4)
-      .setTranslation(0, 0.4, 0)  // Collider center offset
+    // Larger cylinder collider for better collision detection
+    // halfHeight=0.4, radius=0.5
+    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.4, 0.5)
       .setMass(50)
       .setFriction(0.2)
       .setRestitution(0.0);
@@ -53,11 +53,11 @@ export class PhysicsWorld {
    * Create ground plane with walls
    */
   createGround(size = 50): void {
-    // Ground
+    // Ground - thick slab below y=0 so surface is at y=0
     const groundDesc = RAPIER.RigidBodyDesc.fixed()
-      .setTranslation(0, -0.1, 0);
+      .setTranslation(0, -0.5, 0);  // Center at -0.5
     const groundBody = this.world.createRigidBody(groundDesc);
-    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(size, 0.1, size)
+    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(size, 0.5, size)  // Half-height 0.5, so top at y=0
       .setFriction(0.5)
       .setRestitution(0.0);
     this.world.createCollider(groundColliderDesc, groundBody);
