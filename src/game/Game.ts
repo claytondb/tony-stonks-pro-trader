@@ -993,9 +993,10 @@ export class Game {
     const pos = this.physics.getPosition(this.chairBody);
     const rot = this.physics.getRotation(this.chairBody);
     
-    // Debug: log position for first 3 seconds
-    if (this.levelTime < 3) {
-      console.log(`Chair pos: y=${pos.y.toFixed(2)}, grounded=${this.playerState.isGrounded}`);
+    // Debug: log position and input
+    if (this.levelTime < 5 && this.levelTime > 0.5) {
+      const vel = this.physics.getVelocity(this.chairBody);
+      console.log(`y=${pos.y.toFixed(2)} vel=(${vel.x.toFixed(2)},${vel.z.toFixed(2)}) grounded=${this.playerState.isGrounded} fwd=${input.forward}`);
     }
     
     this.chair.position.copy(pos);
@@ -1194,10 +1195,12 @@ export class Game {
     
     // FORWARD (W) - Push in facing direction (impulse for instant response)
     if (input.forward && this.playerState.isGrounded) {
+      console.log('Forward pressed! Speed:', currentSpeed, 'MaxSpeed:', maxSpeed);
       if (currentSpeed < maxSpeed) {
         // Scale push by how much room we have to accelerate
         const speedRatio = 1 - (currentSpeed / maxSpeed);
         const impulse = forward.clone().multiplyScalar(pushImpulse * (0.3 + speedRatio * 0.7));
+        console.log('Applying impulse:', impulse.x, impulse.y, impulse.z);
         this.physics.applyImpulse(this.chairBody, impulse);
       }
     }
