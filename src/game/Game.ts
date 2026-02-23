@@ -993,6 +993,11 @@ export class Game {
     const pos = this.physics.getPosition(this.chairBody);
     const rot = this.physics.getRotation(this.chairBody);
     
+    // Debug: log position for first 3 seconds
+    if (this.levelTime < 3) {
+      console.log(`Chair pos: y=${pos.y.toFixed(2)}, grounded=${this.playerState.isGrounded}`);
+    }
+    
     this.chair.position.copy(pos);
     this.chair.quaternion.copy(rot);
     

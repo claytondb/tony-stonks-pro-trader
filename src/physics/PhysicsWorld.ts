@@ -30,19 +30,18 @@ export class PhysicsWorld {
     // Create dynamic rigid body
     // Only Y rotation allowed (chair stays upright)
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(position.x, position.y + 1.0, position.z)
-      .setLinearDamping(1.5)   // Moderate damping
-      .setAngularDamping(5.0)  // Angular damping for crisp turning
+      .setTranslation(position.x, 3.0, position.z)  // Start high up
+      .setLinearDamping(1.0)
+      .setAngularDamping(4.0)
       .enabledRotations(false, true, false); // Only Y rotation allowed
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Main body collider - sphere is more stable than cylinder
-    const bodyCollider = RAPIER.ColliderDesc.ball(0.4)
-      .setTranslation(0, 0.4, 0)
-      .setMass(50)
+    // Simple ball collider
+    const bodyCollider = RAPIER.ColliderDesc.ball(0.5)
+      .setMass(40)
       .setFriction(0.5)
-      .setRestitution(0.1);
+      .setRestitution(0.2);
     
     this.world.createCollider(bodyCollider, body);
     
