@@ -6,7 +6,17 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-export type AnimationName = 'idle' | 'push' | 'jump' | 'fall' | 'slide' | 'trick' | 'victory';
+export type AnimationName = 
+  | 'idle'        // Sitting idle (dozing)
+  | 'push'        // Step forward and push
+  | 'standtosit'  // Transition from standing to sitting
+  | 'rolling'     // Chair sit idle while rolling
+  | 'chairhold'   // Bar hang - holding chair above head (air trick)
+  | 'trick'       // Breakdance trick
+  | 'jump'        // Jump over obstacle
+  | 'roll'        // Parkour roll
+  | 'slide'       // Slide under chair
+  | 'crash';      // Angry throw (crash/fail)
 
 interface LoadedAnimation {
   clip: THREE.AnimationClip;
@@ -35,7 +45,7 @@ export class PlayerModel {
     this.model = gltf.scene;
     
     // Scale and position the model
-    this.model.scale.set(0.5, 0.5, 0.5); // Adjust scale as needed
+    this.model.scale.set(0.4, 0.4, 0.4); // Smaller scale to fit chair
     this.model.position.set(0, 0, 0);
     this.model.rotation.y = Math.PI; // Face forward
     
@@ -65,13 +75,16 @@ export class PlayerModel {
    */
   private async loadAnimations(): Promise<void> {
     const animationFiles: { name: AnimationName; file: string }[] = [
-      { name: 'idle', file: './models/anim-sit-idle.glb' },
+      { name: 'idle', file: './models/anim-idle.glb' },
       { name: 'push', file: './models/anim-push.glb' },
-      { name: 'jump', file: './models/anim-jump.glb' },
-      { name: 'fall', file: './models/anim-fall.glb' },
-      { name: 'slide', file: './models/anim-slide.glb' },
+      { name: 'standtosit', file: './models/anim-standtosit.glb' },
+      { name: 'rolling', file: './models/anim-rolling.glb' },
+      { name: 'chairhold', file: './models/anim-chairhold.glb' },
       { name: 'trick', file: './models/anim-trick.glb' },
-      { name: 'victory', file: './models/anim-victory.glb' },
+      { name: 'jump', file: './models/anim-jump.glb' },
+      { name: 'roll', file: './models/anim-roll.glb' },
+      { name: 'slide', file: './models/anim-slide.glb' },
+      { name: 'crash', file: './models/anim-crash.glb' },
     ];
     
     for (const anim of animationFiles) {
@@ -102,7 +115,12 @@ export class PlayerModel {
       return;
     }
     
-    const fadeTime = options?.fadeTime ?? 0.2;
+    // Don't restart same animation
+    if (this.currentAnimation === name && anim.action.isRunning()) {
+      return;
+    }
+    
+    const fadeTime = options?.fadeTime ?? 0.3;
     const loop = options?.loop ?? true;
     
     // Configure the action
@@ -123,6 +141,23 @@ export class PlayerModel {
     anim.action.play();
     
     this.currentAnimation = name;
+  }
+  
+  /**
+   * Play animation once and then transition to another
+   */
+  playOnce(name: AnimationName, thenPlay: AnimationName): void {
+    const anim = this.animations.get(name);
+    if (!anim) return;
+    
+    this.play(name, { loop: false });
+    
+    // Set up listener for when animation finishes
+    const onFinish = () => {
+      this.mixer?.removeEventListener('finished', onFinish);
+      this.play(thenPlay);
+    };
+    this.mixer?.addEventListener('finished', onFinish);
   }
   
   /**

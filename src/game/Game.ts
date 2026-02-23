@@ -196,8 +196,8 @@ export class Game {
       const chairGltf = await loader.loadAsync('./models/chair.glb');
       const chairModel = chairGltf.scene;
       
-      // Adjust chair scale and position as needed
-      chairModel.scale.set(0.8, 0.8, 0.8); // Adjust scale
+      // Chair at 1/4 size as requested
+      chairModel.scale.set(0.2, 0.2, 0.2);
       chairModel.position.set(0, 0, 0);
       chairModel.rotation.y = Math.PI; // Face forward
       
@@ -224,9 +224,9 @@ export class Game {
         this.playerModel = new PlayerModel();
         const model = await this.playerModel.load();
         
-        // Position on chair - adjust based on chair model
-        model.position.set(0, 0.4, 0);
-        model.rotation.y = 0; // Face forward (Z direction)
+        // Position player on/behind chair
+        model.position.set(0, 0.1, -0.15);
+        model.rotation.y = 0;
         
         this.chair.add(model);
         
@@ -869,48 +869,109 @@ export class Game {
     }
   }
   
+  // Animation state tracking
+  private animState: 'idle' | 'pushing' | 'rolling' | 'air' | 'trick' | 'crash' = 'idle';
+  private pushStartTime = 0;
+  
   /**
    * Update player animation based on game state
    */
   private updatePlayerAnimation(input: ReturnType<InputManager['getState']>): void {
     if (!this.playerModel) return;
     
-    const currentAnim = this.playerModel.getCurrentAnimation();
     const vel = this.physics.getVelocity(this.chairBody);
     const speed = new THREE.Vector3(vel.x, 0, vel.z).length();
+    const now = performance.now();
     
-    // Priority: fall > jump > trick > push > slide > idle
+    // CRASH STATE - angry throw animation
+    if (this.animState === 'crash') {
+      // Stay in crash until animation finishes (handled by playOnce)
+      return;
+    }
     
-    // Airborne
+    // AIRBORNE - tricks and jumps
     if (this.playerState.isAirborne) {
-      // Check if doing a trick
       if (input.flip || input.grab) {
-        if (currentAnim !== 'trick') {
-          this.playerModel.play('trick', { loop: false });
+        // Doing a trick - various trick animations
+        if (input.flip) {
+          // Flip tricks - use breakdance or roll
+          if (!this.playerModel.isPlaying('trick') && !this.playerModel.isPlaying('roll')) {
+            this.playerModel.play('trick', { loop: false });
+          }
+        } else if (input.grab) {
+          // Grab tricks - hold chair above head
+          if (!this.playerModel.isPlaying('chairhold')) {
+            this.playerModel.play('chairhold', { loop: true });
+          }
         }
-      } else if (currentAnim !== 'jump' && currentAnim !== 'trick') {
-        this.playerModel.play('jump', { loop: false });
+        this.animState = 'trick';
+      } else {
+        // Just jumping
+        if (!this.playerModel.isPlaying('jump') && this.animState !== 'trick') {
+          this.playerModel.play('jump', { loop: false });
+        }
+        this.animState = 'air';
       }
       return;
     }
     
-    // Grounded
-    if (input.forward && speed > 0.5) {
-      // Pushing forward
-      if (currentAnim !== 'push') {
-        this.playerModel.play('push', { loop: true });
-      }
-    } else if (speed > 2) {
-      // Rolling/sliding
-      if (currentAnim !== 'slide') {
-        this.playerModel.play('slide', { loop: true });
-      }
-    } else {
-      // Idle
-      if (currentAnim !== 'idle') {
-        this.playerModel.play('idle', { loop: true });
-      }
+    // GROUNDED
+    
+    // Just started pushing forward
+    if (input.forward && this.animState !== 'pushing' && this.animState !== 'rolling') {
+      this.playerModel.play('push', { loop: false });
+      this.animState = 'pushing';
+      this.pushStartTime = now;
+      return;
     }
+    
+    // Continue pushing sequence
+    if (this.animState === 'pushing') {
+      // After push animation, transition to sitting
+      if (now - this.pushStartTime > 600) { // Push animation ~0.6s
+        this.playerModel.play('standtosit', { loop: false });
+        this.animState = 'rolling';
+        this.pushStartTime = now;
+      }
+      return;
+    }
+    
+    // Rolling state - sitting on chair while moving
+    if (this.animState === 'rolling' || speed > 1.5) {
+      if (now - this.pushStartTime > 400 && !this.playerModel.isPlaying('rolling')) {
+        this.playerModel.play('rolling', { loop: true });
+      }
+      
+      // If we push again, go back to push animation
+      if (input.forward && speed < 8) {
+        this.playerModel.play('push', { loop: false });
+        this.animState = 'pushing';
+        this.pushStartTime = now;
+      }
+      
+      // Slow down to idle
+      if (speed < 0.5) {
+        this.animState = 'idle';
+      }
+      return;
+    }
+    
+    // IDLE - sitting dozing
+    if (speed < 0.5 && this.animState !== 'idle') {
+      this.playerModel.play('idle', { loop: true });
+      this.animState = 'idle';
+    } else if (this.animState === 'idle' && !this.playerModel.isPlaying('idle')) {
+      this.playerModel.play('idle', { loop: true });
+    }
+  }
+  
+  /**
+   * Trigger crash animation (called on bail)
+   */
+  triggerCrash(): void {
+    if (!this.playerModel) return;
+    this.animState = 'crash';
+    this.playerModel.playOnce('crash', 'idle');
   }
   
   private updatePlayerState(dt: number): void {
