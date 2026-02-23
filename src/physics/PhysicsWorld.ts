@@ -37,10 +37,9 @@ export class PhysicsWorld {
     
     const body = this.world.createRigidBody(bodyDesc);
     
-    // Single combined collider - simpler is better for stability
-    // Using a capsule instead of cylinders for smoother ground contact
-    const bodyCollider = RAPIER.ColliderDesc.capsule(0.2, 0.3)
-      .setTranslation(0, 0.35, 0)
+    // Main body collider - simple cylinder centered on body
+    const bodyCollider = RAPIER.ColliderDesc.cylinder(0.25, 0.35)
+      .setTranslation(0, 0.3, 0)
       .setMass(80)
       .setFriction(0.6)
       .setRestitution(0.0);
