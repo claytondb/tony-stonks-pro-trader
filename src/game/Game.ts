@@ -14,13 +14,23 @@ import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
 import { ComboSystem } from '../tricks/ComboSystem';
 import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
+import { LevelManager } from '../levels/LevelManager';
 
 export class Game {
   // Core
   private canvas: HTMLCanvasElement;
   private isRunning = false;
+  private isPaused = false;
   private lastTime = 0;
   private accumulator = 0;
+  
+  // Level state
+  private currentLevelId: string = '';
+  private levelTime = 0;
+  private levelManager!: LevelManager;
+  
+  // Callbacks
+  onLevelComplete?: (score: number, time: number, goalsCompleted: number, totalGoals: number) => void;
   
   // Constants
   private readonly PHYSICS_TIMESTEP = 1 / 60;
