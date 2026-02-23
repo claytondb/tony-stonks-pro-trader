@@ -289,9 +289,11 @@ export class HUD {
       S - Brake<br>
       A/D - Turn<br>
       SPACE - Ollie<br>
+      ↑ - Grind (near rail)<br>
       ← + WASD - Flip tricks<br>
       → + WASD - Grab tricks<br>
-      Q/E - Spin
+      Q/E - Spin (in air)<br>
+      ESC - Pause
     `;
     hud.appendChild(controls);
     
