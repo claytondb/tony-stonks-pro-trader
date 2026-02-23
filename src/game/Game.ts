@@ -14,7 +14,8 @@ import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
 import { ComboSystem } from '../tricks/ComboSystem';
 import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
-import { LevelManager } from '../levels/LevelManager';
+// TODO: Integrate LevelManager
+// import { LevelManager } from '../levels/LevelManager';
 
 export class Game {
   // Core
@@ -27,7 +28,8 @@ export class Game {
   // Level state
   private currentLevelId: string = '';
   private levelTime = 0;
-  private levelManager!: LevelManager;
+  // TODO: Add LevelManager integration
+  // private levelManager!: LevelManager;
   
   // Callbacks
   onLevelComplete?: (score: number, time: number, goalsCompleted: number, totalGoals: number) => void;
@@ -805,8 +807,60 @@ export class Game {
   
   start(): void {
     this.isRunning = true;
+    this.isPaused = false;
     this.lastTime = performance.now();
+    this.levelTime = 0;
     requestAnimationFrame(this.loop.bind(this));
+  }
+  
+  pause(): void {
+    this.isPaused = true;
+  }
+  
+  resume(): void {
+    this.isPaused = false;
+    this.lastTime = performance.now(); // Reset to avoid time jump
+  }
+  
+  /**
+   * Load a level by ID
+   */
+  loadLevel(levelId: string): void {
+    console.log(`Loading level: ${levelId}`);
+    this.currentLevelId = levelId;
+    this.levelTime = 0;
+    
+    // Reset player state
+    this.specialMeter = 0;
+    this.grindBalance = 0.5;
+    this.manualBalance = 0.5;
+    this.spinRotation = 0;
+    this.playerState = {
+      isGrounded: true,
+      isAirborne: false,
+      isGrinding: false,
+      isManualing: false,
+      hasSpecial: false,
+      airTime: 0
+    };
+    
+    // Reset combo
+    this.comboSystem.reset();
+    
+    // For now, just reset player position
+    // TODO: Use LevelManager to load proper level
+    if (this.chairBody) {
+      this.physics.setPosition(this.chairBody, new THREE.Vector3(0, 0.5, 5));
+      this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+      this.physics.setRotationY(this.chairBody, 0);
+    }
+    
+    // Reset HUD
+    this.hud?.reset();
+  }
+  
+  getCurrentLevelId(): string {
+    return this.currentLevelId;
   }
   
   stop(): void {
@@ -818,23 +872,28 @@ export class Game {
     
     const deltaTime = (currentTime - this.lastTime) / 1000;
     this.lastTime = currentTime;
-    this.accumulator += deltaTime;
     
-    // Fixed timestep physics
-    let steps = 0;
-    while (this.accumulator >= this.PHYSICS_TIMESTEP && steps < this.MAX_FRAME_SKIP) {
-      this.fixedUpdate(this.PHYSICS_TIMESTEP);
-      this.accumulator -= this.PHYSICS_TIMESTEP;
-      steps++;
+    // Don't update game logic when paused
+    if (!this.isPaused) {
+      this.accumulator += deltaTime;
+      this.levelTime += deltaTime;
+      
+      // Fixed timestep physics
+      let steps = 0;
+      while (this.accumulator >= this.PHYSICS_TIMESTEP && steps < this.MAX_FRAME_SKIP) {
+        this.fixedUpdate(this.PHYSICS_TIMESTEP);
+        this.accumulator -= this.PHYSICS_TIMESTEP;
+        steps++;
+      }
+      
+      // Update HUD
+      if (this.hud) {
+        this.hud.update(deltaTime);
+      }
     }
     
-    // Render
+    // Always render (even when paused)
     this.render();
-    
-    // Update HUD
-    if (this.hud) {
-      this.hud.update(deltaTime);
-    }
     
     requestAnimationFrame(this.loop.bind(this));
   }

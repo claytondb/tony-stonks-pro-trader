@@ -436,4 +436,24 @@ export class HUD {
     const percent = Math.min(100, Math.max(0, position * 100));
     this.balanceArrow.style.left = `${percent}%`;
   }
+  
+  /**
+   * Reset HUD for new level
+   */
+  reset(): void {
+    this.currentScore = 0;
+    this.displayedScore = 0;
+    this.specialAmount = 0;
+    
+    const scoreValue = this.scoreElement.querySelector('.hud-score-value');
+    if (scoreValue) {
+      scoreValue.textContent = '0';
+    }
+    
+    this.specialFill.style.width = '0%';
+    this.specialMeter.classList.remove('full');
+    this.comboElement.classList.remove('active');
+    this.trickPopup.classList.remove('show');
+    this.balanceMeter.classList.remove('active');
+  }
 }
