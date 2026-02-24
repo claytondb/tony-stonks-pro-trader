@@ -75,14 +75,14 @@ export class GrindSystem {
   }
   
   /**
-   * Check if player can start grinding
+   * Check if player can start grinding (automatic - no button required)
    */
   tryStartGrind(
     playerPos: THREE.Vector3,
     playerVel: THREE.Vector3,
-    grindPressed: boolean
+    _grindPressed: boolean = true  // Keep param for compatibility but ignore it
   ): Rail | null {
-    if (!grindPressed || this.grindState.isGrinding) return null;
+    if (this.grindState.isGrinding) return null;
     
     const speed = new THREE.Vector3(playerVel.x, 0, playerVel.z).length();
     if (speed < this.MIN_SPEED_TO_GRIND) return null;

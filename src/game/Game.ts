@@ -232,7 +232,7 @@ export class Game {
       
       // Chair model - larger scale
       chairModel.scale.set(0.35, 0.35, 0.35);
-      chairModel.position.set(0, -0.5, 0);  // Offset down to sit on ground
+      chairModel.position.set(0, -0.3, 0);  // Offset to sit on ground
       // Model's natural +Z should face forward (away from camera)
       
       // Enable shadows
@@ -260,8 +260,8 @@ export class Game {
         
         // Position player centered on chair (handled by PlayerModel.update to prevent root motion drift)
         // Offset to match the lowered chair model
-        this.playerModel.setLocalPosition(-0.2, -0.6, 0);
-        model.position.set(-0.2, -0.6, 0);
+        this.playerModel.setLocalPosition(-0.2, -0.4, 0);
+        model.position.set(-0.2, -0.4, 0);
         model.rotation.y = 0;
         
         // Now start idle animation after position is set
@@ -1019,11 +1019,12 @@ export class Game {
       }
     }
     
-    // Check for grind initiation
+    // Check for grind initiation (automatic when near a rail)
     if (!this.grindSystem.isGrinding()) {
       const pos = this.physics.getPosition(this.chairBody);
       const vel = this.physics.getVelocity(this.chairBody);
-      const startedGrind = this.grindSystem.tryStartGrind(pos, vel, input.grind);
+      // Auto-grind: always check for rails, no button required
+      const startedGrind = this.grindSystem.tryStartGrind(pos, vel, true);
       
       if (startedGrind) {
         this.playerState.isGrinding = true;
