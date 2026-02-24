@@ -150,22 +150,33 @@ class PlayerPreview {
     
     if (!this.model) return;
     
-    this.model.scale.set(scale, scale, scale);
-    this.model.position.set(0, 0, 0);
+    // Larger scale for preview visibility
+    const previewScale = scale * 1.5;
+    this.model.scale.set(previewScale, previewScale, previewScale);
+    this.model.position.set(0, -0.5, 0);  // Lower to fit in view
     this.model.rotation.y = Math.PI; // Face camera
     
     this.scene.add(this.model);
     
-    // Play idle animation if available
+    // Play standing idle animation if available
     if (this.model.animations && this.model.animations.length > 0) {
+      console.log('Preview animations:', this.model.animations.map(c => c.name));
+      
       this.mixer = new THREE.AnimationMixer(this.model);
-      // Find idle animation
-      const idleClip = this.model.animations.find(clip => 
-        clip.name.toLowerCase().includes('idle') || 
-        clip.name.toLowerCase().includes('dozing')
-      ) || this.model.animations[0];
+      
+      // Find standing idle animation - look for "idle 11" or "stand" (not sitting/dozing)
+      const idleClip = this.model.animations.find(clip => {
+        const name = clip.name.toLowerCase();
+        return name.includes('idle 11') || 
+               name.includes('idle11') ||
+               (name.includes('stand') && name.includes('idle'));
+      }) || this.model.animations.find(clip => {
+        const name = clip.name.toLowerCase();
+        return name.includes('idle') && !name.includes('dozing') && !name.includes('sit');
+      }) || this.model.animations[0];
       
       if (idleClip) {
+        console.log('Preview playing animation:', idleClip.name);
         const action = this.mixer.clipAction(idleClip);
         action.play();
       }

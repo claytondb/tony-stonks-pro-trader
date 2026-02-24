@@ -26,16 +26,16 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
-// Names from Meshy.ai combined export
+// Names from Meshy.ai combined export - use exact names for consistency across models
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['dozing elderly', 'dozing', 'idle 11', 'idle'],
-  'push': ['step forward and push', 'step forward', 'push'],
+  'idle': ['idle 11', 'idle'],  // Standing idle
+  'push': ['step forward and push', 'walking', 'running'],  // Push/run animation
   'standtosit': ['stand to sit transition male', 'stand to sit', 'look back and sit'],
-  'rolling': ['idle 11', 'walking', 'running'],  // Use idle or walking while rolling
-  'chairhold': ['bar hang idle', 'bar hang', 'female bow charge'],  // Holding pose
+  'rolling': ['dozing elderly', 'dozing'],  // Sitting/dozing while on chair
+  'chairhold': ['bar hang idle', 'bar hang', 'charged spell cast'],  // Holding pose in air
   'trick': ['breakdance 1990', 'breakdance', 'backflip'],
   'jump': ['jump over obstacle 1', 'jump over obstacle', 'parkour vault 1'],
-  'roll': ['parkour vault with roll', 'parkour vault', 'vault'],
+  'roll': ['parkour vault with roll', 'parkour vault'],
   'slide': ['slide light', 'slide'],
   'crash': ['falling down', 'falling', 'fall'],
 };
@@ -227,22 +227,31 @@ export class PlayerModel {
   }
   
   /**
-   * Find a clip by checking multiple possible names (case-insensitive, partial match)
+   * Find a clip by checking multiple possible names (case-insensitive)
+   * Prioritizes exact matches, then "starts with", then "contains"
    */
   private findClip(clips: THREE.AnimationClip[], possibleNames: string[]): THREE.AnimationClip | null {
-    for (const clip of clips) {
-      const clipNameLower = clip.name.toLowerCase();
-      
-      for (const name of possibleNames) {
-        const nameLower = name.toLowerCase();
-        // Check exact match, partial match, or contains
-        if (clipNameLower === nameLower || 
-            clipNameLower.includes(nameLower) || 
-            nameLower.includes(clipNameLower)) {
-          return clip;
-        }
-      }
+    // First pass: exact match (case-insensitive)
+    for (const name of possibleNames) {
+      const nameLower = name.toLowerCase();
+      const exactMatch = clips.find(clip => clip.name.toLowerCase() === nameLower);
+      if (exactMatch) return exactMatch;
     }
+    
+    // Second pass: starts with (case-insensitive)
+    for (const name of possibleNames) {
+      const nameLower = name.toLowerCase();
+      const startsWithMatch = clips.find(clip => clip.name.toLowerCase().startsWith(nameLower));
+      if (startsWithMatch) return startsWithMatch;
+    }
+    
+    // Third pass: contains (case-insensitive)
+    for (const name of possibleNames) {
+      const nameLower = name.toLowerCase();
+      const containsMatch = clips.find(clip => clip.name.toLowerCase().includes(nameLower));
+      if (containsMatch) return containsMatch;
+    }
+    
     return null;
   }
   
