@@ -73,6 +73,8 @@ export class Game {
   
   private specialMeter = 0;
   private grindBalance = 0.5;
+  private grindScore = 0;  // Stonks earned during current grind
+  private totalStonks = 0;  // Total stonks earned
   private manualBalance = 0.5;
   private lastTrickTime = 0;
   private spinRotation = 0;
@@ -727,11 +729,8 @@ export class Game {
       this.scene.add(post);
     }
     
-    // Physics - larger collider for better detection
-    this.physics.createStaticBox(
-      new THREE.Vector3(x, 0.8, z),
-      new THREE.Vector3(length / 2, 0.15, 0.15)
-    );
+    // NO physics collider for rails - grind system handles them
+    // Player passes through unless grinding
     
     // Register with grind system (rail runs along X axis)
     const start = new THREE.Vector3(x - length / 2, 0.8, z);
@@ -747,12 +746,7 @@ export class Game {
     rail.castShadow = true;
     this.scene.add(rail);
     
-    // Physics - larger collider for better detection
-    this.physics.createStaticBox(
-      new THREE.Vector3(x, 0.8, z),
-      new THREE.Vector3(length / 2, 0.15, 0.15),
-      new THREE.Euler(0, rotation, 0)
-    );
+    // NO physics collider for rails - grind system handles them
     
     // Register with grind system (calculate rotated endpoints)
     const halfLen = length / 2;
@@ -1032,6 +1026,7 @@ export class Game {
       if (startedGrind) {
         this.playerState.isGrinding = true;
         this.grindBalance = 0.5;
+        this.grindScore = 0;  // Reset grind score
         proceduralSounds.playGrindStart();
         proceduralSounds.startGrindLoop();
       }
@@ -1059,6 +1054,13 @@ export class Game {
         // Update balance display
         const grindState = this.grindSystem.getState();
         this.grindBalance = grindState.balance;
+        
+        // Earn stonks while grinding (10 per second base, up to 50 with good balance)
+        const balanceBonus = 1 + Math.abs(0.5 - grindState.balance) * -4 + 2;  // Better balance = more stonks
+        const stonksPerSecond = 10 * Math.max(1, balanceBonus);
+        this.grindScore += stonksPerSecond * dt;
+        this.totalStonks += stonksPerSecond * dt;
+        this.hud?.setScore(Math.floor(this.totalStonks));
         
         // Update grind particles with sparks
         if (grindState.rail) {

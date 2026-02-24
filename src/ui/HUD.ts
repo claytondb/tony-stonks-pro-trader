@@ -152,19 +152,30 @@ export class HUD {
       
       .hud-balance-meter {
         position: absolute;
-        bottom: 80px;
+        top: 35%;
         left: 50%;
         transform: translateX(-50%);
-        width: 200px;
-        height: 12px;
-        background: rgba(0,0,0,0.5);
-        border-radius: 6px;
+        width: 300px;
+        height: 20px;
+        background: rgba(0,0,0,0.7);
+        border: 2px solid #FFD700;
+        border-radius: 10px;
         opacity: 0;
-        transition: opacity 0.3s;
+        transition: opacity 0.2s;
       }
       
       .hud-balance-meter.active {
         opacity: 1;
+      }
+      
+      .hud-balance-label {
+        position: absolute;
+        top: -25px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 16px;
+        color: #FFD700;
+        letter-spacing: 2px;
       }
       
       .hud-balance-zones {
@@ -172,30 +183,32 @@ export class HUD {
         width: 100%;
         height: 100%;
         display: flex;
+        border-radius: 8px;
+        overflow: hidden;
       }
       
       .hud-balance-danger {
         width: 15%;
         height: 100%;
-        background: #FF4444;
-        opacity: 0.5;
+        background: linear-gradient(90deg, #FF0000, #FF4444);
       }
       
       .hud-balance-safe {
         flex: 1;
-        background: transparent;
+        background: linear-gradient(90deg, #44FF44, #00FF88, #44FF44);
       }
       
       .hud-balance-arrow {
         position: absolute;
-        top: -8px;
+        top: -12px;
         left: 50%;
         transform: translateX(-50%);
         width: 0;
         height: 0;
-        border-left: 8px solid transparent;
-        border-right: 8px solid transparent;
-        border-top: 12px solid #00FF88;
+        border-left: 12px solid transparent;
+        border-right: 12px solid transparent;
+        border-top: 18px solid #FFFFFF;
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
         transition: left 0.05s;
       }
       
@@ -229,11 +242,11 @@ export class HUD {
     title.textContent = 'TONY STONKS';
     hud.appendChild(title);
     
-    // Score
+    // Stonks counter
     this.scoreElement = document.createElement('div');
     this.scoreElement.className = 'hud-score';
     this.scoreElement.innerHTML = `
-      <div class="hud-score-label">SCORE</div>
+      <div class="hud-score-label">📈 STONKS</div>
       <div class="hud-score-value">0</div>
     `;
     hud.appendChild(this.scoreElement);
@@ -267,10 +280,11 @@ export class HUD {
     this.specialFill = this.specialMeter.querySelector('.hud-special-fill')!;
     hud.appendChild(this.specialMeter);
     
-    // Balance meter
+    // Balance meter (shown when grinding)
     this.balanceMeter = document.createElement('div');
     this.balanceMeter.className = 'hud-balance-meter';
     this.balanceMeter.innerHTML = `
+      <div class="hud-balance-label">⚖️ BALANCE</div>
       <div class="hud-balance-zones">
         <div class="hud-balance-danger"></div>
         <div class="hud-balance-safe"></div>
