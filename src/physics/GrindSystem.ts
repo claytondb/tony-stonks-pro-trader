@@ -53,6 +53,14 @@ export class GrindSystem {
   private readonly MIN_GRIND_SPEED = 3.0;      // Don't go slower than this while grinding
   
   /**
+   * Clear all registered rails
+   */
+  clearRails(): void {
+    this.rails = [];
+    this.forceEndGrind();
+  }
+  
+  /**
    * Register a rail for grind detection
    */
   addRail(start: THREE.Vector3, end: THREE.Vector3, id?: string, mesh?: THREE.Object3D): Rail {
@@ -70,13 +78,6 @@ export class GrindSystem {
     
     this.rails.push(rail);
     return rail;
-  }
-  
-  /**
-   * Clear all rails
-   */
-  clearRails(): void {
-    this.rails = [];
   }
   
   /**

@@ -16,8 +16,7 @@ import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
 import { GrindParticles } from '../effects/GrindParticles';
-// TODO: Integrate LevelManager
-// import { LevelManager } from '../levels/LevelManager';
+import { LevelData, LevelObject } from '../levels/LevelData';
 
 export class Game {
   // Core
@@ -60,6 +59,9 @@ export class Game {
   private chair!: THREE.Group;
   private chairBody!: RAPIER.RigidBody;
   private useGLBModel = true; // Set to false to use primitive shapes
+  
+  // Level objects (can be cleared and reloaded)
+  private levelObjects: THREE.Object3D[] = [];
   
   // Player state
   private playerState: PlayerTrickState = {
@@ -967,7 +969,7 @@ export class Game {
   /**
    * Load a custom level (from the editor)
    */
-  loadCustomLevel(level: import('../levels/LevelData').LevelData): void {
+  loadCustomLevel(level: LevelData): void {
     console.log(`Loading custom level: ${level.name}`);
     this.currentLevelId = level.id;
     this.levelTime = 0;
@@ -989,8 +991,19 @@ export class Game {
     // Reset combo
     this.comboSystem.reset();
     
-    // TODO: When LevelManager is integrated, use it to load the level objects
-    // For now, just reset player to spawn point
+    // Clear existing level objects
+    this.clearLevelObjects();
+    
+    // Update environment settings
+    this.scene.background = new THREE.Color(level.skyColor);
+    if (level.fogColor) {
+      this.scene.fog = new THREE.Fog(level.fogColor, level.fogNear || 50, level.fogFar || 200);
+    }
+    
+    // Load level objects
+    this.loadLevelObjects(level.objects, level.groundSize);
+    
+    // Set player spawn
     const spawn = level.spawnPoint;
     if (this.chairBody) {
       this.physics.setPosition(this.chairBody, new THREE.Vector3(spawn.position[0], spawn.position[1], spawn.position[2]));
@@ -1000,6 +1013,519 @@ export class Game {
     
     // Reset HUD
     this.hud?.reset();
+  }
+  
+  /**
+   * Clear all level-specific objects
+   */
+  private clearLevelObjects(): void {
+    // Remove all tracked level objects from scene
+    for (const obj of this.levelObjects) {
+      this.scene.remove(obj);
+    }
+    this.levelObjects = [];
+    
+    // Clear grind system rails
+    this.grindSystem.clearRails();
+  }
+  
+  /**
+   * Load objects from level data
+   */
+  private loadLevelObjects(objects: LevelObject[], groundSize: number): void {
+    // Create ground for the level
+    this.createLevelGround(groundSize);
+    
+    // Create each object
+    for (const objData of objects) {
+      const mesh = this.createLevelObject(objData);
+      if (mesh) {
+        this.scene.add(mesh);
+        this.levelObjects.push(mesh);
+      }
+    }
+  }
+  
+  /**
+   * Create ground plane for a level
+   */
+  private createLevelGround(size: number): void {
+    const groundGeometry = new THREE.PlaneGeometry(size, size, 50, 50);
+    
+    // Create grid texture
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#555555';
+    ctx.fillRect(0, 0, 512, 512);
+    ctx.strokeStyle = '#666666';
+    ctx.lineWidth = 2;
+    for (let i = 0; i <= 16; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * 32, 0);
+      ctx.lineTo(i * 32, 512);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, i * 32);
+      ctx.lineTo(512, i * 32);
+      ctx.stroke();
+    }
+    
+    const groundTexture = new THREE.CanvasTexture(canvas);
+    groundTexture.wrapS = THREE.RepeatWrapping;
+    groundTexture.wrapT = THREE.RepeatWrapping;
+    groundTexture.repeat.set(size / 5, size / 5);
+    
+    const groundMaterial = new THREE.MeshStandardMaterial({ 
+      map: groundTexture,
+      roughness: 0.9
+    });
+    const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    this.scene.add(ground);
+    this.levelObjects.push(ground);
+    
+    // Add physics ground
+    this.physics.createGround(size / 2);
+  }
+  
+  /**
+   * Create a single level object from data
+   */
+  private createLevelObject(data: LevelObject): THREE.Object3D | null {
+    let mesh: THREE.Object3D | null = null;
+    
+    const railMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0xcccccc, metalness: 0.8, roughness: 0.2
+    });
+    const woodMaterial = new THREE.MeshStandardMaterial({
+      color: 0x8B4513, roughness: 0.7
+    });
+    const concreteMaterial = new THREE.MeshStandardMaterial({
+      color: 0x666666, roughness: 0.9
+    });
+    const metalMaterial = new THREE.MeshStandardMaterial({
+      color: 0x888888, metalness: 0.6, roughness: 0.4
+    });
+    const officeMaterial = new THREE.MeshStandardMaterial({
+      color: 0x4a4a5e, roughness: 0.7
+    });
+    
+    switch (data.type) {
+      case 'rail':
+      case 'rail_angled':
+      case 'rail_curved': {
+        const length = (data.params?.length as number) || 10;
+        mesh = this.createRailMesh(length, railMaterial, metalMaterial);
+        // Register with grind system
+        const rot = data.rotation?.[1] || 0;
+        const radRot = rot * Math.PI / 180;
+        const halfLen = length / 2;
+        const dx = Math.cos(radRot) * halfLen;
+        const dz = Math.sin(radRot) * halfLen;
+        const start = new THREE.Vector3(data.position[0] - dx, 0.8, data.position[2] - dz);
+        const end = new THREE.Vector3(data.position[0] + dx, 0.8, data.position[2] + dz);
+        this.grindSystem.addRail(start, end, `rail_${data.position[0]}_${data.position[2]}`, mesh);
+        break;
+      }
+      
+      case 'ramp':
+        mesh = this.createRampMesh(woodMaterial);
+        // Add physics
+        const rampRot = data.rotation?.[1] || 0;
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.5, data.position[2]),
+          new THREE.Vector3(2.2, 0.2, 1.8),
+          new THREE.Euler(-Math.PI / 12, rampRot * Math.PI / 180, 0)
+        );
+        break;
+        
+      case 'quarter_pipe':
+        mesh = this.createQuarterPipeMesh(concreteMaterial);
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 1.5, data.position[2]),
+          new THREE.Vector3(5, 1.5, 5),
+          new THREE.Euler(0, (data.rotation?.[1] || 0) * Math.PI / 180, 0)
+        );
+        break;
+        
+      case 'half_pipe': {
+        const width = (data.params?.width as number) || 15;
+        const length = (data.params?.length as number) || 20;
+        mesh = this.createHalfPipeMesh(concreteMaterial, width, length);
+        break;
+      }
+      
+      case 'fun_box': {
+        const width = (data.params?.width as number) || 6;
+        const depth = (data.params?.depth as number) || 4;
+        const height = (data.params?.height as number) || 0.8;
+        mesh = this.createFunBoxMesh(concreteMaterial, railMaterial, width, depth, height);
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], height / 2, data.position[2]),
+          new THREE.Vector3(width / 2, height / 2, depth / 2)
+        );
+        break;
+      }
+      
+      case 'stairs': {
+        const steps = (data.params?.steps as number) || 5;
+        mesh = this.createStairsMesh(concreteMaterial, steps);
+        break;
+      }
+      
+      case 'cubicle': {
+        const width = (data.params?.width as number) || 3;
+        const depth = (data.params?.depth as number) || 3;
+        mesh = this.createCubicleMesh(officeMaterial, woodMaterial, width, depth);
+        break;
+      }
+      
+      case 'car':
+        mesh = this.createCarMesh();
+        break;
+        
+      case 'bench':
+        mesh = this.createBenchMesh(woodMaterial, metalMaterial);
+        break;
+        
+      case 'planter':
+        mesh = this.createPlanterMesh(concreteMaterial);
+        break;
+        
+      case 'water_cooler':
+        mesh = this.createWaterCoolerMesh();
+        break;
+        
+      case 'trash_can':
+        mesh = this.createTrashCanMesh(metalMaterial);
+        break;
+        
+      case 'cone':
+        mesh = this.createConeMesh();
+        break;
+        
+      case 'barrier': {
+        const length = (data.params?.length as number) || 5;
+        mesh = this.createBarrierMesh(metalMaterial, length);
+        break;
+      }
+      
+      default:
+        // Unknown type - create placeholder cube
+        const geom = new THREE.BoxGeometry(1, 1, 1);
+        mesh = new THREE.Mesh(geom, concreteMaterial);
+    }
+    
+    if (mesh) {
+      mesh.position.set(data.position[0], data.position[1], data.position[2]);
+      if (data.rotation) {
+        mesh.rotation.set(
+          data.rotation[0] * Math.PI / 180,
+          data.rotation[1] * Math.PI / 180,
+          data.rotation[2] * Math.PI / 180
+        );
+      }
+    }
+    
+    return mesh;
+  }
+  
+  // =============================================
+  // LEVEL OBJECT MESH CREATION HELPERS
+  // =============================================
+  
+  private createRailMesh(length: number, railMat: THREE.Material, metalMat: THREE.Material): THREE.Group {
+    const group = new THREE.Group();
+    
+    const railGeom = new THREE.BoxGeometry(length, 0.08, 0.08);
+    const rail = new THREE.Mesh(railGeom, railMat);
+    rail.position.y = 0.8;
+    rail.castShadow = true;
+    group.add(rail);
+    
+    const postGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.8);
+    for (const side of [-1, 1]) {
+      const post = new THREE.Mesh(postGeom, metalMat);
+      post.position.set(side * (length / 2 - 0.2), 0.4, 0);
+      post.castShadow = true;
+      group.add(post);
+    }
+    
+    return group;
+  }
+  
+  private createRampMesh(material: THREE.Material): THREE.Group {
+    const group = new THREE.Group();
+    
+    const rampGeom = new THREE.BoxGeometry(4, 0.15, 3);
+    const ramp = new THREE.Mesh(rampGeom, material);
+    ramp.position.set(0, 0.6, 0);
+    ramp.rotation.x = -Math.PI / 8;
+    ramp.castShadow = true;
+    group.add(ramp);
+    
+    const sideGeom = new THREE.BoxGeometry(0.1, 0.8, 3.2);
+    for (const side of [-1, 1]) {
+      const wall = new THREE.Mesh(sideGeom, material);
+      wall.position.set(side * 2, 0.4, 0);
+      group.add(wall);
+    }
+    
+    return group;
+  }
+  
+  private createQuarterPipeMesh(material: THREE.Material): THREE.Mesh {
+    const shape = new THREE.Shape();
+    const radius = 4;
+    const segments = 16;
+    
+    shape.moveTo(0, 0);
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI / 2;
+      shape.lineTo(radius - Math.cos(angle) * radius, Math.sin(angle) * radius);
+    }
+    shape.lineTo(radius, 0);
+    shape.lineTo(0, 0);
+    
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      steps: 1,
+      depth: 10,
+      bevelEnabled: false
+    });
+    
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    
+    return mesh;
+  }
+  
+  private createHalfPipeMesh(material: THREE.Material, width: number, length: number): THREE.Group {
+    const group = new THREE.Group();
+    
+    const shape = new THREE.Shape();
+    const radius = 4;
+    const segments = 16;
+    
+    shape.moveTo(0, 0);
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI / 2;
+      shape.lineTo(radius - Math.cos(angle) * radius, Math.sin(angle) * radius);
+    }
+    shape.lineTo(radius, 0);
+    shape.lineTo(0, 0);
+    
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      steps: 1,
+      depth: length,
+      bevelEnabled: false
+    });
+    
+    const left = new THREE.Mesh(geometry, material);
+    left.position.set(-width / 2, 0, -length / 2);
+    left.rotation.y = Math.PI / 2;
+    group.add(left);
+    
+    const right = new THREE.Mesh(geometry, material);
+    right.position.set(width / 2, 0, length / 2);
+    right.rotation.y = -Math.PI / 2;
+    group.add(right);
+    
+    const bottomGeom = new THREE.BoxGeometry(width - 8, 0.1, length);
+    const bottom = new THREE.Mesh(bottomGeom, material);
+    bottom.position.set(0, 0.05, 0);
+    group.add(bottom);
+    
+    return group;
+  }
+  
+  private createFunBoxMesh(material: THREE.Material, railMat: THREE.Material, width: number, depth: number, height: number): THREE.Group {
+    const group = new THREE.Group();
+    
+    const boxGeom = new THREE.BoxGeometry(width, height, depth);
+    const box = new THREE.Mesh(boxGeom, material);
+    box.position.y = height / 2;
+    box.castShadow = true;
+    group.add(box);
+    
+    const railGeom = new THREE.BoxGeometry(width, 0.06, 0.06);
+    for (const side of [-1, 1]) {
+      const rail = new THREE.Mesh(railGeom, railMat);
+      rail.position.set(0, height + 0.03, side * (depth / 2 - 0.03));
+      group.add(rail);
+    }
+    
+    return group;
+  }
+  
+  private createStairsMesh(material: THREE.Material, steps: number): THREE.Group {
+    const group = new THREE.Group();
+    
+    const stepWidth = 4;
+    const stepHeight = 0.2;
+    const stepDepth = 0.3;
+    
+    for (let i = 0; i < steps; i++) {
+      const stepGeom = new THREE.BoxGeometry(stepWidth, stepHeight, stepDepth);
+      const step = new THREE.Mesh(stepGeom, material);
+      step.position.set(0, stepHeight / 2 + i * stepHeight, i * stepDepth);
+      step.castShadow = true;
+      group.add(step);
+    }
+    
+    return group;
+  }
+  
+  private createCubicleMesh(wallMat: THREE.Material, deskMat: THREE.Material, width: number, depth: number): THREE.Group {
+    const height = 1.5;
+    const group = new THREE.Group();
+    
+    const wallGeom = new THREE.BoxGeometry(width, height, 0.05);
+    const backWall = new THREE.Mesh(wallGeom, wallMat);
+    backWall.position.set(0, height / 2, depth / 2);
+    group.add(backWall);
+    
+    const sideWallGeom = new THREE.BoxGeometry(0.05, height, depth);
+    for (const side of [-1, 1]) {
+      const sideWall = new THREE.Mesh(sideWallGeom, wallMat);
+      sideWall.position.set(side * width / 2, height / 2, 0);
+      group.add(sideWall);
+    }
+    
+    const deskGeom = new THREE.BoxGeometry(width * 0.8, 0.05, depth * 0.4);
+    const desk = new THREE.Mesh(deskGeom, deskMat);
+    desk.position.set(0, 0.75, depth * 0.2);
+    group.add(desk);
+    
+    return group;
+  }
+  
+  private createCarMesh(): THREE.Group {
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2244aa, metalness: 0.8, roughness: 0.3 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+    
+    const bodyGeom = new THREE.BoxGeometry(2, 1, 4);
+    const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.position.y = 0.8;
+    body.castShadow = true;
+    group.add(body);
+    
+    const topGeom = new THREE.BoxGeometry(1.5, 0.6, 2);
+    const top = new THREE.Mesh(topGeom, bodyMat);
+    top.position.set(0, 1.6, -0.3);
+    group.add(top);
+    
+    const wheelGeom = new THREE.CylinderGeometry(0.3, 0.3, 0.15, 12);
+    const positions = [
+      [-0.9, 0.3, 1.3], [0.9, 0.3, 1.3],
+      [-0.9, 0.3, -1.3], [0.9, 0.3, -1.3]
+    ];
+    
+    for (const [x, y, z] of positions) {
+      const wheel = new THREE.Mesh(wheelGeom, wheelMat);
+      wheel.position.set(x, y, z);
+      wheel.rotation.z = Math.PI / 2;
+      group.add(wheel);
+    }
+    
+    return group;
+  }
+  
+  private createBenchMesh(woodMat: THREE.Material, metalMat: THREE.Material): THREE.Group {
+    const group = new THREE.Group();
+    
+    const seatGeom = new THREE.BoxGeometry(2, 0.1, 0.5);
+    const seat = new THREE.Mesh(seatGeom, woodMat);
+    seat.position.y = 0.5;
+    group.add(seat);
+    
+    const legGeom = new THREE.BoxGeometry(0.1, 0.5, 0.4);
+    for (const side of [-0.8, 0.8]) {
+      const leg = new THREE.Mesh(legGeom, metalMat);
+      leg.position.set(side, 0.25, 0);
+      group.add(leg);
+    }
+    
+    return group;
+  }
+  
+  private createPlanterMesh(boxMat: THREE.Material): THREE.Group {
+    const group = new THREE.Group();
+    
+    const boxGeom = new THREE.BoxGeometry(2, 0.8, 2);
+    const box = new THREE.Mesh(boxGeom, boxMat);
+    box.position.y = 0.4;
+    group.add(box);
+    
+    const trunkGeom = new THREE.CylinderGeometry(0.1, 0.15, 1);
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3020 });
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 1.3;
+    group.add(trunk);
+    
+    const foliageGeom = new THREE.SphereGeometry(0.6, 8, 8);
+    const foliageMat = new THREE.MeshStandardMaterial({ color: 0x228b22 });
+    const foliage = new THREE.Mesh(foliageGeom, foliageMat);
+    foliage.position.y = 2;
+    group.add(foliage);
+    
+    return group;
+  }
+  
+  private createWaterCoolerMesh(): THREE.Group {
+    const group = new THREE.Group();
+    
+    const bodyGeom = new THREE.CylinderGeometry(0.2, 0.25, 1, 12);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x6688aa });
+    const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.position.y = 0.5;
+    group.add(body);
+    
+    const jugGeom = new THREE.CylinderGeometry(0.15, 0.18, 0.4, 12);
+    const jugMat = new THREE.MeshStandardMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 });
+    const jug = new THREE.Mesh(jugGeom, jugMat);
+    jug.position.y = 1.2;
+    group.add(jug);
+    
+    return group;
+  }
+  
+  private createTrashCanMesh(material: THREE.Material): THREE.Mesh {
+    const geometry = new THREE.CylinderGeometry(0.25, 0.2, 0.6, 12);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.y = 0.3;
+    return mesh;
+  }
+  
+  private createConeMesh(): THREE.Mesh {
+    const geometry = new THREE.ConeGeometry(0.2, 0.5, 8);
+    const material = new THREE.MeshStandardMaterial({ color: 0xff6600 });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.y = 0.25;
+    return mesh;
+  }
+  
+  private createBarrierMesh(metalMat: THREE.Material, length: number): THREE.Group {
+    const group = new THREE.Group();
+    
+    const barrierGeom = new THREE.BoxGeometry(length, 0.8, 0.1);
+    const barrierMat = new THREE.MeshStandardMaterial({ color: 0xffcc00 });
+    const barrier = new THREE.Mesh(barrierGeom, barrierMat);
+    barrier.position.y = 0.5;
+    group.add(barrier);
+    
+    const legGeom = new THREE.CylinderGeometry(0.05, 0.05, 0.8);
+    for (const side of [-1, 1]) {
+      const leg = new THREE.Mesh(legGeom, metalMat);
+      leg.position.set(side * (length / 2 - 0.1), 0.4, 0);
+      group.add(leg);
+    }
+    
+    return group;
   }
   
   stop(): void {
