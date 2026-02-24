@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
 export type AnimationName = 
   | 'idle'        // Sitting idle (dozing)
@@ -43,10 +44,12 @@ export class PlayerModel {
   private mixer: THREE.AnimationMixer | null = null;
   private animations: Map<AnimationName, LoadedAnimation> = new Map();
   private currentAnimation: AnimationName | null = null;
-  private loader: GLTFLoader;
+  private gltfLoader: GLTFLoader;
+  private fbxLoader: FBXLoader;
   
   constructor() {
-    this.loader = new GLTFLoader();
+    this.gltfLoader = new GLTFLoader();
+    this.fbxLoader = new FBXLoader();
   }
   
   /**
@@ -55,23 +58,41 @@ export class PlayerModel {
   async load(): Promise<THREE.Group> {
     console.log('Loading combined player model...');
     
-    // Try to load combined model first, fall back to separate files
-    let gltf;
+    // Try to load combined FBX model first, then GLB, then fall back to separate files
+    let model: THREE.Group | null = null;
+    let animations: THREE.AnimationClip[] = [];
     let useCombined = false;
     
+    // Try FBX first (combined file)
     try {
-      gltf = await this.loader.loadAsync('./models/player-combined.glb');
+      model = await this.fbxLoader.loadAsync('./models/player-combined.fbx');
+      animations = model.animations || [];
       useCombined = true;
-      console.log('Loaded combined player model');
-    } catch (error) {
-      console.warn('Combined model not found, falling back to separate files');
-      gltf = await this.loader.loadAsync('./models/player.glb');
+      console.log('Loaded combined FBX player model');
+    } catch (fbxError) {
+      console.warn('Combined FBX not found, trying GLB...');
+      
+      // Try GLB combined
+      try {
+        const gltf = await this.gltfLoader.loadAsync('./models/player-combined.glb');
+        model = gltf.scene;
+        animations = gltf.animations || [];
+        useCombined = true;
+        console.log('Loaded combined GLB player model');
+      } catch (glbError) {
+        console.warn('Combined GLB not found, falling back to separate files');
+        const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
+        model = gltf.scene;
+        animations = gltf.animations || [];
+      }
     }
     
-    this.model = gltf.scene;
+    this.model = model;
     
     // Scale and position the model
-    this.model.scale.set(0.6, 0.6, 0.6);
+    // FBX files often need different scaling than GLB
+    const scale = useCombined ? 0.006 : 0.6;  // FBX is typically in cm, needs smaller scale
+    this.model.scale.set(scale, scale, scale);
     this.model.position.set(0, 0, 0);
     
     // Enable shadows
@@ -86,8 +107,8 @@ export class PlayerModel {
     this.mixer = new THREE.AnimationMixer(this.model);
     
     // Load animations from combined file or separate files
-    if (useCombined && gltf.animations.length > 0) {
-      this.loadAnimationsFromCombined(gltf.animations);
+    if (useCombined && animations.length > 0) {
+      this.loadAnimationsFromCombined(animations);
     } else {
       await this.loadAnimationsSeparately();
     }
@@ -155,7 +176,7 @@ export class PlayerModel {
     
     for (const anim of animationFiles) {
       try {
-        const gltf = await this.loader.loadAsync(anim.file);
+        const gltf = await this.gltfLoader.loadAsync(anim.file);
         if (gltf.animations.length > 0) {
           const clip = gltf.animations[0];
           clip.name = anim.name;
