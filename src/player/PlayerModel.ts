@@ -9,16 +9,25 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { loadSettings, PlayerSkin } from '../ui/GameStateManager';
 
 export type AnimationName = 
-  | 'idle'        // Sitting idle (dozing)
-  | 'push'        // Step forward and push
-  | 'standtosit'  // Transition from standing to sitting
-  | 'rolling'     // Chair sit idle while rolling
-  | 'chairhold'   // Bar hang - holding chair above head (air trick)
-  | 'trick'       // Breakdance trick
-  | 'jump'        // Jump over obstacle
-  | 'roll'        // Parkour roll
-  | 'slide'       // Slide under chair
-  | 'crash';      // Angry throw (crash/fail)
+  | 'idle'           // Standing idle (Idle 11) - Options screen, waiting
+  | 'push'           // Step forward and push - starting to move, 3x speed
+  | 'crouchwalk'     // Cautious crouch walk - moving forward before mounting
+  | 'bowpush'        // Female bow charge - pushing chair forward
+  | 'lookbacksit'    // Look back and sit - before sitting
+  | 'vault'          // Parkour vault 1 - vaulting over chair to sit
+  | 'standtosit'     // Stand to sit transition - sitting down, 2x speed
+  | 'rolling'        // Dozing elderly - sitting on chair while rolling
+  | 'chairhold'      // Bar hang idle - holding chair above head (trick)
+  | 'backflip'       // Backflip trick
+  | 'breakdance'     // Breakdance 1990 - special trick
+  | 'vaultroll'      // Parkour vault with roll - trick while on chair
+  | 'slide'          // Slide light - slide under chair trick
+  | 'jumpwall'       // Jump over obstacle - kick off wall trick
+  | 'falling'        // Falling down - failed trick/bad landing
+  | 'crash'          // Charged spell cast - throwing chair in frustration
+  | 'victory'        // Victory pose - end of level/goal
+  | 'running'        // Running - far from chair
+  | 'walking';       // Walking - story portions
 
 interface LoadedAnimation {
   clip: THREE.AnimationClip;
@@ -26,22 +35,34 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
-// Names from Meshy.ai combined export - use exact names for consistency across models
-// David's animations: backflip, bar hang idle, breakdance 1990, cautious crouch walk forward,
-// charged spell cast 2, dozing elderly, falling down, female bow charge left hand, idle 11,
-// jump over obstacle 1, look back and sit, parkour vault 1, parkour vault with roll, running,
-// slide light, stand to sit transition male, step forward and push, victory, walking
+// Names from Meshy.ai combined export - exact names for consistency
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['idle 11'],  // Standing idle - exact match
-  'push': ['step forward and push', 'running', 'walking'],  // Push/run animation
-  'standtosit': ['stand to sit transition male', 'look back and sit'],
-  'rolling': ['dozing elderly'],  // Sitting/dozing while on chair
-  'chairhold': ['bar hang idle'],  // Holding pose in air
-  'trick': ['breakdance 1990'],  // Trick animation
-  'jump': ['jump over obstacle 1', 'parkour vault 1'],
-  'roll': ['parkour vault with roll'],
-  'slide': ['slide light'],
-  'crash': ['falling down'],
+  'idle': ['idle 11'],                              // Standing idle
+  'push': ['step forward and push'],                // Push chair forward (3x speed)
+  'crouchwalk': ['cautious crouch walk forward'],   // Moving before mounting
+  'bowpush': ['female bow charge left hand'],       // Pushing chair
+  'lookbacksit': ['look back and sit'],             // Before sitting
+  'vault': ['parkour vault 1'],                     // Vault over chair
+  'standtosit': ['stand to sit transition male'],   // Sit down (2x speed)
+  'rolling': ['dozing elderly'],                    // Sitting on rolling chair
+  'chairhold': ['bar hang idle'],                   // Chair over head trick
+  'backflip': ['backflip'],                         // Backflip trick
+  'breakdance': ['breakdance 1990'],                // Special dance trick
+  'vaultroll': ['parkour vault with roll'],         // Roll trick on chair
+  'slide': ['slide light'],                         // Slide under chair
+  'jumpwall': ['jump over obstacle 1'],             // Wall kick trick
+  'falling': ['falling down'],                      // Failed trick
+  'crash': ['charged spell cast 2'],                // Throw chair frustration
+  'victory': ['victory'],                           // Win pose
+  'running': ['running'],                           // Running to chair
+  'walking': ['walking'],                           // Story walking
+};
+
+// Animation speed multipliers
+const ANIMATION_SPEEDS: Partial<Record<AnimationName, number>> = {
+  'push': 3.0,        // Speed up 3x
+  'standtosit': 2.0,  // Speed up 2x
+  'crouchwalk': 1.5,  // Slightly faster
 };
 
 export class PlayerModel {
@@ -276,14 +297,14 @@ export class PlayerModel {
    */
   private async loadAnimationsSeparately(): Promise<void> {
     const animationFiles: { name: AnimationName; file: string }[] = [
-      { name: 'idle', file: './models/anim-sit-idle.glb' },
+      { name: 'idle', file: './models/anim-idle.glb' },
       { name: 'push', file: './models/anim-push.glb' },
       { name: 'standtosit', file: './models/anim-standtosit.glb' },
       { name: 'rolling', file: './models/anim-rolling.glb' },
       { name: 'chairhold', file: './models/anim-chairhold.glb' },
-      { name: 'trick', file: './models/anim-trick.glb' },
-      { name: 'jump', file: './models/anim-jump.glb' },
-      { name: 'roll', file: './models/anim-roll.glb' },
+      { name: 'breakdance', file: './models/anim-trick.glb' },
+      { name: 'backflip', file: './models/anim-jump.glb' },
+      { name: 'vaultroll', file: './models/anim-roll.glb' },
       { name: 'slide', file: './models/anim-slide.glb' },
       { name: 'crash', file: './models/anim-crash.glb' },
     ];
@@ -335,6 +356,10 @@ export class PlayerModel {
     // Configure the action
     anim.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
     anim.action.clampWhenFinished = !loop;
+    
+    // Apply speed multiplier if defined
+    const speed = ANIMATION_SPEEDS[name] ?? 1.0;
+    anim.action.timeScale = speed;
     
     // Fade out current animation
     if (this.currentAnimation && this.currentAnimation !== name) {
