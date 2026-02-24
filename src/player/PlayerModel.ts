@@ -247,7 +247,9 @@ export class PlayerModel {
    * Load animations from the combined GLB file
    */
   private loadAnimationsFromCombined(clips: THREE.AnimationClip[]): void {
-    console.log(`Found ${clips.length} animations in combined file:`, clips.map(c => c.name));
+    console.log(`=== ANIMATION DEBUG ===`);
+    console.log(`Found ${clips.length} animations in file:`);
+    clips.forEach((c, i) => console.log(`  ${i}: "${c.name}"`));
     
     // Map each of our animation names to available clips
     for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
@@ -256,11 +258,12 @@ export class PlayerModel {
       if (clip) {
         const action = this.mixer!.clipAction(clip);
         this.animations.set(animName as AnimationName, { clip, action });
-        console.log(`Mapped animation: ${animName} -> ${clip.name}`);
+        console.log(`✓ Mapped: ${animName} -> "${clip.name}"`);
       } else {
-        console.warn(`Animation not found in combined file: ${animName} (looked for: ${possibleNames.join(', ')})`);
+        console.warn(`✗ NOT FOUND: ${animName} (looked for: ${possibleNames.join(', ')})`);
       }
     }
+    console.log(`=== Total mapped: ${this.animations.size} ===`);
   }
   
   /**
@@ -332,23 +335,40 @@ export class PlayerModel {
    */
   play(name: AnimationName, options?: { loop?: boolean; fadeTime?: number }): void {
     let anim = this.animations.get(name);
+    let actualName = name;
     
-    // Fallback to idle if animation not found
+    // Fallback to rolling (most common state) if animation not found
     if (!anim) {
-      console.warn(`Animation not found: ${name}, falling back to idle`);
-      if (name !== 'idle') {
+      console.warn(`Animation "${name}" not found, trying fallback...`);
+      // Try rolling first (dozing elderly), then idle
+      anim = this.animations.get('rolling');
+      actualName = 'rolling';
+      if (!anim) {
         anim = this.animations.get('idle');
+        actualName = 'idle';
       }
       if (!anim) {
-        console.warn('No animations available');
+        // Just use the first available animation
+        const firstKey = this.animations.keys().next().value;
+        if (firstKey) {
+          anim = this.animations.get(firstKey);
+          actualName = firstKey;
+          console.warn(`Using first available animation: ${firstKey}`);
+        }
+      }
+      if (!anim) {
+        console.error('No animations available at all!');
         return;
       }
     }
     
     // Don't restart same animation
-    if (this.currentAnimation === name && anim.action.isRunning()) {
+    if (this.currentAnimation === actualName && anim.action.isRunning()) {
       return;
     }
+    
+    console.log(`Playing animation: ${name}${name !== actualName ? ` (fallback: ${actualName})` : ''}`);
+    
     
     const fadeTime = options?.fadeTime ?? 0.3;
     const loop = options?.loop ?? true;
