@@ -952,6 +952,44 @@ export class Game {
     return this.currentLevelId;
   }
   
+  /**
+   * Load a custom level (from the editor)
+   */
+  loadCustomLevel(level: import('../levels/LevelData').LevelData): void {
+    console.log(`Loading custom level: ${level.name}`);
+    this.currentLevelId = level.id;
+    this.levelTime = 0;
+    
+    // Reset player state
+    this.specialMeter = 0;
+    this.grindBalance = 0.5;
+    this.manualBalance = 0.5;
+    this.spinRotation = 0;
+    this.playerState = {
+      isGrounded: true,
+      isAirborne: false,
+      isGrinding: false,
+      isManualing: false,
+      hasSpecial: false,
+      airTime: 0
+    };
+    
+    // Reset combo
+    this.comboSystem.reset();
+    
+    // TODO: When LevelManager is integrated, use it to load the level objects
+    // For now, just reset player to spawn point
+    const spawn = level.spawnPoint;
+    if (this.chairBody) {
+      this.physics.setPosition(this.chairBody, new THREE.Vector3(spawn.position[0], spawn.position[1], spawn.position[2]));
+      this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+      this.physics.setRotationY(this.chairBody, spawn.rotation * Math.PI / 180);
+    }
+    
+    // Reset HUD
+    this.hud?.reset();
+  }
+  
   stop(): void {
     this.isRunning = false;
   }

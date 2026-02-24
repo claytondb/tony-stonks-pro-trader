@@ -11,7 +11,8 @@ export type GameState =
   | 'playing'
   | 'paused'
   | 'results'
-  | 'story';
+  | 'story'
+  | 'editor';
 
 export interface GameStateCallbacks {
   onStateChange?: (from: GameState, to: GameState) => void;
@@ -20,6 +21,7 @@ export interface GameStateCallbacks {
   onResume?: () => void;
   onRetry?: () => void;
   onQuit?: () => void;
+  onOpenEditor?: () => void;
 }
 
 interface LevelResult {
@@ -423,6 +425,7 @@ export class GameStateManager {
     const menuItems = [
       { label: 'CAREER MODE', action: 'career' },
       { label: 'FREE SKATE', action: 'level_select' },
+      { label: 'LEVEL EDITOR', action: 'editor' },
       { label: 'OPTIONS', action: 'options' },
       { label: 'CREDITS', action: 'credits' }
     ];
@@ -480,6 +483,9 @@ export class GameStateManager {
         const action = btn.getAttribute('data-action');
         if (action === 'level_select' || action === 'career') {
           this.setState('level_select');
+        } else if (action === 'editor') {
+          this.setState('editor');
+          this.callbacks.onOpenEditor?.();
         }
       });
       

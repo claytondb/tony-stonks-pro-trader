@@ -25,7 +25,11 @@ export type ObjectType =
   | 'bench'
   | 'trash_can'
   | 'cone'
-  | 'barrier';
+  | 'barrier'
+  | 'building'
+  | 'kicker'
+  | 'manual_pad'
+  | 'pool';
 
 export interface LevelObject {
   type: ObjectType;
