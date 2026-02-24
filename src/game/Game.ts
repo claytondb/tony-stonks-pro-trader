@@ -1203,9 +1203,9 @@ export class Game {
     const pos = this.physics.getPosition(this.chairBody);
     const vel = this.physics.getVelocity(this.chairBody);
     
-    // Ground detection - body rests at ~0.4 when on ground (collider half-height)
+    // Ground detection - capsule collider (halfHeight=0.3, radius=0.4) rests at ~0.7-0.8
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 0.6 && Math.abs(vel.y) < 1.0;
+    this.playerState.isGrounded = pos.y < 1.0 && Math.abs(vel.y) < 2.0;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track air time

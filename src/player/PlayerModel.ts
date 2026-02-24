@@ -75,7 +75,7 @@ export class PlayerModel {
    */
   private async loadAnimations(): Promise<void> {
     const animationFiles: { name: AnimationName; file: string }[] = [
-      { name: 'idle', file: './models/anim-idle.glb' },
+      { name: 'idle', file: './models/anim-sit-idle.glb' },  // Use sitting idle, not dozing
       { name: 'push', file: './models/anim-push.glb' },
       { name: 'standtosit', file: './models/anim-standtosit.glb' },
       { name: 'rolling', file: './models/anim-rolling.glb' },
@@ -178,9 +178,10 @@ export class PlayerModel {
       this.mixer.update(deltaTime);
     }
     
-    // Reset position after animation update to prevent root motion drift
+    // Reset position and rotation after animation update to prevent root motion drift
     if (this.model) {
       this.model.position.copy(this.localPosition);
+      this.model.rotation.set(0, 0, 0);  // Keep facing forward
     }
   }
   
