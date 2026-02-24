@@ -511,6 +511,9 @@ export class LevelEditor {
       case 'ramp':
         return this.createRampMesh();
       case 'quarter_pipe':
+      case 'quarter_pipe_small':
+      case 'quarter_pipe_med':
+      case 'quarter_pipe_large':
         return this.createQuarterPipeMesh();
       case 'half_pipe':
         return this.createHalfPipeMesh(params);

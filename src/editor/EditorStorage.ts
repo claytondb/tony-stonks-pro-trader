@@ -296,7 +296,9 @@ export const OBJECT_CATEGORIES: ObjectCategory[] = [
     icon: '📐',
     items: [
       { type: 'ramp', name: 'Ramp', description: 'Launch ramp', icon: '⟋' },
-      { type: 'quarter_pipe', name: 'Quarter Pipe', description: 'Curved vert ramp', icon: '⌓' },
+      { type: 'quarter_pipe_small', name: 'Quarter Pipe (S)', description: 'Small curved vert ramp', icon: '⌓' },
+      { type: 'quarter_pipe_med', name: 'Quarter Pipe (M)', description: 'Medium curved vert ramp', icon: '⌓' },
+      { type: 'quarter_pipe_large', name: 'Quarter Pipe (L)', description: 'Large curved vert ramp', icon: '⌓' },
       { type: 'half_pipe', name: 'Half Pipe', description: 'Full half pipe', icon: '⏜', defaultParams: { width: 15, length: 20 } },
       { type: 'fun_box', name: 'Fun Box', description: 'Flat top with rails', icon: '▭', defaultParams: { width: 6, depth: 4, height: 0.8 } },
     ]

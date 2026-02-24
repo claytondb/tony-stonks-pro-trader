@@ -63,6 +63,10 @@ export class Game {
   // Level objects (can be cleared and reloaded)
   private levelObjects: THREE.Object3D[] = [];
   
+  // Pre-loaded GLB models for level objects
+  private modelCache: Map<string, THREE.Object3D> = new Map();
+  private gltfLoader!: GLTFLoader;
+  
   // Player state
   private playerState: PlayerTrickState = {
     isGrounded: true,
@@ -126,6 +130,9 @@ export class Game {
       
       report(60, 'Loading player model...');
       await this.initPlayer();
+      
+      report(75, 'Loading level assets...');
+      await this.preloadLevelModels();
       
       report(85, 'Building environment...');
       this.initEnvironment();
@@ -579,6 +586,41 @@ export class Game {
     chair.add(player);
     
     return chair;
+  }
+  
+  /**
+   * Pre-load GLB models for level objects
+   */
+  private async preloadLevelModels(): Promise<void> {
+    this.gltfLoader = new GLTFLoader();
+    
+    const modelPaths: Record<string, string> = {
+      'cubicle': './models/cubicle.glb',
+      'quarter_pipe_small': './models/qtr-pipe-small.glb',
+      'quarter_pipe_med': './models/qtr-pipe-med.glb',
+      'quarter_pipe_large': './models/qtr-pipe-lg.glb',
+    };
+    
+    for (const [key, path] of Object.entries(modelPaths)) {
+      try {
+        const gltf = await this.gltfLoader.loadAsync(path);
+        const model = gltf.scene;
+        
+        // Enable shadows on all meshes
+        model.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        
+        this.modelCache.set(key, model);
+        console.log(`Loaded model: ${key}`);
+      } catch (error) {
+        console.warn(`Failed to load model ${key} from ${path}:`, error);
+        // Model will use primitive fallback when not in cache
+      }
+    }
   }
   
   private initEnvironment(): void {
@@ -1157,13 +1199,28 @@ export class Game {
         break;
         
       case 'quarter_pipe':
-        mesh = this.createQuarterPipeMesh(concreteMaterial);
+      case 'quarter_pipe_small':
+      case 'quarter_pipe_med':
+      case 'quarter_pipe_large': {
+        // Try to use GLB model
+        const qpCacheKey = data.type === 'quarter_pipe' ? 'quarter_pipe_med' : data.type;
+        const qpCached = this.modelCache.get(qpCacheKey);
+        if (qpCached) {
+          mesh = qpCached.clone();
+        } else {
+          // Fallback to procedural mesh
+          mesh = this.createQuarterPipeMesh(concreteMaterial);
+        }
+        // Physics collider
+        const qpSize = data.type === 'quarter_pipe_small' ? 3 : 
+                       data.type === 'quarter_pipe_large' ? 7 : 5;
         this.physics.createStaticBox(
-          new THREE.Vector3(data.position[0], 1.5, data.position[2]),
-          new THREE.Vector3(5, 1.5, 5),
+          new THREE.Vector3(data.position[0], qpSize / 3, data.position[2]),
+          new THREE.Vector3(qpSize, qpSize / 2, qpSize),
           new THREE.Euler(0, (data.rotation?.[1] || 0) * Math.PI / 180, 0)
         );
         break;
+      }
         
       case 'half_pipe': {
         const width = (data.params?.width as number) || 15;
@@ -1191,9 +1248,16 @@ export class Game {
       }
       
       case 'cubicle': {
-        const width = (data.params?.width as number) || 3;
-        const depth = (data.params?.depth as number) || 3;
-        mesh = this.createCubicleMesh(officeMaterial, woodMaterial, width, depth);
+        // Try to use GLB model
+        const cubCached = this.modelCache.get('cubicle');
+        if (cubCached) {
+          mesh = cubCached.clone();
+        } else {
+          // Fallback to procedural mesh
+          const width = (data.params?.width as number) || 3;
+          const depth = (data.params?.depth as number) || 3;
+          mesh = this.createCubicleMesh(officeMaterial, woodMaterial, width, depth);
+        }
         break;
       }
       
