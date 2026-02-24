@@ -23,10 +23,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   let gameStateManager: GameStateManager | null = null;
   let editorUI: EditorUI | null = null;
   
+  // Get loading UI elements
+  const progressBar = document.getElementById('progress-bar');
+  const progressText = document.getElementById('progress-text');
+  const loadingStatus = document.getElementById('loading-status');
+  
+  const updateProgress = (percent: number, status: string) => {
+    if (progressBar) progressBar.style.width = `${percent}%`;
+    if (progressText) progressText.textContent = `${percent}%`;
+    if (loadingStatus) loadingStatus.textContent = status;
+  };
+  
   try {
-    // Initialize game engine
+    // Initialize game engine with progress callback
     game = new Game(canvas);
-    await game.init();
+    await game.init(updateProgress);
+    
+    // Brief delay to show 100% before hiding
+    await new Promise(resolve => setTimeout(resolve, 300));
     
     // Hide loading screen
     loading?.classList.add('hidden');

@@ -83,47 +83,59 @@ export class Game {
     this.canvas = canvas;
   }
   
-  async init(): Promise<void> {
+  /**
+   * Progress callback for loading screen
+   */
+  private onProgress?: (percent: number, status: string) => void;
+  
+  async init(onProgress?: (percent: number, status: string) => void): Promise<void> {
     console.log('Game.init() starting...');
+    this.onProgress = onProgress;
+    
+    const report = (percent: number, status: string) => {
+      console.log(`[${percent}%] ${status}`);
+      this.onProgress?.(percent, status);
+    };
     
     try {
+      report(0, 'Initializing renderer...');
       this.initRenderer();
-      console.log('Renderer initialized');
       
+      report(10, 'Setting up scene...');
       this.initScene();
-      console.log('Scene initialized');
       
+      report(20, 'Loading physics engine...');
       // Initialize physics (async WASM load)
       this.physics = new PhysicsWorld();
       await this.physics.init();
-      console.log('Physics initialized');
       
+      report(40, 'Configuring input...');
       this.initInput();
-      console.log('Input initialized');
       
+      report(45, 'Setting up grind system...');
       this.grindSystem = new GrindSystem();
       this.grindParticles = new GrindParticles(this.scene);
-      console.log('Grind system initialized');
       
+      report(50, 'Loading trick system...');
       this.initTricks();
-      console.log('Tricks initialized');
       
+      report(55, 'Building UI...');
       this.initUI();
-      console.log('UI initialized');
       
+      report(60, 'Loading player model...');
       await this.initPlayer();
-      console.log('Player initialized');
       
+      report(85, 'Building environment...');
       this.initEnvironment();
-      console.log('Environment initialized');
       
+      report(95, 'Initializing audio...');
       // Initialize procedural audio
       proceduralSounds.init();
-      console.log('Audio initialized');
       
       // Handle window resize
       window.addEventListener('resize', this.onResize.bind(this));
       
+      report(100, 'Ready!');
       console.log('Game.init() complete!');
     } catch (error) {
       console.error('Error in Game.init():', error);
