@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { loadSettings, PlayerSkin } from '../ui/GameStateManager';
 
 export type AnimationName = 
   | 'idle'        // Sitting idle (dozing)
@@ -53,37 +54,61 @@ export class PlayerModel {
   }
   
   /**
+   * Get the model filename for a skin
+   */
+  private getSkinFileName(skin: PlayerSkin): string {
+    switch (skin) {
+      case 'stonks_guy':
+        return './models/player-stonks.fbx';
+      case 'tony_stonks':
+      default:
+        return './models/player-combined.fbx';
+    }
+  }
+  
+  /**
    * Load the combined player model with all animations
    */
   async load(): Promise<THREE.Group> {
-    console.log('Loading combined player model...');
+    // Check settings for selected skin
+    const settings = loadSettings();
+    const skinFile = this.getSkinFileName(settings.playerSkin);
+    console.log(`Loading player model: ${skinFile} (skin: ${settings.playerSkin})`);
     
     // Try to load combined FBX model first, then GLB, then fall back to separate files
     let model: THREE.Group | null = null;
     let animations: THREE.AnimationClip[] = [];
     let useCombined = false;
     
-    // Try FBX first (combined file)
+    // Try FBX first (combined file with selected skin)
     try {
-      model = await this.fbxLoader.loadAsync('./models/player-combined.fbx');
+      model = await this.fbxLoader.loadAsync(skinFile);
       animations = model.animations || [];
       useCombined = true;
-      console.log('Loaded combined FBX player model');
+      console.log(`Loaded FBX player model: ${skinFile}`);
     } catch (fbxError) {
-      console.warn('Combined FBX not found, trying GLB...');
+      console.warn(`${skinFile} not found, trying default...`);
       
-      // Try GLB combined
+      // Try default combined FBX
       try {
-        const gltf = await this.gltfLoader.loadAsync('./models/player-combined.glb');
-        model = gltf.scene;
-        animations = gltf.animations || [];
+        model = await this.fbxLoader.loadAsync('./models/player-combined.fbx');
+        animations = model.animations || [];
         useCombined = true;
-        console.log('Loaded combined GLB player model');
-      } catch (glbError) {
-        console.warn('Combined GLB not found, falling back to separate files');
-        const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
-        model = gltf.scene;
-        animations = gltf.animations || [];
+        console.log('Loaded default combined FBX player model');
+      } catch (defaultFbxError) {
+        // Try GLB combined
+        try {
+          const gltf = await this.gltfLoader.loadAsync('./models/player-combined.glb');
+          model = gltf.scene;
+          animations = gltf.animations || [];
+          useCombined = true;
+          console.log('Loaded combined GLB player model');
+        } catch (glbError) {
+          console.warn('Combined GLB not found, falling back to separate files');
+          const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
+          model = gltf.scene;
+          animations = gltf.animations || [];
+        }
       }
     }
     

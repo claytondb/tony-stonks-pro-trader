@@ -8,11 +8,51 @@ export type GameState =
   | 'title'
   | 'menu'
   | 'level_select'
+  | 'options'
   | 'playing'
   | 'paused'
   | 'results'
   | 'story'
   | 'editor';
+
+// Player skin options
+export type PlayerSkin = 'tony_stonks' | 'stonks_guy';
+
+export interface GameSettings {
+  playerSkin: PlayerSkin;
+  musicVolume: number;
+  sfxVolume: number;
+}
+
+// Load settings from localStorage
+export function loadSettings(): GameSettings {
+  try {
+    const saved = localStorage.getItem('tony-stonks-settings');
+    if (saved) {
+      return { ...getDefaultSettings(), ...JSON.parse(saved) };
+    }
+  } catch (e) {
+    console.warn('Failed to load settings:', e);
+  }
+  return getDefaultSettings();
+}
+
+// Save settings to localStorage
+export function saveSettings(settings: GameSettings): void {
+  try {
+    localStorage.setItem('tony-stonks-settings', JSON.stringify(settings));
+  } catch (e) {
+    console.warn('Failed to save settings:', e);
+  }
+}
+
+function getDefaultSettings(): GameSettings {
+  return {
+    playerSkin: 'tony_stonks',
+    musicVolume: 0.7,
+    sfxVolume: 1.0
+  };
+}
 
 export interface GameStateCallbacks {
   onStateChange?: (from: GameState, to: GameState) => void;
@@ -146,6 +186,9 @@ export class GameStateManager {
         break;
       case 'level_select':
         this.renderLevelSelect();
+        break;
+      case 'options':
+        this.renderOptions();
         break;
       case 'playing':
         // HUD is handled separately
@@ -486,6 +529,8 @@ export class GameStateManager {
         } else if (action === 'editor') {
           this.setState('editor');
           this.callbacks.onOpenEditor?.();
+        } else if (action === 'options') {
+          this.setState('options');
         }
       });
       
@@ -597,6 +642,169 @@ export class GameStateManager {
       });
     });
     
+    this.uiContainer.querySelector('#back-btn')?.addEventListener('click', () => {
+      this.setState('menu');
+    });
+  }
+  
+  private renderOptions(): void {
+    const settings = loadSettings();
+    
+    const playerSkins: { id: PlayerSkin; name: string }[] = [
+      { id: 'tony_stonks', name: 'Tony Stonks' },
+      { id: 'stonks_guy', name: 'Stonks Guy' }
+    ];
+    
+    this.uiContainer.innerHTML = `
+      <div style="
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        pointer-events: auto;
+      ">
+        <div style="
+          font-size: 48px;
+          font-weight: bold;
+          color: #00FF88;
+          margin-bottom: 40px;
+          font-family: 'Impact', sans-serif;
+        ">OPTIONS</div>
+        
+        <div style="
+          background: rgba(0,0,0,0.3);
+          padding: 30px 50px;
+          border-radius: 10px;
+          border: 2px solid #333;
+        ">
+          <!-- Player Selection -->
+          <div style="margin-bottom: 30px;">
+            <div style="
+              font-size: 16px;
+              color: #888;
+              margin-bottom: 10px;
+              font-family: 'Courier New', monospace;
+            ">PLAYER CHARACTER</div>
+            <div id="player-options" style="display: flex; gap: 15px;">
+              ${playerSkins.map(skin => `
+                <button class="skin-btn" data-skin="${skin.id}" style="
+                  width: 160px;
+                  padding: 15px 20px;
+                  font-size: 16px;
+                  font-weight: bold;
+                  font-family: 'Courier New', monospace;
+                  color: #fff;
+                  background: ${settings.playerSkin === skin.id ? '#00AA66' : '#333'};
+                  border: 3px solid ${settings.playerSkin === skin.id ? '#00FF88' : '#555'};
+                  cursor: pointer;
+                  transition: all 0.15s;
+                ">
+                  ${skin.name}
+                </button>
+              `).join('')}
+            </div>
+          </div>
+          
+          <!-- Music Volume -->
+          <div style="margin-bottom: 20px;">
+            <div style="
+              font-size: 16px;
+              color: #888;
+              margin-bottom: 10px;
+              font-family: 'Courier New', monospace;
+            ">MUSIC VOLUME</div>
+            <input type="range" id="music-volume" min="0" max="100" value="${settings.musicVolume * 100}" style="
+              width: 100%;
+              height: 8px;
+              cursor: pointer;
+            ">
+          </div>
+          
+          <!-- SFX Volume -->
+          <div style="margin-bottom: 30px;">
+            <div style="
+              font-size: 16px;
+              color: #888;
+              margin-bottom: 10px;
+              font-family: 'Courier New', monospace;
+            ">SFX VOLUME</div>
+            <input type="range" id="sfx-volume" min="0" max="100" value="${settings.sfxVolume * 100}" style="
+              width: 100%;
+              height: 8px;
+              cursor: pointer;
+            ">
+          </div>
+        </div>
+        
+        <button id="back-btn" style="
+          margin-top: 30px;
+          width: 200px;
+          padding: 15px 30px;
+          font-size: 18px;
+          font-weight: bold;
+          font-family: 'Courier New', monospace;
+          color: #fff;
+          background: #333;
+          border: 3px solid #555;
+          cursor: pointer;
+          transition: all 0.15s;
+        ">BACK</button>
+      </div>
+    `;
+    
+    // Skin button handlers
+    this.uiContainer.querySelectorAll('.skin-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const skinId = btn.getAttribute('data-skin') as PlayerSkin;
+        const newSettings = loadSettings();
+        newSettings.playerSkin = skinId;
+        saveSettings(newSettings);
+        
+        // Update button styles
+        this.uiContainer.querySelectorAll('.skin-btn').forEach(b => {
+          const isSelected = b.getAttribute('data-skin') === skinId;
+          (b as HTMLElement).style.background = isSelected ? '#00AA66' : '#333';
+          (b as HTMLElement).style.borderColor = isSelected ? '#00FF88' : '#555';
+        });
+      });
+      
+      btn.addEventListener('mouseenter', () => {
+        (btn as HTMLElement).style.background = '#00AA66';
+        (btn as HTMLElement).style.borderColor = '#00FF88';
+      });
+      
+      btn.addEventListener('mouseleave', () => {
+        const skinId = btn.getAttribute('data-skin') as PlayerSkin;
+        const settings = loadSettings();
+        const isSelected = settings.playerSkin === skinId;
+        (btn as HTMLElement).style.background = isSelected ? '#00AA66' : '#333';
+        (btn as HTMLElement).style.borderColor = isSelected ? '#00FF88' : '#555';
+      });
+    });
+    
+    // Volume handlers
+    const musicSlider = this.uiContainer.querySelector('#music-volume') as HTMLInputElement;
+    const sfxSlider = this.uiContainer.querySelector('#sfx-volume') as HTMLInputElement;
+    
+    musicSlider?.addEventListener('input', () => {
+      const newSettings = loadSettings();
+      newSettings.musicVolume = parseInt(musicSlider.value) / 100;
+      saveSettings(newSettings);
+    });
+    
+    sfxSlider?.addEventListener('input', () => {
+      const newSettings = loadSettings();
+      newSettings.sfxVolume = parseInt(sfxSlider.value) / 100;
+      saveSettings(newSettings);
+    });
+    
+    // Back button
     this.uiContainer.querySelector('#back-btn')?.addEventListener('click', () => {
       this.setState('menu');
     });
