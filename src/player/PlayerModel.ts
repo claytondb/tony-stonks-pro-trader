@@ -1,6 +1,6 @@
 /**
  * Player Model Loader
- * Loads the GLB character model and handles animations
+ * Loads the combined GLB character model with all animations
  */
 
 import * as THREE from 'three';
@@ -23,6 +23,20 @@ interface LoadedAnimation {
   action: THREE.AnimationAction;
 }
 
+// Map animation names to expected clip names in the combined file
+const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
+  'idle': ['sit-idle', 'idle', 'sitting', 'Sit_Idle', 'SitIdle'],
+  'push': ['push', 'Push', 'step-push', 'StepForwardPush'],
+  'standtosit': ['standtosit', 'stand-to-sit', 'StandToSit'],
+  'rolling': ['rolling', 'Rolling', 'roll-idle', 'chair-roll'],
+  'chairhold': ['chairhold', 'chair-hold', 'bar-hang', 'ChairHold', 'BarHang'],
+  'trick': ['trick', 'Trick', 'breakdance', 'Breakdance'],
+  'jump': ['jump', 'Jump', 'jump-over', 'JumpOverObstacle'],
+  'roll': ['roll', 'Roll', 'parkour-roll', 'ParkourRoll'],
+  'slide': ['slide', 'Slide'],
+  'crash': ['crash', 'Crash', 'angry-throw', 'AngryThrow', 'fall'],
+};
+
 export class PlayerModel {
   private model: THREE.Group | null = null;
   private mixer: THREE.AnimationMixer | null = null;
@@ -35,19 +49,29 @@ export class PlayerModel {
   }
   
   /**
-   * Load the player model and all animations
+   * Load the combined player model with all animations
    */
   async load(): Promise<THREE.Group> {
-    console.log('Loading player model...');
+    console.log('Loading combined player model...');
     
-    // Load base model
-    const gltf = await this.loader.loadAsync('./models/player.glb');
+    // Try to load combined model first, fall back to separate files
+    let gltf;
+    let useCombined = false;
+    
+    try {
+      gltf = await this.loader.loadAsync('./models/player-combined.glb');
+      useCombined = true;
+      console.log('Loaded combined player model');
+    } catch (error) {
+      console.warn('Combined model not found, falling back to separate files');
+      gltf = await this.loader.loadAsync('./models/player.glb');
+    }
+    
     this.model = gltf.scene;
     
     // Scale and position the model
-    this.model.scale.set(0.6, 0.6, 0.6); // Larger scale
+    this.model.scale.set(0.6, 0.6, 0.6);
     this.model.position.set(0, 0, 0);
-    // Model should face +Z (forward direction, away from camera)
     
     // Enable shadows
     this.model.traverse((child) => {
@@ -60,22 +84,63 @@ export class PlayerModel {
     // Create animation mixer
     this.mixer = new THREE.AnimationMixer(this.model);
     
-    // Load animations
-    await this.loadAnimations();
+    // Load animations from combined file or separate files
+    if (useCombined && gltf.animations.length > 0) {
+      this.loadAnimationsFromCombined(gltf.animations);
+    } else {
+      await this.loadAnimationsSeparately();
+    }
     
-    // DON'T start any animation yet - wait until position is set
-    // this.play('idle');
-    
-    console.log('Player model loaded!');
+    console.log(`Player model loaded with ${this.animations.size} animations!`);
     return this.model;
   }
   
   /**
-   * Load all animation clips
+   * Load animations from the combined GLB file
    */
-  private async loadAnimations(): Promise<void> {
+  private loadAnimationsFromCombined(clips: THREE.AnimationClip[]): void {
+    console.log(`Found ${clips.length} animations in combined file:`, clips.map(c => c.name));
+    
+    // Map each of our animation names to available clips
+    for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
+      const clip = this.findClip(clips, possibleNames);
+      
+      if (clip) {
+        const action = this.mixer!.clipAction(clip);
+        this.animations.set(animName as AnimationName, { clip, action });
+        console.log(`Mapped animation: ${animName} -> ${clip.name}`);
+      } else {
+        console.warn(`Animation not found in combined file: ${animName} (looked for: ${possibleNames.join(', ')})`);
+      }
+    }
+  }
+  
+  /**
+   * Find a clip by checking multiple possible names (case-insensitive, partial match)
+   */
+  private findClip(clips: THREE.AnimationClip[], possibleNames: string[]): THREE.AnimationClip | null {
+    for (const clip of clips) {
+      const clipNameLower = clip.name.toLowerCase();
+      
+      for (const name of possibleNames) {
+        const nameLower = name.toLowerCase();
+        // Check exact match, partial match, or contains
+        if (clipNameLower === nameLower || 
+            clipNameLower.includes(nameLower) || 
+            nameLower.includes(clipNameLower)) {
+          return clip;
+        }
+      }
+    }
+    return null;
+  }
+  
+  /**
+   * Fallback: Load animations from separate files
+   */
+  private async loadAnimationsSeparately(): Promise<void> {
     const animationFiles: { name: AnimationName; file: string }[] = [
-      { name: 'idle', file: './models/anim-sit-idle.glb' },  // Use sitting idle, not dozing
+      { name: 'idle', file: './models/anim-sit-idle.glb' },
       { name: 'push', file: './models/anim-push.glb' },
       { name: 'standtosit', file: './models/anim-standtosit.glb' },
       { name: 'rolling', file: './models/anim-rolling.glb' },
@@ -106,13 +171,21 @@ export class PlayerModel {
   }
   
   /**
-   * Play an animation
+   * Play an animation (with fallback to idle if not found)
    */
   play(name: AnimationName, options?: { loop?: boolean; fadeTime?: number }): void {
-    const anim = this.animations.get(name);
+    let anim = this.animations.get(name);
+    
+    // Fallback to idle if animation not found
     if (!anim) {
-      console.warn(`Animation not found: ${name}`);
-      return;
+      console.warn(`Animation not found: ${name}, falling back to idle`);
+      if (name !== 'idle') {
+        anim = this.animations.get('idle');
+      }
+      if (!anim) {
+        console.warn('No animations available');
+        return;
+      }
     }
     
     // Don't restart same animation
@@ -148,7 +221,11 @@ export class PlayerModel {
    */
   playOnce(name: AnimationName, thenPlay: AnimationName): void {
     const anim = this.animations.get(name);
-    if (!anim) return;
+    if (!anim) {
+      // If animation doesn't exist, just play the fallback
+      this.play(thenPlay);
+      return;
+    }
     
     this.play(name, { loop: false });
     
@@ -204,5 +281,12 @@ export class PlayerModel {
    */
   isPlaying(name: AnimationName): boolean {
     return this.currentAnimation === name;
+  }
+  
+  /**
+   * Check if a specific animation was loaded
+   */
+  hasAnimation(name: AnimationName): boolean {
+    return this.animations.has(name);
   }
 }
