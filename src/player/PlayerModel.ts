@@ -35,27 +35,27 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
-// Names from Meshy.ai combined export - exact names for consistency
+// Names from Meshy.ai FBX export - format: Name_frame_rate_60.fbx
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['idle 11'],                              // Standing idle
-  'push': ['step forward and push'],                // Push chair forward (3x speed)
-  'crouchwalk': ['cautious crouch walk forward'],   // Moving before mounting
-  'bowpush': ['female bow charge left hand'],       // Pushing chair
-  'lookbacksit': ['look back and sit'],             // Before sitting
-  'vault': ['parkour vault 1'],                     // Vault over chair
-  'standtosit': ['stand to sit transition male'],   // Sit down (2x speed)
-  'rolling': ['dozing elderly'],                    // Sitting on rolling chair
-  'chairhold': ['bar hang idle'],                   // Chair over head trick
-  'backflip': ['backflip'],                         // Backflip trick
-  'breakdance': ['breakdance 1990'],                // Special dance trick
-  'vaultroll': ['parkour vault with roll'],         // Roll trick on chair
-  'slide': ['slide light'],                         // Slide under chair
-  'jumpwall': ['jump over obstacle 1'],             // Wall kick trick
-  'falling': ['falling down'],                      // Failed trick
-  'crash': ['charged spell cast 2'],                // Throw chair frustration
+  'idle': ['Idle_11'],                              // Standing idle
+  'push': ['Step_Forward_and_Push'],                // Push chair forward (3x speed)
+  'crouchwalk': ['Cautious_Crouch_Walk_Forward'],   // Moving before mounting
+  'bowpush': ['Female_Bow_Charge_Left_Hand'],       // Pushing chair
+  'lookbacksit': ['Look_Back_and_Sit'],             // Before sitting
+  'vault': ['Parkour_Vault_1'],                     // Vault over chair
+  'standtosit': ['Stand_to_Sit_Transition_M'],      // Sit down (2x speed)
+  'rolling': ['Dozing_Elderly'],                    // Sitting on rolling chair
+  'chairhold': ['Bar_Hang_Idle'],                   // Chair over head trick
+  'backflip': ['Backflip'],                         // Backflip trick
+  'breakdance': ['Breakdance_1990'],                // Special dance trick
+  'vaultroll': ['Parkour_Vault_with_Roll'],         // Roll trick on chair
+  'slide': ['slide_light'],                         // Slide under chair
+  'jumpwall': ['Jump_Over_Obstacle_1'],             // Wall kick trick
+  'falling': ['falling_down'],                      // Failed trick
+  'crash': ['Charged_Spell_Cast_2'],                // Throw chair frustration
   'victory': ['victory'],                           // Win pose
-  'running': ['running'],                           // Running to chair
-  'walking': ['walking'],                           // Story walking
+  'running': ['Running'],                           // Running to chair
+  'walking': ['Walking'],                           // Story walking
 };
 
 // Animation speed multipliers
