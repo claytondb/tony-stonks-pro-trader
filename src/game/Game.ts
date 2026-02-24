@@ -619,6 +619,7 @@ export class Game {
     });
     const sky = new THREE.Mesh(skyGeometry, skyMaterial);
     this.scene.add(sky);
+    this.levelObjects.push(sky);  // Track for clearing
     
     // Ground plane with grid texture
     const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize, 50, 50);
@@ -656,6 +657,7 @@ export class Game {
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     this.scene.add(ground);
+    this.levelObjects.push(ground);  // Track for clearing
     
     // Add visible walls around the perimeter
     const wallHeight = 3;
@@ -671,19 +673,23 @@ export class Game {
     const northWall = new THREE.Mesh(wallGeometry, wallMaterial);
     northWall.position.set(0, wallHeight/2, halfSize);
     this.scene.add(northWall);
+    this.levelObjects.push(northWall);  // Track for clearing
     
     const southWall = new THREE.Mesh(wallGeometry, wallMaterial);
     southWall.position.set(0, wallHeight/2, -halfSize);
     this.scene.add(southWall);
+    this.levelObjects.push(southWall);  // Track for clearing
     
     const eastWallGeom = new THREE.BoxGeometry(1, wallHeight, groundSize);
     const eastWall = new THREE.Mesh(eastWallGeom, wallMaterial);
     eastWall.position.set(halfSize, wallHeight/2, 0);
     this.scene.add(eastWall);
+    this.levelObjects.push(eastWall);  // Track for clearing
     
     const westWall = new THREE.Mesh(eastWallGeom, wallMaterial);
     westWall.position.set(-halfSize, wallHeight/2, 0);
     this.scene.add(westWall);
+    this.levelObjects.push(westWall);  // Track for clearing
     
     // Add ground and walls to physics
     this.physics.createGround(halfSize);
@@ -731,6 +737,7 @@ export class Game {
     rail.position.set(x, 0.8, z);
     rail.castShadow = true;
     this.scene.add(rail);
+    this.levelObjects.push(rail);  // Track for clearing
     
     // Rail support posts
     const postGeometry = new THREE.CylinderGeometry(0.04, 0.04, 0.8);
@@ -741,6 +748,7 @@ export class Game {
       post.position.set(x + i * (length / 2 - 0.2), 0.4, z);
       post.castShadow = true;
       this.scene.add(post);
+      this.levelObjects.push(post);  // Track for clearing
     }
     
     // NO physics collider for rails - grind system handles them
@@ -759,6 +767,7 @@ export class Game {
     rail.rotation.y = rotation;
     rail.castShadow = true;
     this.scene.add(rail);
+    this.levelObjects.push(rail);  // Track for clearing
     
     // NO physics collider for rails - grind system handles them
     
@@ -815,6 +824,7 @@ export class Game {
     rampGroup.position.set(x, 0, z);
     rampGroup.rotation.y = rotation;
     this.scene.add(rampGroup);
+    this.levelObjects.push(rampGroup);  // Track for clearing
     
     // Physics - thicker collider with gentler angle for smoother riding
     const physPos = new THREE.Vector3(x, 0.5, z);
@@ -861,6 +871,7 @@ export class Game {
     quarterPipe.castShadow = true;
     quarterPipe.receiveShadow = true;
     this.scene.add(quarterPipe);
+    this.levelObjects.push(quarterPipe);  // Track for clearing
     
     // Physics - simplified as angled ramp
     // Create a ramp collision at the base of the quarter pipe
@@ -884,6 +895,7 @@ export class Game {
     funBox.castShadow = true;
     funBox.receiveShadow = true;
     this.scene.add(funBox);
+    this.levelObjects.push(funBox);  // Track for clearing
     
     // Rails on top
     const railMaterial = new THREE.MeshStandardMaterial({ 
@@ -896,10 +908,12 @@ export class Game {
     const topRail1 = new THREE.Mesh(railGeometry, railMaterial);
     topRail1.position.set(0, 0.85, -5 - 1.5);
     this.scene.add(topRail1);
+    this.levelObjects.push(topRail1);  // Track for clearing
     
     const topRail2 = new THREE.Mesh(railGeometry, railMaterial);
     topRail2.position.set(0, 0.85, -5 + 1.5);
     this.scene.add(topRail2);
+    this.levelObjects.push(topRail2);  // Track for clearing
     
     // Physics - make collider slightly larger for better detection
     this.physics.createStaticBox(
