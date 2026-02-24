@@ -249,7 +249,7 @@ export class PlayerModel {
   private loadAnimationsFromCombined(clips: THREE.AnimationClip[]): void {
     console.log(`=== ANIMATION DEBUG ===`);
     console.log(`Found ${clips.length} animations in file:`);
-    clips.forEach((c, i) => console.log(`  ${i}: "${c.name}"`));
+    clips.forEach((c, i) => console.log(`  ${i}: "${c.name}" (${c.duration.toFixed(2)}s, ${c.tracks.length} tracks)`));
     
     // Map each of our animation names to available clips
     for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
@@ -367,7 +367,10 @@ export class PlayerModel {
       return;
     }
     
-    console.log(`Playing animation: ${name}${name !== actualName ? ` (fallback: ${actualName})` : ''}`);
+    // Get clip index for debugging
+    const allClips = Array.from(this.animations.entries());
+    const clipIndex = allClips.findIndex(([n]) => n === actualName);
+    console.log(`Playing animation: ${name} -> clip "${anim.clip.name}" (index ${clipIndex}, duration: ${anim.clip.duration.toFixed(2)}s)`);
     
     const loop = options?.loop ?? true;
     
