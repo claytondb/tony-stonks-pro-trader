@@ -43,13 +43,14 @@ export class GrindSystem {
   private readonly GRIND_COOLDOWN_TIME = 0.8;  // seconds before can grind again
   
   // Config
-  private readonly SNAP_DISTANCE = 0.8;       // How close to rail to trigger grind (reduced)
-  private readonly SNAP_HEIGHT_TOLERANCE = 0.5; // Tighter height check
-  private readonly MIN_SPEED_TO_GRIND = 3.0;   // Need more speed to start grinding
-  private readonly GRIND_FRICTION = 0.98;
-  private readonly BALANCE_DRIFT = 0.12;      // How fast balance drifts (reduced)
-  private readonly BALANCE_CORRECTION = 3.0;  // How fast player can correct (increased)
-  private readonly RAIL_HEIGHT = 0.8;         // Height of rails
+  private readonly SNAP_DISTANCE = 0.6;       // How close to rail to trigger grind
+  private readonly SNAP_HEIGHT_TOLERANCE = 0.4; // Tight height check
+  private readonly MIN_SPEED_TO_GRIND = 2.5;   // Min speed to start grinding
+  private readonly GRIND_FRICTION = 0.995;     // Very little friction (was 0.98)
+  private readonly BALANCE_DRIFT = 0.08;       // Slow balance drift
+  private readonly BALANCE_CORRECTION = 4.0;   // Fast player correction
+  private readonly RAIL_HEIGHT = 0.8;          // Height of rails
+  private readonly MIN_GRIND_SPEED = 3.0;      // Don't go slower than this while grinding
   
   /**
    * Register a rail for grind detection
@@ -162,8 +163,11 @@ export class GrindSystem {
     
     const rail = this.grindState.rail;
     
-    // Apply friction
+    // Apply friction but maintain minimum speed
     this.grindState.speed *= this.GRIND_FRICTION;
+    if (this.grindState.speed < this.MIN_GRIND_SPEED) {
+      this.grindState.speed = this.MIN_GRIND_SPEED;
+    }
     
     // Update progress along rail
     const progressDelta = (this.grindState.speed * dt / rail.length) * this.grindState.direction;

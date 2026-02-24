@@ -1085,10 +1085,12 @@ export class Game {
       this.grindParticles.update(dt, false);
     }
     
-    // Step physics
-    this.physics.step(dt);
+    // Step physics (but not during grinding - grind system controls position)
+    if (!this.grindSystem.isGrinding()) {
+      this.physics.step(dt);
+    }
     
-    // Sync visual to physics
+    // Sync visual to physics (or grind position)
     const pos = this.physics.getPosition(this.chairBody);
     const rot = this.physics.getRotation(this.chairBody);
     
