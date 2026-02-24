@@ -119,30 +119,56 @@ class PlayerPreview {
       ? './models/player-stonks.fbx' 
       : './models/player-combined.fbx';
     
+    let scale = 0.006;
+    
+    // Try FBX first
     try {
       this.model = await this.fbxLoader.loadAsync(skinFile);
-      this.model.scale.set(0.006, 0.006, 0.006);
-      this.model.position.set(0, 0, 0);
-      this.model.rotation.y = Math.PI; // Face camera
+      console.log(`Preview loaded FBX: ${skinFile}`);
+    } catch (fbxError) {
+      console.warn(`Preview FBX not found: ${skinFile}, trying fallback...`);
       
-      this.scene.add(this.model);
-      
-      // Play idle animation if available
-      if (this.model.animations && this.model.animations.length > 0) {
-        this.mixer = new THREE.AnimationMixer(this.model);
-        // Find idle animation
-        const idleClip = this.model.animations.find(clip => 
-          clip.name.toLowerCase().includes('idle') || 
-          clip.name.toLowerCase().includes('dozing')
-        ) || this.model.animations[0];
-        
-        if (idleClip) {
-          const action = this.mixer.clipAction(idleClip);
-          action.play();
+      // Try default FBX
+      try {
+        this.model = await this.fbxLoader.loadAsync('./models/player-combined.fbx');
+        console.log('Preview loaded default FBX');
+      } catch (defaultFbxError) {
+        // Fall back to GLB
+        try {
+          const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+          const gltfLoader = new GLTFLoader();
+          const gltf = await gltfLoader.loadAsync('./models/player.glb');
+          this.model = gltf.scene;
+          scale = 0.6;
+          console.log('Preview loaded GLB fallback');
+        } catch (glbError) {
+          console.error('Preview: Failed to load any model', glbError);
+          return;
         }
       }
-    } catch (error) {
-      console.warn(`Failed to load preview for ${skin}:`, error);
+    }
+    
+    if (!this.model) return;
+    
+    this.model.scale.set(scale, scale, scale);
+    this.model.position.set(0, 0, 0);
+    this.model.rotation.y = Math.PI; // Face camera
+    
+    this.scene.add(this.model);
+    
+    // Play idle animation if available
+    if (this.model.animations && this.model.animations.length > 0) {
+      this.mixer = new THREE.AnimationMixer(this.model);
+      // Find idle animation
+      const idleClip = this.model.animations.find(clip => 
+        clip.name.toLowerCase().includes('idle') || 
+        clip.name.toLowerCase().includes('dozing')
+      ) || this.model.animations[0];
+      
+      if (idleClip) {
+        const action = this.mixer.clipAction(idleClip);
+        action.play();
+      }
     }
   }
   

@@ -126,33 +126,43 @@ export class PlayerModel {
     
     let model: THREE.Group | null = null;
     let animations: THREE.AnimationClip[] = [];
-    let useCombined = false;
+    let useFBX = false;
     
     // Try to load the skin's FBX file
     try {
       model = await this.fbxLoader.loadAsync(skinFile);
       animations = model.animations || [];
-      useCombined = true;
-      console.log(`Successfully loaded: ${skinFile} with ${animations.length} animations`);
-    } catch (error) {
-      console.warn(`Failed to load ${skinFile}:`, error);
+      useFBX = true;
+      console.log(`Successfully loaded FBX: ${skinFile} with ${animations.length} animations`);
+    } catch (fbxError) {
+      console.warn(`FBX not found: ${skinFile}, trying GLB fallbacks...`);
       
-      // Fall back to default model
+      // Try default combined FBX
       try {
-        const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
-        model = gltf.scene;
-        animations = gltf.animations || [];
-        console.log('Fell back to player.glb');
-      } catch (fallbackError) {
-        console.error('Failed to load any player model!', fallbackError);
-        throw fallbackError;
+        model = await this.fbxLoader.loadAsync('./models/player-combined.fbx');
+        animations = model.animations || [];
+        useFBX = true;
+        console.log('Loaded default player-combined.fbx');
+      } catch (defaultFbxError) {
+        console.warn('player-combined.fbx not found, trying GLB...');
+        
+        // Fall back to GLB
+        try {
+          const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
+          model = gltf.scene;
+          animations = gltf.animations || [];
+          console.log('Loaded player.glb (GLB fallback)');
+        } catch (glbError) {
+          console.error('Failed to load any player model!', glbError);
+          throw glbError;
+        }
       }
     }
     
     this.model = model;
     
-    // Scale and position
-    const scale = useCombined ? 0.006 : 0.6;
+    // Scale and position - FBX needs smaller scale (centimeters vs meters)
+    const scale = useFBX ? 0.006 : 0.6;
     this.model.scale.set(scale, scale, scale);
     this.model.position.set(0, 0, 0);
     
@@ -167,13 +177,19 @@ export class PlayerModel {
     // Create animation mixer
     this.mixer = new THREE.AnimationMixer(this.model);
     
-    // Load animations
+    // Load animations - use combined if available, otherwise load separately
     if (animations.length > 0) {
+      console.log(`Loading ${animations.length} animations from combined file`);
       this.loadAnimationsFromCombined(animations);
-    } else {
+    }
+    
+    // If we don't have enough animations, load from separate files
+    if (this.animations.size < 3) {
+      console.log('Not enough animations from combined file, loading separately...');
       await this.loadAnimationsSeparately();
     }
     
+    console.log(`Skin loaded with ${this.animations.size} animations`);
     return this.model;
   }
   
