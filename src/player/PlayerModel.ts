@@ -369,9 +369,14 @@ export class PlayerModel {
     
     console.log(`Playing animation: ${name}${name !== actualName ? ` (fallback: ${actualName})` : ''}`);
     
-    
-    const fadeTime = options?.fadeTime ?? 0.3;
     const loop = options?.loop ?? true;
+    
+    // STOP all other animations first
+    this.animations.forEach((animData, animName) => {
+      if (animName !== actualName) {
+        animData.action.stop();
+      }
+    });
     
     // Configure the action
     anim.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
@@ -381,20 +386,12 @@ export class PlayerModel {
     const speed = ANIMATION_SPEEDS[name] ?? 1.0;
     anim.action.timeScale = speed;
     
-    // Fade out current animation
-    if (this.currentAnimation && this.currentAnimation !== name) {
-      const current = this.animations.get(this.currentAnimation);
-      if (current) {
-        current.action.fadeOut(fadeTime);
-      }
-    }
-    
-    // Fade in new animation
+    // Reset and play the new animation
     anim.action.reset();
-    anim.action.fadeIn(fadeTime);
+    anim.action.setEffectiveWeight(1);
     anim.action.play();
     
-    this.currentAnimation = name;
+    this.currentAnimation = actualName;
   }
   
   /**
