@@ -1019,6 +1019,9 @@ export class Game {
       }
     }
     
+    // Update grind cooldown
+    this.grindSystem.updateCooldown(dt);
+    
     // Check for grind initiation (automatic when near a rail)
     if (!this.grindSystem.isGrinding()) {
       const pos = this.physics.getPosition(this.chairBody);

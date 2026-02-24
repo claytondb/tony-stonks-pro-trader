@@ -38,13 +38,17 @@ export class GrindSystem {
     entrySpeed: 0
   };
   
+  // Cooldown to prevent immediate re-grinding
+  private grindCooldown = 0;
+  private readonly GRIND_COOLDOWN_TIME = 0.8;  // seconds before can grind again
+  
   // Config
-  private readonly SNAP_DISTANCE = 1.5;       // How close to rail to trigger grind
-  private readonly SNAP_HEIGHT_TOLERANCE = 1.0;
-  private readonly MIN_SPEED_TO_GRIND = 2.0;
+  private readonly SNAP_DISTANCE = 0.8;       // How close to rail to trigger grind (reduced)
+  private readonly SNAP_HEIGHT_TOLERANCE = 0.5; // Tighter height check
+  private readonly MIN_SPEED_TO_GRIND = 3.0;   // Need more speed to start grinding
   private readonly GRIND_FRICTION = 0.98;
-  private readonly BALANCE_DRIFT = 0.15;      // How fast balance drifts
-  private readonly BALANCE_CORRECTION = 2.5;  // How fast player can correct
+  private readonly BALANCE_DRIFT = 0.12;      // How fast balance drifts (reduced)
+  private readonly BALANCE_CORRECTION = 3.0;  // How fast player can correct (increased)
   private readonly RAIL_HEIGHT = 0.8;         // Height of rails
   
   /**
@@ -75,6 +79,15 @@ export class GrindSystem {
   }
   
   /**
+   * Update cooldown timer
+   */
+  updateCooldown(dt: number): void {
+    if (this.grindCooldown > 0) {
+      this.grindCooldown -= dt;
+    }
+  }
+  
+  /**
    * Check if player can start grinding (automatic - no button required)
    */
   tryStartGrind(
@@ -82,7 +95,9 @@ export class GrindSystem {
     playerVel: THREE.Vector3,
     _grindPressed: boolean = true  // Keep param for compatibility but ignore it
   ): Rail | null {
+    // Don't grind if already grinding or in cooldown
     if (this.grindState.isGrinding) return null;
+    if (this.grindCooldown > 0) return null;
     
     const speed = new THREE.Vector3(playerVel.x, 0, playerVel.z).length();
     if (speed < this.MIN_SPEED_TO_GRIND) return null;
@@ -270,6 +285,8 @@ export class GrindSystem {
       speed: 0,
       entrySpeed: 0
     };
+    // Start cooldown to prevent immediate re-grinding
+    this.grindCooldown = this.GRIND_COOLDOWN_TIME;
   }
   
   /**
