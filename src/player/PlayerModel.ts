@@ -47,6 +47,7 @@ export class PlayerModel {
   private currentAnimation: AnimationName | null = null;
   private gltfLoader: GLTFLoader;
   private fbxLoader: FBXLoader;
+  private currentSkin: PlayerSkin = 'tony_stonks';
   
   constructor() {
     this.gltfLoader = new GLTFLoader();
@@ -67,13 +68,62 @@ export class PlayerModel {
   }
   
   /**
+   * Get current skin
+   */
+  getCurrentSkin(): PlayerSkin {
+    return this.currentSkin;
+  }
+  
+  /**
+   * Change skin (hot-swap)
+   */
+  async changeSkin(skin: PlayerSkin): Promise<void> {
+    if (skin === this.currentSkin) return;
+    
+    console.log(`Hot-swapping skin to: ${skin}`);
+    
+    // Store parent and local transform
+    const parent = this.model?.parent;
+    const localPos = this.localPosition.clone();
+    
+    // Remove old model from parent
+    if (this.model && parent) {
+      parent.remove(this.model);
+    }
+    
+    // Clear old animations
+    this.animations.clear();
+    this.mixer = null;
+    this.currentAnimation = null;
+    
+    // Load new model
+    this.currentSkin = skin;
+    await this.load();
+    
+    // Re-attach to parent
+    if (parent && this.model) {
+      parent.add(this.model);
+    }
+    
+    // Restore position
+    this.setLocalPosition(localPos.x, localPos.y, localPos.z);
+    
+    // Start idle animation
+    this.play('idle');
+  }
+  
+  /**
    * Load the combined player model with all animations
    */
   async load(): Promise<THREE.Group> {
-    // Check settings for selected skin
+    // Check settings for selected skin (unless already set by changeSkin)
     const settings = loadSettings();
-    const skinFile = this.getSkinFileName(settings.playerSkin);
-    console.log(`Loading player model: ${skinFile} (skin: ${settings.playerSkin})`);
+    if (!this.model) {
+      // First load - use settings
+      this.currentSkin = settings.playerSkin;
+    }
+    const skinFile = this.getSkinFileName(this.currentSkin);
+    console.log(`Loading player model: ${skinFile} (skin: ${this.currentSkin})`);
     
     // Try to load combined FBX model first, then GLB, then fall back to separate files
     let model: THREE.Group | null = null;

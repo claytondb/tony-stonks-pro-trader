@@ -99,6 +99,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         game?.stop();
       },
       
+      onSkinChange: async (skin) => {
+        await game?.changePlayerSkin(skin);
+      },
+      
       onOpenEditor: () => {
         // Create editor UI in the overlay container
         editorUI = new EditorUI(uiOverlay, {

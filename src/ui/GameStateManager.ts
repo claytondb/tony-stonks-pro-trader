@@ -62,6 +62,7 @@ export interface GameStateCallbacks {
   onRetry?: () => void;
   onQuit?: () => void;
   onOpenEditor?: () => void;
+  onSkinChange?: (skin: PlayerSkin) => void;
 }
 
 interface LevelResult {
@@ -772,6 +773,9 @@ export class GameStateManager {
           (b as HTMLElement).style.background = isSelected ? '#00AA66' : '#333';
           (b as HTMLElement).style.borderColor = isSelected ? '#00FF88' : '#555';
         });
+        
+        // Notify game of skin change for hot-swap
+        this.callbacks.onSkinChange?.(skinId);
       });
       
       btn.addEventListener('mouseenter', () => {

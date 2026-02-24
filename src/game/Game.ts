@@ -984,6 +984,21 @@ export class Game {
   }
   
   /**
+   * Change player skin (hot-swap)
+   */
+  async changePlayerSkin(skin: import('../ui/GameStateManager').PlayerSkin): Promise<void> {
+    if (!this.playerModel) return;
+    
+    console.log(`Changing player skin to: ${skin}`);
+    await this.playerModel.changeSkin(skin);
+    
+    // Reset animation state
+    this.animState = 'standing';
+    this.isMounted = false;
+    this.updatePlayerMountPosition();
+  }
+  
+  /**
    * Load a level by ID
    */
   loadLevel(levelId: string): void {
