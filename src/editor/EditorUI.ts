@@ -144,7 +144,7 @@ export class EditorUI {
         left: 0;
         width: 100%;
         height: 100%;
-        font-family: 'Space Grotesk', -apple-system, sans-serif;
+        font-family: 'Kanit', sans-serif;
         color: #fff;
         background: #1a1a2e;
       }
@@ -540,7 +540,7 @@ export class EditorUI {
       .keyboard-hints kbd {
         display: inline-block;
         padding: 2px 5px;
-        font-family: monospace;
+        font-family: 'Kanit', sans-serif;
         background: #2a2a4e;
         border: 1px solid #3a3a6e;
         border-radius: 3px;

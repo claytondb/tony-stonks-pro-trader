@@ -35,7 +35,7 @@ export class HUD {
         width: 100%;
         height: 100%;
         pointer-events: none;
-        font-family: 'Bebas Neue', 'Impact', sans-serif;
+        font-family: 'Kanit', sans-serif;
         color: white;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
       }
@@ -217,7 +217,7 @@ export class HUD {
         bottom: 20px;
         left: 20px;
         font-size: 12px;
-        font-family: 'Roboto Mono', monospace;
+        font-family: 'Kanit', sans-serif;
         color: rgba(255,255,255,0.6);
         line-height: 1.6;
       }

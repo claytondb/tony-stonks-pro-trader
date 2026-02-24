@@ -358,7 +358,7 @@ export class GameStateManager {
         transform: translate(-50%, -50%);
         text-align: center;
         color: #00FF88;
-        font-family: 'Press Start 2P', monospace;
+        font-family: 'Kanit', sans-serif;
       ">
         <div style="font-size: 24px; margin-bottom: 20px;">LOADING...</div>
         <div style="
@@ -489,7 +489,7 @@ export class GameStateManager {
             font-weight: 600;
             color: #000000;
             animation: blink 1.2s infinite;
-            font-family: 'Space Grotesk', sans-serif;
+            font-family: 'Kanit', sans-serif;
             letter-spacing: 3px;
             text-shadow: 
               -2px -2px 0 #fff,
@@ -508,7 +508,7 @@ export class GameStateManager {
             bottom: 20px;
             color: rgba(255,255,255,0.6);
             font-size: 12px;
-            font-family: 'Space Grotesk', sans-serif;
+            font-family: 'Kanit', sans-serif;
             text-shadow: 0 1px 2px rgba(0,0,0,0.5);
           ">© 2026 Diamond Hands Studios</div>
         </div>
@@ -636,7 +636,7 @@ export class GameStateManager {
           font-weight: bold;
           color: #00FF88;
           margin-bottom: 60px;
-          font-family: 'Impact', sans-serif;
+          font-family: 'Kanit', sans-serif;
         ">MAIN MENU</div>
         
         <div id="menu-items" style="
@@ -650,7 +650,7 @@ export class GameStateManager {
               padding: 15px 30px;
               font-size: 20px;
               font-weight: bold;
-              font-family: 'Courier New', monospace;
+              font-family: 'Kanit', sans-serif;
               color: #fff;
               background: ${i === 0 ? '#00AA66' : '#333'};
               border: 3px solid ${i === 0 ? '#00FF88' : '#555'};
@@ -718,7 +718,7 @@ export class GameStateManager {
           font-weight: bold;
           color: #00FF88;
           margin-bottom: 40px;
-          font-family: 'Impact', sans-serif;
+          font-family: 'Kanit', sans-serif;
         ">SELECT LEVEL</div>
         
         <div style="
@@ -824,7 +824,7 @@ export class GameStateManager {
           font-weight: bold;
           color: #00FF88;
           margin-bottom: 40px;
-          font-family: 'Impact', sans-serif;
+          font-family: 'Kanit', sans-serif;
         ">OPTIONS</div>
         
         <div style="
@@ -843,7 +843,7 @@ export class GameStateManager {
               font-size: 14px;
               color: #888;
               margin-bottom: 10px;
-              font-family: 'Courier New', monospace;
+              font-family: 'Kanit', sans-serif;
               text-align: center;
             ">PREVIEW</div>
             <div id="player-preview" style="
@@ -867,7 +867,7 @@ export class GameStateManager {
                 font-size: 16px;
                 color: #888;
                 margin-bottom: 10px;
-                font-family: 'Courier New', monospace;
+                font-family: 'Kanit', sans-serif;
               ">PLAYER CHARACTER</div>
               <div id="player-options" style="display: flex; gap: 15px;">
                 ${playerSkins.map(skin => `
@@ -876,7 +876,7 @@ export class GameStateManager {
                     padding: 15px 20px;
                     font-size: 16px;
                     font-weight: bold;
-                    font-family: 'Courier New', monospace;
+                    font-family: 'Kanit', sans-serif;
                     color: #fff;
                     background: ${settings.playerSkin === skin.id ? '#00AA66' : '#333'};
                     border: 3px solid ${settings.playerSkin === skin.id ? '#00FF88' : '#555'};
@@ -895,7 +895,7 @@ export class GameStateManager {
                 font-size: 16px;
                 color: #888;
                 margin-bottom: 10px;
-                font-family: 'Courier New', monospace;
+                font-family: 'Kanit', sans-serif;
               ">MUSIC VOLUME</div>
               <input type="range" id="music-volume" min="0" max="100" value="${settings.musicVolume * 100}" style="
                 width: 100%;
@@ -910,7 +910,7 @@ export class GameStateManager {
                 font-size: 16px;
                 color: #888;
                 margin-bottom: 10px;
-                font-family: 'Courier New', monospace;
+                font-family: 'Kanit', sans-serif;
               ">SFX VOLUME</div>
               <input type="range" id="sfx-volume" min="0" max="100" value="${settings.sfxVolume * 100}" style="
                 width: 100%;
@@ -927,7 +927,7 @@ export class GameStateManager {
           padding: 15px 30px;
           font-size: 18px;
           font-weight: bold;
-          font-family: 'Courier New', monospace;
+          font-family: 'Kanit', sans-serif;
           color: #fff;
           background: #333;
           border: 3px solid #555;
@@ -1027,7 +1027,7 @@ export class GameStateManager {
           font-weight: bold;
           color: #FFD700;
           margin-bottom: 50px;
-          font-family: 'Impact', sans-serif;
+          font-family: 'Kanit', sans-serif;
         ">PAUSED</div>
         
         <div style="display: flex; flex-direction: column; gap: 15px;">
