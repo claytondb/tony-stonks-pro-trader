@@ -24,17 +24,18 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
+// Names from Meshy.ai combined export
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['sit-idle', 'idle', 'sitting', 'Sit_Idle', 'SitIdle'],
-  'push': ['push', 'Push', 'step-push', 'StepForwardPush'],
-  'standtosit': ['standtosit', 'stand-to-sit', 'StandToSit'],
-  'rolling': ['rolling', 'Rolling', 'roll-idle', 'chair-roll'],
-  'chairhold': ['chairhold', 'chair-hold', 'bar-hang', 'ChairHold', 'BarHang'],
-  'trick': ['trick', 'Trick', 'breakdance', 'Breakdance'],
-  'jump': ['jump', 'Jump', 'jump-over', 'JumpOverObstacle'],
-  'roll': ['roll', 'Roll', 'parkour-roll', 'ParkourRoll'],
-  'slide': ['slide', 'Slide'],
-  'crash': ['crash', 'Crash', 'angry-throw', 'AngryThrow', 'fall'],
+  'idle': ['dozing elderly', 'dozing', 'idle 11', 'idle'],
+  'push': ['step forward and push', 'step forward', 'push'],
+  'standtosit': ['stand to sit transition male', 'stand to sit', 'look back and sit'],
+  'rolling': ['idle 11', 'walking', 'running'],  // Use idle or walking while rolling
+  'chairhold': ['bar hang idle', 'bar hang', 'female bow charge'],  // Holding pose
+  'trick': ['breakdance 1990', 'breakdance', 'backflip'],
+  'jump': ['jump over obstacle 1', 'jump over obstacle', 'parkour vault 1'],
+  'roll': ['parkour vault with roll', 'parkour vault', 'vault'],
+  'slide': ['slide light', 'slide'],
+  'crash': ['falling down', 'falling', 'fall'],
 };
 
 export class PlayerModel {
