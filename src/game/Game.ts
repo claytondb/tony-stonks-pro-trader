@@ -852,6 +852,14 @@ export class Game {
     quarterPipe.castShadow = true;
     quarterPipe.receiveShadow = true;
     this.scene.add(quarterPipe);
+    
+    // Physics - simplified as angled ramp
+    // Create a ramp collision at the base of the quarter pipe
+    this.physics.createStaticBox(
+      new THREE.Vector3(x, 1.5, z),
+      new THREE.Vector3(5, 1.5, 5),
+      new THREE.Euler(0, rotation, 0)
+    );
   }
   
   private createFunBoxes(): void {
