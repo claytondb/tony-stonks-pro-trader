@@ -17,8 +17,8 @@ export class PhysicsWorld {
     await RAPIER.init();
     console.log('Rapier initialized!');
     
-    // Create world with gravity
-    this.world = new RAPIER.World({ x: 0, y: -20, z: 0 });
+    // Create world with stronger gravity
+    this.world = new RAPIER.World({ x: 0, y: -30, z: 0 });
     this.initialized = true;
   }
   

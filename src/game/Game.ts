@@ -15,6 +15,7 @@ import { ComboSystem } from '../tricks/ComboSystem';
 import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
+import { GrindParticles } from '../effects/GrindParticles';
 // TODO: Integrate LevelManager
 // import { LevelManager } from '../levels/LevelManager';
 
@@ -48,6 +49,7 @@ export class Game {
   private input!: InputManager;
   private physics!: PhysicsWorld;
   private grindSystem!: GrindSystem;
+  private grindParticles!: GrindParticles;
   private cameraController!: CameraController;
   private trickDetector!: TrickDetector;
   private comboSystem!: ComboSystem;
@@ -98,6 +100,7 @@ export class Game {
       console.log('Input initialized');
       
       this.grindSystem = new GrindSystem();
+      this.grindParticles = new GrindParticles(this.scene);
       console.log('Grind system initialized');
       
       this.initTricks();
@@ -229,7 +232,7 @@ export class Game {
       
       // Chair model - larger scale
       chairModel.scale.set(0.35, 0.35, 0.35);
-      chairModel.position.set(0, 0, 0);
+      chairModel.position.set(0, -0.5, 0);  // Offset down to sit on ground
       // Model's natural +Z should face forward (away from camera)
       
       // Enable shadows
@@ -1044,6 +1047,17 @@ export class Game {
         const grindState = this.grindSystem.getState();
         this.grindBalance = grindState.balance;
         
+        // Update grind particles with sparks
+        if (grindState.rail) {
+          const grindPos = new THREE.Vector3().lerpVectors(
+            grindState.rail.start,
+            grindState.rail.end,
+            grindState.progress
+          );
+          grindPos.y += 0.1;  // Slightly above rail
+          this.grindParticles.update(dt, true, grindPos, grindState.rail.direction);
+        }
+        
         // Check if grind ended
         if (!this.grindSystem.isGrinding()) {
           this.playerState.isGrinding = false;
@@ -1053,6 +1067,9 @@ export class Game {
     } else {
       // Apply normal movement forces
       this.applyMovement(input, dt);
+      
+      // Update particles (not grinding)
+      this.grindParticles.update(dt, false);
     }
     
     // Step physics
