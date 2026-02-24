@@ -3,6 +3,9 @@
  * Handles game states: title, menu, playing, paused, results
  */
 
+import * as THREE from 'three';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
 export type GameState = 
   | 'loading'
   | 'title'
@@ -54,6 +57,119 @@ function getDefaultSettings(): GameSettings {
   };
 }
 
+/**
+ * Mini preview renderer for player models
+ */
+class PlayerPreview {
+  private scene: THREE.Scene;
+  private camera: THREE.PerspectiveCamera;
+  private renderer: THREE.WebGLRenderer;
+  private model: THREE.Group | null = null;
+  private mixer: THREE.AnimationMixer | null = null;
+  private animationId: number | null = null;
+  private fbxLoader: FBXLoader;
+  
+  constructor(container: HTMLElement) {
+    // Create scene
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x1a1a2e);
+    
+    // Create camera
+    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+    this.camera.position.set(0, 1, 3);
+    this.camera.lookAt(0, 0.8, 0);
+    
+    // Create renderer
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setSize(200, 250);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(this.renderer.domElement);
+    
+    // Add lights
+    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    this.scene.add(ambient);
+    
+    const directional = new THREE.DirectionalLight(0xffffff, 0.8);
+    directional.position.set(2, 3, 2);
+    this.scene.add(directional);
+    
+    // Add ground plane
+    const groundGeo = new THREE.CircleGeometry(1, 32);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x333344 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = 0;
+    this.scene.add(ground);
+    
+    this.fbxLoader = new FBXLoader();
+    
+    // Start render loop
+    this.animate();
+  }
+  
+  async loadSkin(skin: PlayerSkin): Promise<void> {
+    // Remove old model
+    if (this.model) {
+      this.scene.remove(this.model);
+      this.model = null;
+      this.mixer = null;
+    }
+    
+    const skinFile = skin === 'stonks_guy' 
+      ? './models/player-stonks.fbx' 
+      : './models/player-combined.fbx';
+    
+    try {
+      this.model = await this.fbxLoader.loadAsync(skinFile);
+      this.model.scale.set(0.006, 0.006, 0.006);
+      this.model.position.set(0, 0, 0);
+      this.model.rotation.y = Math.PI; // Face camera
+      
+      this.scene.add(this.model);
+      
+      // Play idle animation if available
+      if (this.model.animations && this.model.animations.length > 0) {
+        this.mixer = new THREE.AnimationMixer(this.model);
+        // Find idle animation
+        const idleClip = this.model.animations.find(clip => 
+          clip.name.toLowerCase().includes('idle') || 
+          clip.name.toLowerCase().includes('dozing')
+        ) || this.model.animations[0];
+        
+        if (idleClip) {
+          const action = this.mixer.clipAction(idleClip);
+          action.play();
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to load preview for ${skin}:`, error);
+    }
+  }
+  
+  private animate = (): void => {
+    this.animationId = requestAnimationFrame(this.animate);
+    
+    // Rotate model slowly
+    if (this.model) {
+      this.model.rotation.y += 0.01;
+    }
+    
+    // Update animations
+    if (this.mixer) {
+      this.mixer.update(0.016);
+    }
+    
+    this.renderer.render(this.scene, this.camera);
+  };
+  
+  dispose(): void {
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+    }
+    this.renderer.dispose();
+  }
+}
+
 export interface GameStateCallbacks {
   onStateChange?: (from: GameState, to: GameState) => void;
   onStartGame?: (levelId: string) => void;
@@ -82,6 +198,7 @@ export class GameStateManager {
   private currentLevelId: string = '';
   private lastResult: LevelResult | null = null;
   private titleGlitchTimeout: number | null = null;
+  private playerPreview: PlayerPreview | null = null;
   
   constructor(container: HTMLElement, callbacks: GameStateCallbacks = {}) {
     this.uiContainer = container;
@@ -649,6 +766,12 @@ export class GameStateManager {
   }
   
   private renderOptions(): void {
+    // Clean up any existing preview
+    if (this.playerPreview) {
+      this.playerPreview.dispose();
+      this.playerPreview = null;
+    }
+    
     const settings = loadSettings();
     
     const playerSkins: { id: PlayerSkin; name: string }[] = [
@@ -679,67 +802,96 @@ export class GameStateManager {
         ">OPTIONS</div>
         
         <div style="
-          background: rgba(0,0,0,0.3);
-          padding: 30px 50px;
-          border-radius: 10px;
-          border: 2px solid #333;
+          display: flex;
+          gap: 40px;
+          align-items: flex-start;
         ">
-          <!-- Player Selection -->
-          <div style="margin-bottom: 30px;">
+          <!-- Player Preview -->
+          <div style="
+            background: rgba(0,0,0,0.4);
+            padding: 15px;
+            border-radius: 10px;
+            border: 2px solid #333;
+          ">
             <div style="
-              font-size: 16px;
+              font-size: 14px;
               color: #888;
               margin-bottom: 10px;
               font-family: 'Courier New', monospace;
-            ">PLAYER CHARACTER</div>
-            <div id="player-options" style="display: flex; gap: 15px;">
-              ${playerSkins.map(skin => `
-                <button class="skin-btn" data-skin="${skin.id}" style="
-                  width: 160px;
-                  padding: 15px 20px;
-                  font-size: 16px;
-                  font-weight: bold;
-                  font-family: 'Courier New', monospace;
-                  color: #fff;
-                  background: ${settings.playerSkin === skin.id ? '#00AA66' : '#333'};
-                  border: 3px solid ${settings.playerSkin === skin.id ? '#00FF88' : '#555'};
-                  cursor: pointer;
-                  transition: all 0.15s;
-                ">
-                  ${skin.name}
-                </button>
-              `).join('')}
+              text-align: center;
+            ">PREVIEW</div>
+            <div id="player-preview" style="
+              width: 200px;
+              height: 250px;
+              border-radius: 8px;
+              overflow: hidden;
+            "></div>
+          </div>
+          
+          <!-- Settings Panel -->
+          <div style="
+            background: rgba(0,0,0,0.3);
+            padding: 30px 50px;
+            border-radius: 10px;
+            border: 2px solid #333;
+          ">
+            <!-- Player Selection -->
+            <div style="margin-bottom: 30px;">
+              <div style="
+                font-size: 16px;
+                color: #888;
+                margin-bottom: 10px;
+                font-family: 'Courier New', monospace;
+              ">PLAYER CHARACTER</div>
+              <div id="player-options" style="display: flex; gap: 15px;">
+                ${playerSkins.map(skin => `
+                  <button class="skin-btn" data-skin="${skin.id}" style="
+                    width: 160px;
+                    padding: 15px 20px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    font-family: 'Courier New', monospace;
+                    color: #fff;
+                    background: ${settings.playerSkin === skin.id ? '#00AA66' : '#333'};
+                    border: 3px solid ${settings.playerSkin === skin.id ? '#00FF88' : '#555'};
+                    cursor: pointer;
+                    transition: all 0.15s;
+                  ">
+                    ${skin.name}
+                  </button>
+                `).join('')}
+              </div>
             </div>
-          </div>
-          
-          <!-- Music Volume -->
-          <div style="margin-bottom: 20px;">
-            <div style="
-              font-size: 16px;
-              color: #888;
-              margin-bottom: 10px;
-              font-family: 'Courier New', monospace;
-            ">MUSIC VOLUME</div>
-            <input type="range" id="music-volume" min="0" max="100" value="${settings.musicVolume * 100}" style="
-              width: 100%;
-              height: 8px;
-              cursor: pointer;
-            ">
-          </div>
-          
-          <!-- SFX Volume -->
-          <div style="margin-bottom: 30px;">
-            <div style="
-              font-size: 16px;
-              color: #888;
-              margin-bottom: 10px;
-              font-family: 'Courier New', monospace;
-            ">SFX VOLUME</div>
-            <input type="range" id="sfx-volume" min="0" max="100" value="${settings.sfxVolume * 100}" style="
-              width: 100%;
-              height: 8px;
-              cursor: pointer;
-            ">
+            
+            <!-- Music Volume -->
+            <div style="margin-bottom: 20px;">
+              <div style="
+                font-size: 16px;
+                color: #888;
+                margin-bottom: 10px;
+                font-family: 'Courier New', monospace;
+              ">MUSIC VOLUME</div>
+              <input type="range" id="music-volume" min="0" max="100" value="${settings.musicVolume * 100}" style="
+                width: 100%;
+                height: 8px;
+                cursor: pointer;
+              ">
+            </div>
+            
+            <!-- SFX Volume -->
+            <div style="margin-bottom: 30px;">
+              <div style="
+                font-size: 16px;
+                color: #888;
+                margin-bottom: 10px;
+                font-family: 'Courier New', monospace;
+              ">SFX VOLUME</div>
+              <input type="range" id="sfx-volume" min="0" max="100" value="${settings.sfxVolume * 100}" style="
+                width: 100%;
+                height: 8px;
+                cursor: pointer;
+              ">
+            </div>
           </div>
         </div>
         
@@ -759,6 +911,13 @@ export class GameStateManager {
       </div>
     `;
     
+    // Initialize preview
+    const previewContainer = this.uiContainer.querySelector('#player-preview') as HTMLElement;
+    if (previewContainer) {
+      this.playerPreview = new PlayerPreview(previewContainer);
+      this.playerPreview.loadSkin(settings.playerSkin);
+    }
+    
     // Skin button handlers
     this.uiContainer.querySelectorAll('.skin-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -774,6 +933,9 @@ export class GameStateManager {
           (b as HTMLElement).style.borderColor = isSelected ? '#00FF88' : '#555';
         });
         
+        // Update preview
+        this.playerPreview?.loadSkin(skinId);
+        
         // Notify game of skin change for hot-swap
         this.callbacks.onSkinChange?.(skinId);
       });
@@ -785,8 +947,8 @@ export class GameStateManager {
       
       btn.addEventListener('mouseleave', () => {
         const skinId = btn.getAttribute('data-skin') as PlayerSkin;
-        const settings = loadSettings();
-        const isSelected = settings.playerSkin === skinId;
+        const currentSettings = loadSettings();
+        const isSelected = currentSettings.playerSkin === skinId;
         (btn as HTMLElement).style.background = isSelected ? '#00AA66' : '#333';
         (btn as HTMLElement).style.borderColor = isSelected ? '#00FF88' : '#555';
       });
@@ -810,6 +972,11 @@ export class GameStateManager {
     
     // Back button
     this.uiContainer.querySelector('#back-btn')?.addEventListener('click', () => {
+      // Clean up preview
+      if (this.playerPreview) {
+        this.playerPreview.dispose();
+        this.playerPreview = null;
+      }
       this.setState('menu');
     });
   }

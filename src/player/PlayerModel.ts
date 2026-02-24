@@ -78,7 +78,7 @@ export class PlayerModel {
    * Change skin (hot-swap)
    */
   async changeSkin(skin: PlayerSkin): Promise<void> {
-    if (skin === this.currentSkin) return;
+    if (skin === this.currentSkin && this.model) return;
     
     console.log(`Hot-swapping skin to: ${skin}`);
     
@@ -86,23 +86,26 @@ export class PlayerModel {
     const parent = this.model?.parent;
     const localPos = this.localPosition.clone();
     
-    // Remove old model from parent
+    // Remove old model from parent and dispose
     if (this.model && parent) {
       parent.remove(this.model);
     }
     
-    // Clear old animations
+    // Clear state completely
+    this.model = null;
     this.animations.clear();
     this.mixer = null;
     this.currentAnimation = null;
     
-    // Load new model
+    // Set new skin BEFORE loading
     this.currentSkin = skin;
-    await this.load();
+    
+    // Load new model
+    const newModel = await this.loadSkin(skin);
     
     // Re-attach to parent
-    if (parent && this.model) {
-      parent.add(this.model);
+    if (parent && newModel) {
+      parent.add(newModel);
     }
     
     // Restore position
@@ -110,63 +113,46 @@ export class PlayerModel {
     
     // Start idle animation
     this.play('idle');
+    
+    console.log(`Skin changed to: ${skin}, model attached: ${!!parent}`);
   }
   
   /**
-   * Load the combined player model with all animations
+   * Load a specific skin (used by changeSkin and load)
    */
-  async load(): Promise<THREE.Group> {
-    // Check settings for selected skin (unless already set by changeSkin)
-    const settings = loadSettings();
-    if (!this.model) {
-      // First load - use settings
-      this.currentSkin = settings.playerSkin;
-    }
-    const skinFile = this.getSkinFileName(this.currentSkin);
-    console.log(`Loading player model: ${skinFile} (skin: ${this.currentSkin})`);
+  private async loadSkin(skin: PlayerSkin): Promise<THREE.Group> {
+    const skinFile = this.getSkinFileName(skin);
+    console.log(`Loading skin file: ${skinFile}`);
     
-    // Try to load combined FBX model first, then GLB, then fall back to separate files
     let model: THREE.Group | null = null;
     let animations: THREE.AnimationClip[] = [];
     let useCombined = false;
     
-    // Try FBX first (combined file with selected skin)
+    // Try to load the skin's FBX file
     try {
       model = await this.fbxLoader.loadAsync(skinFile);
       animations = model.animations || [];
       useCombined = true;
-      console.log(`Loaded FBX player model: ${skinFile}`);
-    } catch (fbxError) {
-      console.warn(`${skinFile} not found, trying default...`);
+      console.log(`Successfully loaded: ${skinFile} with ${animations.length} animations`);
+    } catch (error) {
+      console.warn(`Failed to load ${skinFile}:`, error);
       
-      // Try default combined FBX
+      // Fall back to default model
       try {
-        model = await this.fbxLoader.loadAsync('./models/player-combined.fbx');
-        animations = model.animations || [];
-        useCombined = true;
-        console.log('Loaded default combined FBX player model');
-      } catch (defaultFbxError) {
-        // Try GLB combined
-        try {
-          const gltf = await this.gltfLoader.loadAsync('./models/player-combined.glb');
-          model = gltf.scene;
-          animations = gltf.animations || [];
-          useCombined = true;
-          console.log('Loaded combined GLB player model');
-        } catch (glbError) {
-          console.warn('Combined GLB not found, falling back to separate files');
-          const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
-          model = gltf.scene;
-          animations = gltf.animations || [];
-        }
+        const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
+        model = gltf.scene;
+        animations = gltf.animations || [];
+        console.log('Fell back to player.glb');
+      } catch (fallbackError) {
+        console.error('Failed to load any player model!', fallbackError);
+        throw fallbackError;
       }
     }
     
     this.model = model;
     
-    // Scale and position the model
-    // FBX files often need different scaling than GLB
-    const scale = useCombined ? 0.006 : 0.6;  // FBX is typically in cm, needs smaller scale
+    // Scale and position
+    const scale = useCombined ? 0.006 : 0.6;
     this.model.scale.set(scale, scale, scale);
     this.model.position.set(0, 0, 0);
     
@@ -181,15 +167,27 @@ export class PlayerModel {
     // Create animation mixer
     this.mixer = new THREE.AnimationMixer(this.model);
     
-    // Load animations from combined file or separate files
-    if (useCombined && animations.length > 0) {
+    // Load animations
+    if (animations.length > 0) {
       this.loadAnimationsFromCombined(animations);
     } else {
       await this.loadAnimationsSeparately();
     }
     
-    console.log(`Player model loaded with ${this.animations.size} animations!`);
     return this.model;
+  }
+  
+  /**
+   * Load the combined player model with all animations
+   */
+  async load(): Promise<THREE.Group> {
+    // Use settings for initial load
+    const settings = loadSettings();
+    this.currentSkin = settings.playerSkin;
+    
+    console.log(`Initial load - skin from settings: ${this.currentSkin}`);
+    
+    return this.loadSkin(this.currentSkin);
   }
   
   /**
