@@ -259,8 +259,9 @@ export class Game {
         const model = await this.playerModel.load();
         
         // Position player centered on chair (handled by PlayerModel.update to prevent root motion drift)
-        this.playerModel.setLocalPosition(-0.2, -0.1, 0);
-        model.position.set(-0.2, -0.1, 0);  // Also set initial position
+        // Offset to match the lowered chair model
+        this.playerModel.setLocalPosition(-0.2, -0.6, 0);
+        model.position.set(-0.2, -0.6, 0);
         model.rotation.y = 0;
         
         // Now start idle animation after position is set
