@@ -158,22 +158,49 @@ class PlayerPreview {
     
     this.scene.add(this.model);
     
+    // Reduce shininess - make materials more matte
+    this.model.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        if (mesh.material) {
+          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          materials.forEach(mat => {
+            if ((mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+              const stdMat = mat as THREE.MeshStandardMaterial;
+              stdMat.metalness = 0.0;
+              stdMat.roughness = 0.8;
+            }
+          });
+        }
+      }
+    });
+    
     // Play standing idle animation if available
     if (this.model.animations && this.model.animations.length > 0) {
       console.log('Preview animations:', this.model.animations.map(c => c.name));
       
       this.mixer = new THREE.AnimationMixer(this.model);
       
-      // Find standing idle animation - look for "idle 11" or "stand" (not sitting/dozing)
-      const idleClip = this.model.animations.find(clip => {
-        const name = clip.name.toLowerCase();
-        return name.includes('idle 11') || 
-               name.includes('idle11') ||
-               (name.includes('stand') && name.includes('idle'));
-      }) || this.model.animations.find(clip => {
-        const name = clip.name.toLowerCase();
-        return name.includes('idle') && !name.includes('dozing') && !name.includes('sit');
-      }) || this.model.animations[0];
+      // Find "idle 11" specifically - the standing idle animation
+      let idleClip = this.model.animations.find(clip => 
+        clip.name.toLowerCase() === 'idle 11'
+      );
+      
+      // Fallback to any clip with "idle" that's not dozing/sitting
+      if (!idleClip) {
+        idleClip = this.model.animations.find(clip => {
+          const name = clip.name.toLowerCase();
+          return name.includes('idle') && 
+                 !name.includes('dozing') && 
+                 !name.includes('sit') &&
+                 !name.includes('bar hang');
+        });
+      }
+      
+      // Last resort - just use first animation
+      if (!idleClip) {
+        idleClip = this.model.animations[0];
+      }
       
       if (idleClip) {
         console.log('Preview playing animation:', idleClip.name);

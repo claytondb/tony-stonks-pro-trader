@@ -27,17 +27,21 @@ interface LoadedAnimation {
 
 // Map animation names to expected clip names in the combined file
 // Names from Meshy.ai combined export - use exact names for consistency across models
+// David's animations: backflip, bar hang idle, breakdance 1990, cautious crouch walk forward,
+// charged spell cast 2, dozing elderly, falling down, female bow charge left hand, idle 11,
+// jump over obstacle 1, look back and sit, parkour vault 1, parkour vault with roll, running,
+// slide light, stand to sit transition male, step forward and push, victory, walking
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['idle 11', 'idle'],  // Standing idle
-  'push': ['step forward and push', 'walking', 'running'],  // Push/run animation
-  'standtosit': ['stand to sit transition male', 'stand to sit', 'look back and sit'],
-  'rolling': ['dozing elderly', 'dozing'],  // Sitting/dozing while on chair
-  'chairhold': ['bar hang idle', 'bar hang', 'charged spell cast'],  // Holding pose in air
-  'trick': ['breakdance 1990', 'breakdance', 'backflip'],
-  'jump': ['jump over obstacle 1', 'jump over obstacle', 'parkour vault 1'],
-  'roll': ['parkour vault with roll', 'parkour vault'],
-  'slide': ['slide light', 'slide'],
-  'crash': ['falling down', 'falling', 'fall'],
+  'idle': ['idle 11'],  // Standing idle - exact match
+  'push': ['step forward and push', 'running', 'walking'],  // Push/run animation
+  'standtosit': ['stand to sit transition male', 'look back and sit'],
+  'rolling': ['dozing elderly'],  // Sitting/dozing while on chair
+  'chairhold': ['bar hang idle'],  // Holding pose in air
+  'trick': ['breakdance 1990'],  // Trick animation
+  'jump': ['jump over obstacle 1', 'parkour vault 1'],
+  'roll': ['parkour vault with roll'],
+  'slide': ['slide light'],
+  'crash': ['falling down'],
 };
 
 export class PlayerModel {
@@ -166,11 +170,23 @@ export class PlayerModel {
     this.model.scale.set(scale, scale, scale);
     this.model.position.set(0, 0, 0);
     
-    // Enable shadows
+    // Enable shadows and reduce shininess
     this.model.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
         child.receiveShadow = true;
+        
+        // Make materials less shiny/metallic - more realistic matte look
+        if (child.material) {
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach(mat => {
+            if ((mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+              const stdMat = mat as THREE.MeshStandardMaterial;
+              stdMat.metalness = 0.0;  // No metallic shine
+              stdMat.roughness = 0.8;  // More matte/rough surface
+            }
+          });
+        }
       }
     });
     
