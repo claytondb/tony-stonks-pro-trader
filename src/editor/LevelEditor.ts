@@ -34,7 +34,13 @@ export class LevelEditor {
   
   private level: EditorLevelData;
   private objects: EditorObject[] = [];
-  private selectedObject: EditorObject | null = null;
+  private selectedObjects: EditorObject[] = [];
+  private selectedObject: EditorObject | null = null;  // For backwards compat, points to first selected
+  
+  // Drag selection
+  private isDragSelecting: boolean = false;
+  private dragStartPoint: { x: number; y: number } | null = null;
+  private selectionBox: HTMLElement | null = null;
   
   private callbacks: EditorCallbacks;
   private raycaster: THREE.Raycaster;
@@ -248,7 +254,7 @@ export class LevelEditor {
       }
     });
     
-    // Mouse down for paint mode
+    // Mouse down for paint mode and drag selection
     container.addEventListener('mousedown', (e) => {
       if (e.button === 0 && this.currentTool === 'paint' && this.placementMode) {
         this.isPainting = true;
@@ -256,11 +262,14 @@ export class LevelEditor {
       } else if (e.button === 2 && this.currentTool === 'paint') {
         this.isPainting = true;
         this.lastPaintPosition = null;
+      } else if (e.button === 0 && this.currentTool === 'select') {
+        // Start drag selection
+        this.startDragSelection(e, container);
       }
     });
     
-    // Mouse up to stop painting
-    container.addEventListener('mouseup', () => {
+    // Mouse up to stop painting and drag selection
+    container.addEventListener('mouseup', (e) => {
       if (this.isPainting) {
         this.isPainting = false;
         this.lastPaintPosition = null;
@@ -268,15 +277,30 @@ export class LevelEditor {
           this.saveUndoState();  // Save after paint stroke
         }
       }
+      if (this.isDragSelecting) {
+        this.endDragSelection(e, container);
+      }
     });
     
-    // Mouse move for placement preview and painting
+    // Mouse leave to cancel drag selection
+    container.addEventListener('mouseleave', () => {
+      if (this.isDragSelecting) {
+        this.cancelDragSelection();
+      }
+    });
+    
+    // Mouse move for placement preview, painting, and drag selection
     container.addEventListener('mousemove', (e) => {
       this.handleMouseMove(e, container);
       
       // Paint mode continuous placement
       if (this.isPainting && this.currentTool === 'paint' && this.placementMode) {
         this.handlePaintStroke(e.button === 2);
+      }
+      
+      // Update drag selection box
+      if (this.isDragSelecting) {
+        this.updateDragSelection(e, container);
       }
     });
     
@@ -452,9 +476,175 @@ export class LevelEditor {
       this.selectedObject = null;
       this.callbacks.onObjectSelected?.(null);
     }
+    // Clear multi-selection
+    this.selectedObjects.forEach(obj => {
+      this.unhighlightObject(obj);
+    });
+    this.selectedObjects = [];
+  }
+  
+  // =============================================
+  // DRAG SELECTION
+  // =============================================
+  
+  private startDragSelection(e: MouseEvent, container: HTMLElement): void {
+    const rect = container.getBoundingClientRect();
+    this.dragStartPoint = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    };
+    this.isDragSelecting = true;
+    
+    // Create selection box element
+    this.selectionBox = document.createElement('div');
+    this.selectionBox.style.cssText = `
+      position: absolute;
+      border: 2px dashed #00ff88;
+      background: rgba(0, 255, 136, 0.1);
+      pointer-events: none;
+      z-index: 1000;
+    `;
+    container.appendChild(this.selectionBox);
+    
+    // Disable orbit controls during drag
+    this.orbitControls.enabled = false;
+  }
+  
+  private updateDragSelection(e: MouseEvent, container: HTMLElement): void {
+    if (!this.selectionBox || !this.dragStartPoint) return;
+    
+    const rect = container.getBoundingClientRect();
+    const currentX = e.clientX - rect.left;
+    const currentY = e.clientY - rect.top;
+    
+    const left = Math.min(this.dragStartPoint.x, currentX);
+    const top = Math.min(this.dragStartPoint.y, currentY);
+    const width = Math.abs(currentX - this.dragStartPoint.x);
+    const height = Math.abs(currentY - this.dragStartPoint.y);
+    
+    this.selectionBox.style.left = `${left}px`;
+    this.selectionBox.style.top = `${top}px`;
+    this.selectionBox.style.width = `${width}px`;
+    this.selectionBox.style.height = `${height}px`;
+  }
+  
+  private endDragSelection(e: MouseEvent, container: HTMLElement): void {
+    if (!this.dragStartPoint) return;
+    
+    const rect = container.getBoundingClientRect();
+    const endX = e.clientX - rect.left;
+    const endY = e.clientY - rect.top;
+    
+    // Calculate selection bounds in screen space
+    const minX = Math.min(this.dragStartPoint.x, endX);
+    const maxX = Math.max(this.dragStartPoint.x, endX);
+    const minY = Math.min(this.dragStartPoint.y, endY);
+    const maxY = Math.max(this.dragStartPoint.y, endY);
+    
+    // Only select if drag was significant (not just a click)
+    const dragDistance = Math.hypot(endX - this.dragStartPoint.x, endY - this.dragStartPoint.y);
+    
+    if (dragDistance > 5) {
+      // Find objects within selection box
+      this.deselectObject();
+      
+      this.objects.forEach(obj => {
+        const screenPos = this.getScreenPosition(obj.mesh, container);
+        if (screenPos &&
+            screenPos.x >= minX && screenPos.x <= maxX &&
+            screenPos.y >= minY && screenPos.y <= maxY) {
+          this.selectedObjects.push(obj);
+          this.highlightObject(obj);
+        }
+      });
+      
+      // Set first selected as the main selectedObject for transform controls
+      if (this.selectedObjects.length > 0) {
+        this.selectedObject = this.selectedObjects[0];
+        this.transformControls.attach(this.selectedObject.mesh);
+        this.callbacks.onObjectSelected?.(this.selectedObject);
+      }
+    } else {
+      // It was a click, do normal selection
+      this.selectObjectAtMouse();
+    }
+    
+    this.cancelDragSelection();
+  }
+  
+  private cancelDragSelection(): void {
+    this.isDragSelecting = false;
+    this.dragStartPoint = null;
+    if (this.selectionBox) {
+      this.selectionBox.remove();
+      this.selectionBox = null;
+    }
+    this.orbitControls.enabled = true;
+  }
+  
+  private getScreenPosition(object: THREE.Object3D, container: HTMLElement): { x: number; y: number } | null {
+    const vector = new THREE.Vector3();
+    object.getWorldPosition(vector);
+    vector.project(this.camera);
+    
+    // Check if behind camera
+    if (vector.z > 1) return null;
+    
+    const x = (vector.x * 0.5 + 0.5) * container.clientWidth;
+    const y = (-vector.y * 0.5 + 0.5) * container.clientHeight;
+    
+    return { x, y };
+  }
+  
+  private highlightObject(obj: EditorObject): void {
+    obj.mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material) {
+        // Store original material
+        if (!child.userData.originalMaterial) {
+          child.userData.originalMaterial = child.material;
+        }
+        // Apply highlight
+        const highlightMat = (child.material as THREE.MeshStandardMaterial).clone();
+        highlightMat.emissive = new THREE.Color(0x004400);
+        highlightMat.emissiveIntensity = 0.5;
+        child.material = highlightMat;
+      }
+    });
+  }
+  
+  private unhighlightObject(obj: EditorObject): void {
+    obj.mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.userData.originalMaterial) {
+        child.material = child.userData.originalMaterial;
+        delete child.userData.originalMaterial;
+      }
+    });
   }
   
   deleteSelectedObject(): void {
+    // Handle multi-selection delete
+    if (this.selectedObjects.length > 0) {
+      this.selectedObjects.forEach(obj => {
+        this.scene.remove(obj.mesh);
+        this.unhighlightObject(obj);
+        
+        const idx = this.objects.indexOf(obj);
+        if (idx >= 0) this.objects.splice(idx, 1);
+        
+        const dataIdx = this.level.objects.indexOf(obj.data);
+        if (dataIdx >= 0) this.level.objects.splice(dataIdx, 1);
+      });
+      
+      this.transformControls.detach();
+      this.selectedObjects = [];
+      this.selectedObject = null;
+      this.callbacks.onObjectSelected?.(null);
+      this.callbacks.onObjectsChanged?.();
+      this.saveUndoState();
+      return;
+    }
+    
+    // Single selection delete
     if (!this.selectedObject) return;
     
     // Remove from scene
@@ -472,6 +662,7 @@ export class LevelEditor {
     this.selectedObject = null;
     this.callbacks.onObjectSelected?.(null);
     this.callbacks.onObjectsChanged?.();
+    this.saveUndoState();
   }
   
   duplicateSelectedObject(): void {
