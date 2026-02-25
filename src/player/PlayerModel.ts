@@ -26,16 +26,16 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
-// Names from Meshy.ai combined export
+// Names from Meshy.ai combined export (normalized - underscores/spaces handled in findClip)
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['dozing elderly', 'dozing'],
-  'push': ['step forward and push', 'step forward'],
-  'standtosit': ['stand to sit transition male', 'stand to sit', 'look back and sit'],
+  'idle': ['dozing elderly', 'dozing', 'sit idle'],
+  'push': ['step forward and push', 'step forward', 'push'],
+  'standtosit': ['stand to sit transition', 'stand to sit', 'look back and sit', 'sitting down'],
   'rolling': ['dozing elderly', 'dozing', 'sit idle'],  // Sitting on chair while rolling
-  'chairhold': ['bar hang idle', 'bar hang', 'female bow charge'],  // Holding pose
+  'chairhold': ['bar hang idle', 'bar hang', 'female bow'],  // Holding pose
   'trick': ['breakdance 1990', 'breakdance', 'backflip'],
-  'jump': ['jump over obstacle 1', 'jump over obstacle', 'parkour vault 1'],
-  'roll': ['parkour vault with roll', 'parkour vault', 'vault'],
+  'jump': ['jump over obstacle', 'jump', 'hop'],
+  'roll': ['parkour vault', 'vault', 'roll'],
   'slide': ['slide light', 'slide'],
   'crash': ['falling down', 'falling', 'fall'],
 };
@@ -227,38 +227,52 @@ export class PlayerModel {
   }
   
   /**
-   * Find a clip by checking multiple possible names (case-insensitive)
-   * Tries exact match first, then prefix match
+   * Normalize a string for matching (lowercase, underscores to spaces, remove suffixes)
+   */
+  private normalizeForMatch(str: string): string {
+    return str
+      .toLowerCase()
+      .replace(/_/g, ' ')           // underscores to spaces
+      .replace(/\.fbx$/i, '')       // remove .fbx suffix
+      .replace(/\.glb$/i, '')       // remove .glb suffix
+      .replace(/frame rate \d+/i, '') // remove "frame rate 60" etc
+      .replace(/\s+/g, ' ')         // collapse multiple spaces
+      .trim();
+  }
+  
+  /**
+   * Find a clip by checking multiple possible names (case-insensitive, normalized)
+   * Tries exact match first, then prefix match, then contains
    */
   private findClip(clips: THREE.AnimationClip[], possibleNames: string[]): THREE.AnimationClip | null {
-    // First pass: exact matches only
+    // First pass: exact matches (normalized)
     for (const name of possibleNames) {
-      const nameLower = name.toLowerCase();
+      const nameNorm = this.normalizeForMatch(name);
       for (const clip of clips) {
-        const clipNameLower = clip.name.toLowerCase();
-        if (clipNameLower === nameLower) {
+        const clipNorm = this.normalizeForMatch(clip.name);
+        if (clipNorm === nameNorm) {
           return clip;
         }
       }
     }
     
-    // Second pass: clip name starts with our target name
+    // Second pass: clip name starts with our target name (normalized)
     for (const name of possibleNames) {
-      const nameLower = name.toLowerCase();
+      const nameNorm = this.normalizeForMatch(name);
       for (const clip of clips) {
-        const clipNameLower = clip.name.toLowerCase();
-        if (clipNameLower.startsWith(nameLower)) {
+        const clipNorm = this.normalizeForMatch(clip.name);
+        if (clipNorm.startsWith(nameNorm)) {
           return clip;
         }
       }
     }
     
-    // Third pass: our target name is contained in clip name
+    // Third pass: our target name is contained in clip name (normalized)
     for (const name of possibleNames) {
-      const nameLower = name.toLowerCase();
+      const nameNorm = this.normalizeForMatch(name);
       for (const clip of clips) {
-        const clipNameLower = clip.name.toLowerCase();
-        if (clipNameLower.includes(nameLower)) {
+        const clipNorm = this.normalizeForMatch(clip.name);
+        if (clipNorm.includes(nameNorm)) {
           return clip;
         }
       }
