@@ -1900,7 +1900,8 @@ export class Game {
         this.updatePlayerMountPosition();
         this.animState = 'pushing';
         this.stateStartTime = now;
-        this.playerModel.play('push', { loop: false });
+        // Play push once, then transition to rolling (sitting)
+        this.playerModel.playOnce('push', 'rolling');
       }
       return;
     }
@@ -1953,7 +1954,8 @@ export class Game {
         
         // Push again to go faster
         if (input.forward && speed < 8 && this.playerState.isGrounded) {
-          this.playerModel.play('push', { loop: false });
+          // Play push once, then return to rolling (sitting)
+          this.playerModel.playOnce('push', 'rolling');
           this.animState = 'pushing';
           this.stateStartTime = now;
         }

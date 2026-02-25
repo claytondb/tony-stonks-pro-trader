@@ -28,10 +28,10 @@ interface LoadedAnimation {
 // Map animation names to expected clip names in the combined file
 // Names from Meshy.ai combined export
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['dozing elderly', 'dozing', 'idle 11', 'idle'],
-  'push': ['step forward and push', 'step forward', 'push'],
+  'idle': ['dozing elderly', 'dozing'],
+  'push': ['step forward and push', 'step forward'],
   'standtosit': ['stand to sit transition male', 'stand to sit', 'look back and sit'],
-  'rolling': ['idle 11', 'walking', 'running'],  // Use idle or walking while rolling
+  'rolling': ['dozing elderly', 'dozing', 'sit idle'],  // Sitting on chair while rolling
   'chairhold': ['bar hang idle', 'bar hang', 'female bow charge'],  // Holding pose
   'trick': ['breakdance 1990', 'breakdance', 'backflip'],
   'jump': ['jump over obstacle 1', 'jump over obstacle', 'parkour vault 1'],
@@ -227,22 +227,43 @@ export class PlayerModel {
   }
   
   /**
-   * Find a clip by checking multiple possible names (case-insensitive, partial match)
+   * Find a clip by checking multiple possible names (case-insensitive)
+   * Tries exact match first, then prefix match
    */
   private findClip(clips: THREE.AnimationClip[], possibleNames: string[]): THREE.AnimationClip | null {
-    for (const clip of clips) {
-      const clipNameLower = clip.name.toLowerCase();
-      
-      for (const name of possibleNames) {
-        const nameLower = name.toLowerCase();
-        // Check exact match, partial match, or contains
-        if (clipNameLower === nameLower || 
-            clipNameLower.includes(nameLower) || 
-            nameLower.includes(clipNameLower)) {
+    // First pass: exact matches only
+    for (const name of possibleNames) {
+      const nameLower = name.toLowerCase();
+      for (const clip of clips) {
+        const clipNameLower = clip.name.toLowerCase();
+        if (clipNameLower === nameLower) {
           return clip;
         }
       }
     }
+    
+    // Second pass: clip name starts with our target name
+    for (const name of possibleNames) {
+      const nameLower = name.toLowerCase();
+      for (const clip of clips) {
+        const clipNameLower = clip.name.toLowerCase();
+        if (clipNameLower.startsWith(nameLower)) {
+          return clip;
+        }
+      }
+    }
+    
+    // Third pass: our target name is contained in clip name
+    for (const name of possibleNames) {
+      const nameLower = name.toLowerCase();
+      for (const clip of clips) {
+        const clipNameLower = clip.name.toLowerCase();
+        if (clipNameLower.includes(nameLower)) {
+          return clip;
+        }
+      }
+    }
+    
     return null;
   }
   
