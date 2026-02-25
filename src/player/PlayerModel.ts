@@ -26,17 +26,17 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
-// Use exact names from FBX where possible to avoid wrong matches
+// NOTE: FBX has mislabeled animations! slide_light (8.57s) is actually the sitting pose
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['Dozing_Elderly_frame_rate_60', 'dozing elderly frame rate 60'],
+  'idle': ['slide_light_frame_rate_60', 'slide light'],  // Actually the sitting/dozing animation (8.57s)
   'push': ['step forward and push', 'step forward', 'push'],
   'standtosit': ['stand to sit transition', 'stand to sit', 'look back and sit', 'sitting down'],
-  'rolling': ['Dozing_Elderly_frame_rate_60', 'dozing elderly frame rate 60'],  // Same sitting pose while rolling
+  'rolling': ['slide_light_frame_rate_60', 'slide light'],  // Same sitting pose while rolling
   'chairhold': ['bar hang idle', 'bar hang', 'female bow'],  // Holding pose
   'trick': ['breakdance 1990', 'breakdance', 'backflip'],
   'jump': ['jump over obstacle', 'jump', 'hop'],
   'roll': ['parkour vault', 'vault', 'roll'],
-  'slide': ['slide light', 'slide'],
+  'slide': ['Dozing_Elderly_frame_rate_60', 'dozing elderly'],  // Swapped - this was mislabeled
   'crash': ['falling down', 'falling', 'fall'],
 };
 
