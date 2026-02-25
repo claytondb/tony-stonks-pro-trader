@@ -62,6 +62,18 @@ export class LevelEditor {
   // Autosave timer
   private autosaveTimer: number | null = null;
   
+  // Undo/Redo system
+  private undoStack: string[] = [];  // JSON snapshots
+  private redoStack: string[] = [];
+  private maxUndoSteps: number = 20;
+  
+  // Tool modes
+  private currentTool: 'select' | 'move' | 'rotate' | 'pencil' | 'paint' = 'select';
+  private isPainting: boolean = false;
+  private lastPaintPosition: THREE.Vector3 | null = null;
+  private paintMinDistance: number = 2;  // Min distance between painted objects
+  private toolbarContainer: HTMLElement | null = null;
+  
   constructor(container: HTMLElement, callbacks: EditorCallbacks = {}) {
     this.callbacks = callbacks;
     this.raycaster = new THREE.Raycaster();
@@ -167,6 +179,12 @@ export class LevelEditor {
     // Create view cube
     this.createViewCube(container);
     
+    // Create toolbar
+    this.createToolbar(container);
+    
+    // Save initial state for undo
+    this.saveUndoState();
+    
     // Start render loop
     this.animate();
     
@@ -219,12 +237,47 @@ export class LevelEditor {
   private setupEventListeners(container: HTMLElement): void {
     // Click to select or place
     container.addEventListener('click', (e) => {
-      this.handleClick(e);
+      this.handleClick(e, false);
     });
     
-    // Mouse move for placement preview
+    // Right-click to delete (in pencil/paint mode)
+    container.addEventListener('contextmenu', (e) => {
+      if (this.currentTool === 'pencil' || this.currentTool === 'paint') {
+        e.preventDefault();
+        this.handleClick(e, true);  // true = delete mode
+      }
+    });
+    
+    // Mouse down for paint mode
+    container.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && this.currentTool === 'paint' && this.placementMode) {
+        this.isPainting = true;
+        this.lastPaintPosition = null;
+      } else if (e.button === 2 && this.currentTool === 'paint') {
+        this.isPainting = true;
+        this.lastPaintPosition = null;
+      }
+    });
+    
+    // Mouse up to stop painting
+    container.addEventListener('mouseup', () => {
+      if (this.isPainting) {
+        this.isPainting = false;
+        this.lastPaintPosition = null;
+        if (this.currentTool === 'paint') {
+          this.saveUndoState();  // Save after paint stroke
+        }
+      }
+    });
+    
+    // Mouse move for placement preview and painting
     container.addEventListener('mousemove', (e) => {
       this.handleMouseMove(e, container);
+      
+      // Paint mode continuous placement
+      if (this.isPainting && this.currentTool === 'paint' && this.placementMode) {
+        this.handlePaintStroke(e.button === 2);
+      }
     });
     
     // Keyboard shortcuts
@@ -233,12 +286,19 @@ export class LevelEditor {
     });
   }
   
-  private handleClick(_e: MouseEvent): void {
-    if (this.placementMode && this.placementItem) {
+  private handleClick(_e: MouseEvent, deleteMode: boolean = false): void {
+    if (this.currentTool === 'select') {
+      // Select mode - just select objects
+      this.selectObjectAtMouse();
+    } else if ((this.currentTool === 'pencil' || this.currentTool === 'paint') && deleteMode) {
+      // Delete object under cursor
+      this.deleteObjectAtMouse();
+    } else if (this.placementMode && this.placementItem && (this.currentTool === 'pencil' || this.currentTool === 'paint')) {
       // Place object
       this.placeObject();
-    } else {
-      // Select object
+      this.saveUndoState();
+    } else if (this.currentTool === 'move' || this.currentTool === 'rotate') {
+      // Select object for transform
       this.selectObjectAtMouse();
     }
   }
@@ -301,6 +361,26 @@ export class LevelEditor {
         if (e.ctrlKey || e.metaKey) {
           e.preventDefault();
           this.save();
+        }
+        break;
+        
+      case 'KeyZ':
+        // Undo
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            this.redo();
+          } else {
+            this.undo();
+          }
+        }
+        break;
+        
+      case 'KeyY':
+        // Redo
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          this.redo();
         }
         break;
         
@@ -573,11 +653,132 @@ export class LevelEditor {
         return this.createConeMesh();
       case 'barrier':
         return this.createBarrierMesh(params?.length as number || 5);
+      case 'building_small':
+      case 'building_medium':
+      case 'building_large':
+      case 'building_wide':
+        return this.createBuildingMesh(type, params);
+      case 'shrub_small':
+        return this.createShrubMesh(0.5, 0.6);
+      case 'shrub_medium':
+        return this.createShrubMesh(0.8, 1.0);
+      case 'shrub_large':
+        return this.createShrubMesh(1.2, 1.5);
+      case 'tree_small':
+        return this.createTreeMesh();
       default:
         // Default cube for unknown types
         const geom = new THREE.BoxGeometry(1, 1, 1);
         return new THREE.Mesh(geom, this.materials.get('concrete')!);
     }
+  }
+  
+  private createBuildingMesh(type: string, params?: Record<string, unknown>): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Default sizes based on type
+    const defaults: Record<string, { width: number; depth: number; height: number }> = {
+      'building_small': { width: 10, depth: 10, height: 15 },
+      'building_medium': { width: 15, depth: 15, height: 30 },
+      'building_large': { width: 20, depth: 20, height: 50 },
+      'building_wide': { width: 30, depth: 15, height: 12 },
+    };
+    
+    const def = defaults[type] || defaults['building_small'];
+    const width = (params?.width as number) || def.width;
+    const depth = (params?.depth as number) || def.depth;
+    const height = (params?.height as number) || def.height;
+    
+    // Building body
+    const buildingMat = new THREE.MeshStandardMaterial({ 
+      color: 0x808090,
+      roughness: 0.7,
+      metalness: 0.1
+    });
+    const bodyGeom = new THREE.BoxGeometry(width, height, depth);
+    const body = new THREE.Mesh(bodyGeom, buildingMat);
+    body.position.y = height / 2;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+    
+    // Windows (simple stripes)
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: 0x4488aa,
+      roughness: 0.1,
+      metalness: 0.8
+    });
+    
+    const windowRows = Math.floor(height / 3);
+    const windowCols = Math.floor(width / 3);
+    
+    for (let row = 0; row < windowRows; row++) {
+      for (let col = 0; col < windowCols; col++) {
+        const windowGeom = new THREE.BoxGeometry(1.5, 2, 0.1);
+        const window = new THREE.Mesh(windowGeom, windowMat);
+        window.position.set(
+          -width / 2 + 1.5 + col * 3,
+          2 + row * 3,
+          depth / 2 + 0.05
+        );
+        group.add(window);
+        
+        // Back side
+        const windowBack = window.clone();
+        windowBack.position.z = -depth / 2 - 0.05;
+        group.add(windowBack);
+      }
+    }
+    
+    return group;
+  }
+  
+  private createShrubMesh(radius: number, height: number): THREE.Group {
+    const group = new THREE.Group();
+    
+    const leafMat = new THREE.MeshStandardMaterial({
+      color: 0x228833,
+      roughness: 0.8
+    });
+    
+    // Create multiple spheres for organic look
+    const numBalls = 5;
+    for (let i = 0; i < numBalls; i++) {
+      const r = radius * (0.6 + Math.random() * 0.4);
+      const sphereGeom = new THREE.SphereGeometry(r, 8, 6);
+      const sphere = new THREE.Mesh(sphereGeom, leafMat);
+      sphere.position.set(
+        (Math.random() - 0.5) * radius,
+        height * 0.5 + (Math.random() - 0.5) * height * 0.3,
+        (Math.random() - 0.5) * radius
+      );
+      sphere.castShadow = true;
+      group.add(sphere);
+    }
+    
+    return group;
+  }
+  
+  private createTreeMesh(): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Trunk
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.9 });
+    const trunkGeom = new THREE.CylinderGeometry(0.15, 0.2, 2, 8);
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 1;
+    trunk.castShadow = true;
+    group.add(trunk);
+    
+    // Foliage
+    const leafMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.8 });
+    const foliageGeom = new THREE.ConeGeometry(1.5, 3, 8);
+    const foliage = new THREE.Mesh(foliageGeom, leafMat);
+    foliage.position.y = 3.5;
+    foliage.castShadow = true;
+    group.add(foliage);
+    
+    return group;
   }
   
   private createRailMesh(length: number): THREE.Group {
@@ -1067,6 +1268,254 @@ export class LevelEditor {
   }
   
   // =============================================
+  // UNDO/REDO SYSTEM
+  // =============================================
+  
+  private saveUndoState(): void {
+    // Save current state as JSON
+    const state = JSON.stringify(this.level.objects);
+    
+    // Don't save if same as last state
+    if (this.undoStack.length > 0 && this.undoStack[this.undoStack.length - 1] === state) {
+      return;
+    }
+    
+    this.undoStack.push(state);
+    
+    // Limit stack size
+    if (this.undoStack.length > this.maxUndoSteps) {
+      this.undoStack.shift();
+    }
+    
+    // Clear redo stack on new action
+    this.redoStack = [];
+    
+    this.updateUndoRedoButtons();
+  }
+  
+  undo(): void {
+    if (this.undoStack.length <= 1) return;  // Keep at least initial state
+    
+    // Save current state to redo
+    const currentState = this.undoStack.pop()!;
+    this.redoStack.push(currentState);
+    
+    // Restore previous state
+    const previousState = this.undoStack[this.undoStack.length - 1];
+    this.restoreState(previousState);
+    
+    this.updateUndoRedoButtons();
+  }
+  
+  redo(): void {
+    if (this.redoStack.length === 0) return;
+    
+    // Get redo state
+    const redoState = this.redoStack.pop()!;
+    this.undoStack.push(redoState);
+    
+    // Restore it
+    this.restoreState(redoState);
+    
+    this.updateUndoRedoButtons();
+  }
+  
+  private restoreState(stateJson: string): void {
+    // Clear current objects
+    this.objects.forEach(obj => {
+      this.scene.remove(obj.mesh);
+    });
+    this.objects = [];
+    this.deselectObject();
+    
+    // Restore from JSON
+    const objects = JSON.parse(stateJson) as LevelObject[];
+    this.level.objects = objects;
+    
+    // Recreate meshes
+    objects.forEach(objData => {
+      const mesh = this.createObjectMesh(objData);
+      if (mesh) {
+        const editorObj: EditorObject = {
+          id: objData.id,
+          mesh,
+          data: objData
+        };
+        this.objects.push(editorObj);
+        this.scene.add(mesh);
+      }
+    });
+    
+    this.callbacks.onObjectsChanged?.();
+  }
+  
+  private updateUndoRedoButtons(): void {
+    const undoBtn = this.toolbarContainer?.querySelector('#undo-btn') as HTMLButtonElement;
+    const redoBtn = this.toolbarContainer?.querySelector('#redo-btn') as HTMLButtonElement;
+    
+    if (undoBtn) undoBtn.disabled = this.undoStack.length <= 1;
+    if (redoBtn) redoBtn.disabled = this.redoStack.length === 0;
+  }
+  
+  // =============================================
+  // TOOLBAR & TOOLS
+  // =============================================
+  
+  private createToolbar(container: HTMLElement): void {
+    this.toolbarContainer = document.createElement('div');
+    this.toolbarContainer.id = 'editor-toolbar';
+    this.toolbarContainer.style.cssText = `
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 5px;
+      padding: 8px;
+      background: rgba(0,0,0,0.7);
+      border-radius: 8px;
+      z-index: 100;
+      font-family: 'Kanit', sans-serif;
+    `;
+    
+    const tools = [
+      { id: 'select', icon: '🖱️', label: 'Select', key: 'V' },
+      { id: 'move', icon: '✥', label: 'Move', key: 'G' },
+      { id: 'rotate', icon: '↻', label: 'Rotate', key: 'R' },
+      { id: 'pencil', icon: '✏️', label: 'Pencil', key: 'P' },
+      { id: 'paint', icon: '🖌️', label: 'Paint', key: 'B' },
+    ];
+    
+    // Undo/Redo buttons
+    const undoBtn = this.createToolbarButton('undo-btn', '↩️', 'Undo (Ctrl+Z)', () => this.undo());
+    const redoBtn = this.createToolbarButton('redo-btn', '↪️', 'Redo (Ctrl+Y)', () => this.redo());
+    this.toolbarContainer.appendChild(undoBtn);
+    this.toolbarContainer.appendChild(redoBtn);
+    
+    // Separator
+    const sep = document.createElement('div');
+    sep.style.cssText = 'width: 2px; background: #555; margin: 0 5px;';
+    this.toolbarContainer.appendChild(sep);
+    
+    // Tool buttons
+    tools.forEach(tool => {
+      const btn = this.createToolbarButton(
+        `tool-${tool.id}`,
+        tool.icon,
+        `${tool.label} (${tool.key})`,
+        () => this.setTool(tool.id as typeof this.currentTool)
+      );
+      btn.classList.add('tool-btn');
+      if (tool.id === this.currentTool) {
+        btn.style.background = '#0a0';
+        btn.style.borderColor = '#0f0';
+      }
+      this.toolbarContainer!.appendChild(btn);
+    });
+    
+    container.appendChild(this.toolbarContainer);
+    this.updateUndoRedoButtons();
+  }
+  
+  private createToolbarButton(id: string, icon: string, title: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.id = id;
+    btn.textContent = icon;
+    btn.title = title;
+    btn.style.cssText = `
+      width: 36px;
+      height: 36px;
+      font-size: 18px;
+      background: #333;
+      color: #fff;
+      border: 2px solid #555;
+      border-radius: 4px;
+      cursor: pointer;
+    `;
+    btn.onclick = onClick;
+    btn.onmouseenter = () => { if (!btn.classList.contains('active')) btn.style.background = '#444'; };
+    btn.onmouseleave = () => { if (!btn.classList.contains('active')) btn.style.background = '#333'; };
+    return btn;
+  }
+  
+  setTool(tool: typeof this.currentTool): void {
+    this.currentTool = tool;
+    
+    // Update button styles
+    this.toolbarContainer?.querySelectorAll('.tool-btn').forEach(btn => {
+      const isActive = btn.id === `tool-${tool}`;
+      (btn as HTMLElement).style.background = isActive ? '#0a0' : '#333';
+      (btn as HTMLElement).style.borderColor = isActive ? '#0f0' : '#555';
+      btn.classList.toggle('active', isActive);
+    });
+    
+    // Update transform controls mode
+    if (tool === 'move') {
+      this.transformControls.setMode('translate');
+      this.transformControls.enabled = true;
+    } else if (tool === 'rotate') {
+      this.transformControls.setMode('rotate');
+      this.transformControls.enabled = true;
+    } else {
+      this.transformControls.enabled = tool === 'select';
+    }
+    
+    // Enable orbit controls for select mode, disable for others when clicking
+    this.orbitControls.enableRotate = tool === 'select';
+    this.orbitControls.enablePan = tool === 'select';
+  }
+  
+  private handlePaintStroke(deleteMode: boolean): void {
+    if (!this.placementMode || !this.placementItem) return;
+    
+    // Get current position
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const intersects = this.raycaster.intersectObject(this.groundPlane);
+    
+    if (intersects.length > 0) {
+      const pos = intersects[0].point;
+      
+      // Check minimum distance from last paint position
+      if (this.lastPaintPosition) {
+        const dist = pos.distanceTo(this.lastPaintPosition);
+        if (dist < this.paintMinDistance) return;
+      }
+      
+      if (deleteMode) {
+        this.deleteObjectAtMouse();
+      } else {
+        this.placeObject();
+      }
+      
+      this.lastPaintPosition = pos.clone();
+    }
+  }
+  
+  private deleteObjectAtMouse(): void {
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    
+    const meshes = this.objects.map(o => o.mesh);
+    const intersects = this.raycaster.intersectObjects(meshes, true);
+    
+    if (intersects.length > 0) {
+      // Find the EditorObject for this mesh
+      let hitMesh = intersects[0].object;
+      while (hitMesh.parent && !this.objects.find(o => o.mesh === hitMesh)) {
+        hitMesh = hitMesh.parent as THREE.Object3D;
+      }
+      
+      const obj = this.objects.find(o => o.mesh === hitMesh);
+      if (obj) {
+        this.scene.remove(obj.mesh);
+        this.objects = this.objects.filter(o => o !== obj);
+        this.level.objects = this.level.objects.filter(o => o.id !== obj.data.id);
+        this.callbacks.onObjectsChanged?.();
+        this.saveUndoState();
+      }
+    }
+  }
+  
+  // =============================================
   // CAMERA & VIEW CONTROLS
   // =============================================
   
@@ -1244,6 +1693,9 @@ export class LevelEditor {
     }
     if (this.viewCubeContainer) {
       this.viewCubeContainer.remove();
+    }
+    if (this.toolbarContainer) {
+      this.toolbarContainer.remove();
     }
     this.renderer.dispose();
     this.orbitControls.dispose();

@@ -339,5 +339,25 @@ export const OBJECT_CATEGORIES: ObjectCategory[] = [
       { type: 'cone', name: 'Traffic Cone', description: 'Orange traffic cone', icon: '🔶' },
       { type: 'barrier', name: 'Barrier', description: 'Safety barrier', icon: '🚧', defaultParams: { length: 5 } },
     ]
+  },
+  {
+    name: 'Buildings',
+    icon: '🏗️',
+    items: [
+      { type: 'building_small', name: 'Small Building', description: 'Small office building', icon: '🏠', defaultParams: { width: 10, depth: 10, height: 15 } },
+      { type: 'building_medium', name: 'Medium Building', description: 'Medium office tower', icon: '🏢', defaultParams: { width: 15, depth: 15, height: 30 } },
+      { type: 'building_large', name: 'Large Building', description: 'Large skyscraper', icon: '🏙️', defaultParams: { width: 20, depth: 20, height: 50 } },
+      { type: 'building_wide', name: 'Wide Building', description: 'Wide commercial building', icon: '🏬', defaultParams: { width: 30, depth: 15, height: 12 } },
+    ]
+  },
+  {
+    name: 'Nature',
+    icon: '🌿',
+    items: [
+      { type: 'shrub_small', name: 'Small Shrub', description: 'Small decorative bush', icon: '🌱' },
+      { type: 'shrub_medium', name: 'Medium Shrub', description: 'Medium hedge bush', icon: '🌿' },
+      { type: 'shrub_large', name: 'Large Shrub', description: 'Large ornamental bush', icon: '🌳' },
+      { type: 'tree_small', name: 'Small Tree', description: 'Small decorative tree', icon: '🌲' },
+    ]
   }
 ];
