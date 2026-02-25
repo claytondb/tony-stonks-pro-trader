@@ -217,16 +217,24 @@ export class PlayerModel {
     });
     console.log(`=== END ANIMATION LIST ===`);
     
+    // Debug: show what we're looking for
+    console.log('=== ANIMATION MAPPINGS WE ARE SEARCHING FOR ===');
+    for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
+      console.log(`  ${animName}: looking for ${JSON.stringify(possibleNames)}`);
+    }
+    console.log('=== END MAPPINGS ===');
+    
     // Map each of our animation names to available clips
     for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
-      const clip = this.findClip(clips, possibleNames);
+      console.log(`\nSearching for: ${animName}...`);
+      const clip = this.findClip(clips, possibleNames, animName);
       
       if (clip) {
         const action = this.mixer!.clipAction(clip);
         this.animations.set(animName as AnimationName, { clip, action });
-        console.log(`Mapped animation: ${animName} -> ${clip.name}`);
+        console.log(`✓ Mapped animation: ${animName} -> ${clip.name}`);
       } else {
-        console.warn(`Animation not found in combined file: ${animName} (looked for: ${possibleNames.join(', ')})`);
+        console.warn(`✗ Animation not found in combined file: ${animName} (looked for: ${possibleNames.join(', ')})`);
       }
     }
   }
@@ -249,7 +257,7 @@ export class PlayerModel {
    * Find a clip by checking multiple possible names
    * Priority: exact raw match > exact normalized > prefix > contains
    */
-  private findClip(clips: THREE.AnimationClip[], possibleNames: string[]): THREE.AnimationClip | null {
+  private findClip(clips: THREE.AnimationClip[], possibleNames: string[], debugName?: string): THREE.AnimationClip | null {
     // First pass: exact raw match (case-insensitive, with or without .fbx)
     for (const name of possibleNames) {
       const nameLower = name.toLowerCase();
@@ -257,6 +265,7 @@ export class PlayerModel {
         const clipLower = clip.name.toLowerCase();
         const clipNoExt = clipLower.replace(/\.fbx$/i, '');
         if (clipLower === nameLower || clipNoExt === nameLower) {
+          if (debugName) console.log(`  [${debugName}] EXACT MATCH: "${name}" -> "${clip.name}"`);
           return clip;
         }
       }
@@ -268,6 +277,7 @@ export class PlayerModel {
       for (const clip of clips) {
         const clipNorm = this.normalizeForMatch(clip.name);
         if (clipNorm === nameNorm) {
+          if (debugName) console.log(`  [${debugName}] NORMALIZED EXACT: "${nameNorm}" -> "${clip.name}"`);
           return clip;
         }
       }
@@ -279,6 +289,7 @@ export class PlayerModel {
       for (const clip of clips) {
         const clipNorm = this.normalizeForMatch(clip.name);
         if (clipNorm.startsWith(nameNorm)) {
+          if (debugName) console.log(`  [${debugName}] PREFIX MATCH: "${nameNorm}" -> "${clip.name}" (clip: "${clipNorm}")`);
           return clip;
         }
       }
@@ -290,11 +301,13 @@ export class PlayerModel {
       for (const clip of clips) {
         const clipNorm = this.normalizeForMatch(clip.name);
         if (clipNorm.includes(nameNorm)) {
+          if (debugName) console.log(`  [${debugName}] CONTAINS MATCH: "${nameNorm}" in "${clip.name}" (clip: "${clipNorm}")`);
           return clip;
         }
       }
     }
     
+    if (debugName) console.log(`  [${debugName}] NO MATCH FOUND`);
     return null;
   }
   
