@@ -23,10 +23,15 @@ export interface EditorObject {
 
 export class LevelEditor {
   private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
+  private camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  private perspCamera: THREE.PerspectiveCamera;
+  private orthoCamera: THREE.OrthographicCamera;
+  private isOrthographic: boolean = false;
   private renderer: THREE.WebGLRenderer;
   private orbitControls: OrbitControls;
   private transformControls: TransformControls;
+  private viewCubeContainer: HTMLElement | null = null;
+  private container: HTMLElement | null = null;
   
   private level: EditorLevelData;
   private objects: EditorObject[] = [];
@@ -63,19 +68,39 @@ export class LevelEditor {
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
     
+    // Store container reference
+    this.container = container;
+    
     // Create scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x87CEEB);
     
-    // Create camera
-    this.camera = new THREE.PerspectiveCamera(
+    // Create perspective camera
+    this.perspCamera = new THREE.PerspectiveCamera(
       60,
       container.clientWidth / container.clientHeight,
       0.1,
       1000
     );
-    this.camera.position.set(30, 30, 30);
-    this.camera.lookAt(0, 0, 0);
+    this.perspCamera.position.set(30, 30, 30);
+    this.perspCamera.lookAt(0, 0, 0);
+    
+    // Create orthographic camera
+    const aspect = container.clientWidth / container.clientHeight;
+    const frustumSize = 50;
+    this.orthoCamera = new THREE.OrthographicCamera(
+      -frustumSize * aspect / 2,
+      frustumSize * aspect / 2,
+      frustumSize / 2,
+      -frustumSize / 2,
+      0.1,
+      1000
+    );
+    this.orthoCamera.position.set(30, 30, 30);
+    this.orthoCamera.lookAt(0, 0, 0);
+    
+    // Start with perspective camera
+    this.camera = this.perspCamera;
     
     // Create renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -126,10 +151,25 @@ export class LevelEditor {
     
     // Handle resize
     window.addEventListener('resize', () => {
-      this.camera.aspect = container.clientWidth / container.clientHeight;
-      this.camera.updateProjectionMatrix();
+      const aspect = container.clientWidth / container.clientHeight;
+      
+      // Update perspective camera
+      this.perspCamera.aspect = aspect;
+      this.perspCamera.updateProjectionMatrix();
+      
+      // Update orthographic camera
+      const frustumSize = 50;
+      this.orthoCamera.left = -frustumSize * aspect / 2;
+      this.orthoCamera.right = frustumSize * aspect / 2;
+      this.orthoCamera.top = frustumSize / 2;
+      this.orthoCamera.bottom = -frustumSize / 2;
+      this.orthoCamera.updateProjectionMatrix();
+      
       this.renderer.setSize(container.clientWidth, container.clientHeight);
     });
+    
+    // Create view cube
+    this.createViewCube(container);
     
     // Start render loop
     this.animate();
@@ -1031,6 +1071,168 @@ export class LevelEditor {
   }
   
   // =============================================
+  // CAMERA & VIEW CONTROLS
+  // =============================================
+  
+  /**
+   * Toggle between perspective and orthographic camera
+   */
+  toggleCameraMode(): boolean {
+    this.isOrthographic = !this.isOrthographic;
+    
+    // Copy position and target from current camera
+    const position = this.camera.position.clone();
+    const target = this.orbitControls.target.clone();
+    
+    // Switch camera
+    this.camera = this.isOrthographic ? this.orthoCamera : this.perspCamera;
+    this.camera.position.copy(position);
+    this.camera.lookAt(target);
+    
+    // Update controls
+    this.orbitControls.object = this.camera;
+    this.transformControls.camera = this.camera;
+    
+    // Update button state in view cube
+    const modeBtn = this.viewCubeContainer?.querySelector('#camera-mode-btn') as HTMLElement;
+    if (modeBtn) {
+      modeBtn.textContent = this.isOrthographic ? 'ORTHO' : 'PERSP';
+    }
+    
+    return this.isOrthographic;
+  }
+  
+  /**
+   * Snap camera to a preset view
+   */
+  snapToView(view: 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right'): void {
+    const distance = 50;
+    const target = this.orbitControls.target.clone();
+    
+    const positions: Record<string, THREE.Vector3> = {
+      'top':    new THREE.Vector3(target.x, target.y + distance, target.z),
+      'bottom': new THREE.Vector3(target.x, target.y - distance, target.z),
+      'front':  new THREE.Vector3(target.x, target.y, target.z + distance),
+      'back':   new THREE.Vector3(target.x, target.y, target.z - distance),
+      'left':   new THREE.Vector3(target.x - distance, target.y, target.z),
+      'right':  new THREE.Vector3(target.x + distance, target.y, target.z),
+    };
+    
+    const newPos = positions[view];
+    if (newPos) {
+      // Animate camera position
+      const startPos = this.camera.position.clone();
+      const duration = 300;
+      const startTime = performance.now();
+      
+      const animateCamera = () => {
+        const elapsed = performance.now() - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        const eased = 1 - Math.pow(1 - t, 3); // Ease out cubic
+        
+        this.camera.position.lerpVectors(startPos, newPos, eased);
+        this.camera.lookAt(target);
+        
+        if (t < 1) {
+          requestAnimationFrame(animateCamera);
+        }
+      };
+      
+      animateCamera();
+    }
+  }
+  
+  /**
+   * Create the view cube UI in the top-right corner
+   */
+  private createViewCube(container: HTMLElement): void {
+    this.viewCubeContainer = document.createElement('div');
+    this.viewCubeContainer.id = 'view-cube';
+    this.viewCubeContainer.style.cssText = `
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      z-index: 100;
+      font-family: 'Kanit', sans-serif;
+    `;
+    
+    // Camera mode toggle button
+    const modeBtn = document.createElement('button');
+    modeBtn.id = 'camera-mode-btn';
+    modeBtn.textContent = 'PERSP';
+    modeBtn.style.cssText = `
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: bold;
+      background: #333;
+      color: #0f0;
+      border: 2px solid #0f0;
+      border-radius: 4px;
+      cursor: pointer;
+    `;
+    modeBtn.onclick = () => this.toggleCameraMode();
+    this.viewCubeContainer.appendChild(modeBtn);
+    
+    // View cube (3x3 grid representing a cube)
+    const cubeContainer = document.createElement('div');
+    cubeContainer.style.cssText = `
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 2px;
+      width: 90px;
+      height: 90px;
+      background: rgba(0,0,0,0.5);
+      padding: 5px;
+      border-radius: 4px;
+    `;
+    
+    // View buttons layout:
+    // [   ] [TOP] [   ]
+    // [LFT] [FRT] [RGT]
+    // [   ] [BOT] [   ]
+    const views = [
+      { label: '', view: null },
+      { label: 'T', view: 'top' as const },
+      { label: '', view: null },
+      { label: 'L', view: 'left' as const },
+      { label: 'F', view: 'front' as const },
+      { label: 'R', view: 'right' as const },
+      { label: 'Bk', view: 'back' as const },
+      { label: 'B', view: 'bottom' as const },
+      { label: '', view: null },
+    ];
+    
+    views.forEach(({ label, view }) => {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      btn.style.cssText = `
+        width: 26px;
+        height: 26px;
+        font-size: 10px;
+        font-weight: bold;
+        background: ${view ? '#444' : 'transparent'};
+        color: #fff;
+        border: ${view ? '1px solid #666' : 'none'};
+        border-radius: 3px;
+        cursor: ${view ? 'pointer' : 'default'};
+      `;
+      if (view) {
+        btn.onclick = () => this.snapToView(view);
+        btn.onmouseenter = () => btn.style.background = '#0a0';
+        btn.onmouseleave = () => btn.style.background = '#444';
+      }
+      cubeContainer.appendChild(btn);
+    });
+    
+    this.viewCubeContainer.appendChild(cubeContainer);
+    container.appendChild(this.viewCubeContainer);
+  }
+  
+  // =============================================
   // RENDER LOOP
   // =============================================
   
@@ -1043,6 +1245,9 @@ export class LevelEditor {
   dispose(): void {
     if (this.autosaveTimer) {
       clearInterval(this.autosaveTimer);
+    }
+    if (this.viewCubeContainer) {
+      this.viewCubeContainer.remove();
     }
     this.renderer.dispose();
     this.orbitControls.dispose();
