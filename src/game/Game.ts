@@ -87,6 +87,7 @@ export class Game {
   
   // Debug: animation cycling
   private debugAnimIndex = 0;
+  private debugAnimLockUntil = 0;  // Timestamp when debug lock expires
   
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -1836,6 +1837,9 @@ export class Game {
   private updatePlayerAnimation(input: ReturnType<InputManager['getState']>): void {
     if (!this.playerModel) return;
     
+    // Skip animation updates while debug lock is active
+    if (this.isDebugAnimLocked()) return;
+    
     const vel = this.physics.getVelocity(this.chairBody);
     const speed = new THREE.Vector3(vel.x, 0, vel.z).length();
     const now = performance.now();
@@ -2190,9 +2194,12 @@ export class Game {
     const animName = animNames[this.debugAnimIndex];
     
     console.log(`🎬 DEBUG: Playing animation [${this.debugAnimIndex}] "${animName}"`);
-    this.playerModel.play(animName, { loop: true });
+    this.playerModel.play(animName, { loop: true, fadeTime: 0.1 });
     
-    // Show on screen via alert (temporary debug)
+    // Lock animation for 5 seconds so we can see it
+    this.debugAnimLockUntil = Date.now() + 5000;
+    
+    // Show on screen
     const debugDiv = document.getElementById('debug-anim') || (() => {
       const d = document.createElement('div');
       d.id = 'debug-anim';
@@ -2200,6 +2207,13 @@ export class Game {
       document.body.appendChild(d);
       return d;
     })();
-    debugDiv.textContent = `Animation: ${animName}`;
+    debugDiv.textContent = `Animation: ${animName} (locked 5s)`;
+  }
+  
+  /**
+   * Check if debug animation lock is active
+   */
+  private isDebugAnimLocked(): boolean {
+    return Date.now() < this.debugAnimLockUntil;
   }
 }
