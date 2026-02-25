@@ -26,12 +26,12 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
-// Names from Meshy.ai combined export (normalized - underscores/spaces handled in findClip)
+// Use exact names from FBX where possible to avoid wrong matches
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['dozing elderly', 'dozing', 'sit idle'],
+  'idle': ['Dozing_Elderly_frame_rate_60', 'dozing elderly frame rate 60'],
   'push': ['step forward and push', 'step forward', 'push'],
   'standtosit': ['stand to sit transition', 'stand to sit', 'look back and sit', 'sitting down'],
-  'rolling': ['dozing elderly', 'dozing', 'sit idle'],  // Sitting on chair while rolling
+  'rolling': ['Dozing_Elderly_frame_rate_60', 'dozing elderly frame rate 60'],  // Same sitting pose while rolling
   'chairhold': ['bar hang idle', 'bar hang', 'female bow'],  // Holding pose
   'trick': ['breakdance 1990', 'breakdance', 'backflip'],
   'jump': ['jump over obstacle', 'jump', 'hop'],
@@ -246,11 +246,23 @@ export class PlayerModel {
   }
   
   /**
-   * Find a clip by checking multiple possible names (case-insensitive, normalized)
-   * Tries exact match first, then prefix match, then contains
+   * Find a clip by checking multiple possible names
+   * Priority: exact raw match > exact normalized > prefix > contains
    */
   private findClip(clips: THREE.AnimationClip[], possibleNames: string[]): THREE.AnimationClip | null {
-    // First pass: exact matches (normalized)
+    // First pass: exact raw match (case-insensitive, with or without .fbx)
+    for (const name of possibleNames) {
+      const nameLower = name.toLowerCase();
+      for (const clip of clips) {
+        const clipLower = clip.name.toLowerCase();
+        const clipNoExt = clipLower.replace(/\.fbx$/i, '');
+        if (clipLower === nameLower || clipNoExt === nameLower) {
+          return clip;
+        }
+      }
+    }
+    
+    // Second pass: exact matches (normalized)
     for (const name of possibleNames) {
       const nameNorm = this.normalizeForMatch(name);
       for (const clip of clips) {
@@ -261,7 +273,7 @@ export class PlayerModel {
       }
     }
     
-    // Second pass: clip name starts with our target name (normalized)
+    // Third pass: clip name starts with our target name (normalized)
     for (const name of possibleNames) {
       const nameNorm = this.normalizeForMatch(name);
       for (const clip of clips) {
@@ -272,7 +284,7 @@ export class PlayerModel {
       }
     }
     
-    // Third pass: our target name is contained in clip name (normalized)
+    // Fourth pass: our target name is contained in clip name (normalized)
     for (const name of possibleNames) {
       const nameNorm = this.normalizeForMatch(name);
       for (const clip of clips) {
