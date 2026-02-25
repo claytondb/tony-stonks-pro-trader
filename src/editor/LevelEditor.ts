@@ -1334,10 +1334,23 @@ export class LevelEditor {
     
     // Recreate meshes
     objects.forEach(objData => {
-      const mesh = this.createObjectMesh(objData);
+      const mesh = this.createObjectMesh(objData.type, objData.params);
       if (mesh) {
+        // Apply position/rotation/scale
+        mesh.position.set(...objData.position);
+        if (objData.rotation) {
+          mesh.rotation.set(
+            THREE.MathUtils.degToRad(objData.rotation[0]),
+            THREE.MathUtils.degToRad(objData.rotation[1]),
+            THREE.MathUtils.degToRad(objData.rotation[2])
+          );
+        }
+        if (objData.scale) {
+          mesh.scale.set(...objData.scale);
+        }
+        
         const editorObj: EditorObject = {
-          id: objData.id,
+          id: `obj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           mesh,
           data: objData
         };
@@ -1508,7 +1521,8 @@ export class LevelEditor {
       if (obj) {
         this.scene.remove(obj.mesh);
         this.objects = this.objects.filter(o => o !== obj);
-        this.level.objects = this.level.objects.filter(o => o.id !== obj.data.id);
+        const dataIdx = this.level.objects.indexOf(obj.data);
+        if (dataIdx >= 0) this.level.objects.splice(dataIdx, 1);
         this.callbacks.onObjectsChanged?.();
         this.saveUndoState();
       }
