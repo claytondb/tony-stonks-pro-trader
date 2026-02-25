@@ -2192,7 +2192,14 @@ export class Game {
     console.log(`🎬 DEBUG: Playing animation [${this.debugAnimIndex}] "${animName}"`);
     this.playerModel.play(animName, { loop: true });
     
-    // Show on screen
-    this.hud.showNotification(`Animation: ${animName}`, 2000);
+    // Show on screen via alert (temporary debug)
+    const debugDiv = document.getElementById('debug-anim') || (() => {
+      const d = document.createElement('div');
+      d.id = 'debug-anim';
+      d.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#0f0;padding:10px 20px;font-family:monospace;font-size:18px;z-index:9999;border-radius:5px;';
+      document.body.appendChild(d);
+      return d;
+    })();
+    debugDiv.textContent = `Animation: ${animName}`;
   }
 }
