@@ -210,7 +210,12 @@ export class PlayerModel {
    * Load animations from the combined GLB file
    */
   private loadAnimationsFromCombined(clips: THREE.AnimationClip[]): void {
-    console.log(`Found ${clips.length} animations in combined file:`, clips.map(c => c.name));
+    // Log ALL clips with details so we can identify the correct animations
+    console.log(`=== ALL ${clips.length} ANIMATIONS IN FBX ===`);
+    clips.forEach((clip, i) => {
+      console.log(`  [${i}] "${clip.name}" (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
+    });
+    console.log(`=== END ANIMATION LIST ===`);
     
     // Map each of our animation names to available clips
     for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
