@@ -42,26 +42,31 @@ const TONY_STONKS_ANIMATIONS: Record<AnimationName, string[]> = {
   'crash': ['falling_down', 'falling down', 'fall'],        // Correct ✓
 };
 
-// Stonks Guy (player-stonks.fbx) - 20 animations, better labeled than Tony Stonks
-// Clip names from FBX:
-// [0] Step_Forward_and_Push (0.50s), [1] slide_light (4.70s), [2] Character_output (2.27s)
-// [3] Look_Back_and_Sit (0.63s), [4] Cautious_Crouch_Walk_Forward (1.17s), [5] Dozing_Elderly (8.57s)
-// [6] Stand_to_Sit_Transition_M (2.73s), [7] Walking (1.20s), [8] Parkour_Vault_1 (4.73s)
-// [9] Charged_Spell_Cast_2 (2.10s), [10] Female_Bow_Charge (0.02s), [11] Backflip (4.77s)
-// [12] Idle_11 (2.13s), [13] Running (1.13s), [14] Jump_Over_Obstacle_1 (2.27s)
-// [15] Breakdance_1990 (1.90s), [16] falling_down (1.53s), [17] victory (0.50s)
-// [18] Parkour_Vault_with_Roll (1.03s), [19] Bar_Hang_Idle (10.83s)
+// Stonks Guy (player-stonks.fbx) - 20 animations, HEAVILY MISLABELED
+// Visual inspection results:
+// - Bar_Hang_Idle = sitting idle ← USE FOR IDLE/ROLLING
+// - slide_light = bar hang ← USE FOR CHAIRHOLD
+// - Step_Forward_and_Push = run forward pushing ✓
+// - Dozing_Elderly = victory pose
+// - falling_down = slide under chair
+// - Parkour_Vault_with_Roll = walking
+// - Jump_Over_Obstacle = stand to sit
+// - Backflip = slower stand to sit
+// - Stand_to_Sit_Transition = magic spell / throw chair
+// 
+// Unknown clips to test: Character_output, Look_Back_and_Sit, Cautious_Crouch_Walk,
+// Walking, Parkour_Vault_1, Charged_Spell_Cast_2, Idle_11, Running, Breakdance_1990, victory
 const STONKS_GUY_ANIMATIONS: Record<AnimationName, string[]> = {
-  'idle': ['Dozing_Elderly', 'dozing elderly'],                    // 8.57s sitting animation
-  'rolling': ['Dozing_Elderly', 'dozing elderly'],                 // Same sitting animation
-  'trick': ['Backflip', 'backflip'],                               // 4.77s backflip
-  'push': ['Step_Forward_and_Push', 'step forward'],               // 0.50s push
-  'standtosit': ['Stand_to_Sit_Transition', 'stand to sit'],       // 2.73s transition
-  'chairhold': ['Bar_Hang_Idle', 'bar hang'],                      // 10.83s hang (correct ✓)
-  'jump': ['Jump_Over_Obstacle', 'jump over obstacle'],            // 2.27s jump
-  'roll': ['Parkour_Vault_with_Roll', 'parkour vault'],            // 1.03s roll
-  'slide': ['slide_light', 'slide light'],                         // 4.70s slide
-  'crash': ['falling_down', 'falling down'],                       // 1.53s crash
+  'idle': ['Bar_Hang_Idle', 'bar hang idle'],                      // Actually shows: sitting idle ✓
+  'rolling': ['Bar_Hang_Idle', 'bar hang idle'],                   // Actually shows: sitting idle ✓
+  'push': ['Step_Forward_and_Push', 'step forward'],               // Correct: run forward pushing ✓
+  'chairhold': ['slide_light', 'slide light'],                     // Actually shows: bar hang
+  'trick': ['Breakdance_1990', 'breakdance'],                      // Try this - might be actual trick
+  'standtosit': ['Look_Back_and_Sit', 'look back'],                // Try this - short transition
+  'jump': ['Parkour_Vault_1', 'parkour vault 1'],                  // Try this - might be jump
+  'roll': ['Running', 'running'],                                   // Try running for roll animation
+  'slide': ['Cautious_Crouch_Walk', 'cautious crouch'],            // Try crouch for slide
+  'crash': ['Character_output', 'character output'],               // Try this - unknown, might be fall
 };
 
 // Get animation mapping for current skin
