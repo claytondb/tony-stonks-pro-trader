@@ -1335,6 +1335,38 @@ export class Game {
         break;
       }
       
+      case 'building_small':
+      case 'building_medium':
+      case 'building_large':
+      case 'building_wide': {
+        mesh = this.createBuildingMesh(data.type, data.params);
+        // Add physics collider
+        const bWidth = (data.params?.width as number) || 10;
+        const bDepth = (data.params?.depth as number) || 10;
+        const bHeight = (data.params?.height as number) || 15;
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], bHeight / 2, data.position[2]),
+          new THREE.Vector3(bWidth / 2, bHeight / 2, bDepth / 2)
+        );
+        break;
+      }
+      
+      case 'shrub_small':
+        mesh = this.createShrubMesh(0.5, 0.6);
+        break;
+        
+      case 'shrub_medium':
+        mesh = this.createShrubMesh(0.8, 1.0);
+        break;
+        
+      case 'shrub_large':
+        mesh = this.createShrubMesh(1.2, 1.5);
+        break;
+        
+      case 'tree_small':
+        mesh = this.createTreeMesh();
+        break;
+      
       default:
         // Unknown type - create placeholder cube
         const geom = new THREE.BoxGeometry(1, 1, 1);
@@ -1646,6 +1678,114 @@ export class Game {
       leg.position.set(side * (length / 2 - 0.1), 0.4, 0);
       group.add(leg);
     }
+    
+    return group;
+  }
+  
+  private createBuildingMesh(type: string, params?: Record<string, unknown>): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Default sizes based on type
+    const defaults: Record<string, { width: number; depth: number; height: number }> = {
+      'building_small': { width: 10, depth: 10, height: 15 },
+      'building_medium': { width: 15, depth: 15, height: 30 },
+      'building_large': { width: 20, depth: 20, height: 50 },
+      'building_wide': { width: 30, depth: 15, height: 12 },
+    };
+    
+    const def = defaults[type] || defaults['building_small'];
+    const width = (params?.width as number) || def.width;
+    const depth = (params?.depth as number) || def.depth;
+    const height = (params?.height as number) || def.height;
+    
+    // Building body
+    const buildingMat = new THREE.MeshStandardMaterial({ 
+      color: 0x808090,
+      roughness: 0.7,
+      metalness: 0.1
+    });
+    const bodyGeom = new THREE.BoxGeometry(width, height, depth);
+    const body = new THREE.Mesh(bodyGeom, buildingMat);
+    body.position.y = height / 2;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+    
+    // Windows (simple stripes)
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: 0x4488aa,
+      roughness: 0.1,
+      metalness: 0.8
+    });
+    
+    const windowRows = Math.floor(height / 3);
+    const windowCols = Math.floor(width / 3);
+    
+    for (let row = 0; row < windowRows; row++) {
+      for (let col = 0; col < windowCols; col++) {
+        const windowGeom = new THREE.BoxGeometry(1.5, 2, 0.1);
+        const windowMesh = new THREE.Mesh(windowGeom, windowMat);
+        windowMesh.position.set(
+          -width / 2 + 1.5 + col * 3,
+          2 + row * 3,
+          depth / 2 + 0.05
+        );
+        group.add(windowMesh);
+        
+        // Back side
+        const windowBack = windowMesh.clone();
+        windowBack.position.z = -depth / 2 - 0.05;
+        group.add(windowBack);
+      }
+    }
+    
+    return group;
+  }
+  
+  private createShrubMesh(radius: number, height: number): THREE.Group {
+    const group = new THREE.Group();
+    
+    const leafMat = new THREE.MeshStandardMaterial({
+      color: 0x228833,
+      roughness: 0.8
+    });
+    
+    // Create multiple spheres for organic look
+    const numBalls = 5;
+    for (let i = 0; i < numBalls; i++) {
+      const r = radius * (0.6 + Math.random() * 0.4);
+      const sphereGeom = new THREE.SphereGeometry(r, 8, 6);
+      const sphere = new THREE.Mesh(sphereGeom, leafMat);
+      sphere.position.set(
+        (Math.random() - 0.5) * radius,
+        height * 0.5 + (Math.random() - 0.5) * height * 0.3,
+        (Math.random() - 0.5) * radius
+      );
+      sphere.castShadow = true;
+      group.add(sphere);
+    }
+    
+    return group;
+  }
+  
+  private createTreeMesh(): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Trunk
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.9 });
+    const trunkGeom = new THREE.CylinderGeometry(0.15, 0.2, 2, 8);
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 1;
+    trunk.castShadow = true;
+    group.add(trunk);
+    
+    // Foliage
+    const leafMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.8 });
+    const foliageGeom = new THREE.ConeGeometry(1.5, 3, 8);
+    const foliage = new THREE.Mesh(foliageGeom, leafMat);
+    foliage.position.y = 3.5;
+    foliage.castShadow = true;
+    group.add(foliage);
     
     return group;
   }

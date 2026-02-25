@@ -22,6 +22,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   let game: Game | null = null;
   let gameStateManager: GameStateManager | null = null;
   let editorUI: EditorUI | null = null;
+  let isPlayTesting: boolean = false;
+  let playTestLevel: EditorLevelData | null = null;
   
   // Get loading UI elements
   const progressBar = document.getElementById('progress-bar');
@@ -71,6 +73,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (to === 'editor') {
           // Hide game canvas when in editor (editor has its own canvas)
           canvas.style.display = 'none';
+          
+          // Recreate editor UI if returning from play test
+          if (!editorUI) {
+            editorUI = new EditorUI(uiOverlay, {
+              onExit: () => {
+                isPlayTesting = false;
+                playTestLevel = null;
+                gameStateManager?.setState('menu');
+              },
+              
+              onPlayTest: (level: EditorLevelData) => {
+                isPlayTesting = true;
+                playTestLevel = level;
+                const gameLevel = EditorStorage.toGameLevel(level);
+                game?.loadCustomLevel(gameLevel);
+                game?.start();
+                gameStateManager?.setState('playing');
+              }
+            });
+            
+            // Load the level we were editing
+            if (playTestLevel) {
+              editorUI.loadLevel(playTestLevel);
+            }
+          }
         }
       },
       
@@ -97,6 +124,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       onQuit: () => {
         game?.stop();
+        
+        // If play testing, return to editor
+        if (isPlayTesting && playTestLevel) {
+          isPlayTesting = false;
+          gameStateManager?.setState('editor');
+          // Editor will be recreated by state change handler
+        }
       },
       
       onSkinChange: async (skin) => {
@@ -111,6 +145,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           },
           
           onPlayTest: (level: EditorLevelData) => {
+            // Store level for returning to editor
+            isPlayTesting = true;
+            playTestLevel = level;
+            
             // Convert to game level and play
             const gameLevel = EditorStorage.toGameLevel(level);
             

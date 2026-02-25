@@ -967,6 +967,12 @@ export class EditorUI {
     if (statusText) statusText.textContent = text;
   }
   
+  loadLevel(level: EditorLevelData): void {
+    this.editor.loadLevel(level);
+    this.updatePropertyPanel();
+    this.setStatus(`Loaded: ${level.name}`);
+  }
+  
   dispose(): void {
     this.editor.dispose();
     this.uiRoot.remove();
