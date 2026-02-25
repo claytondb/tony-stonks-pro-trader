@@ -237,6 +237,12 @@ export class PlayerModel {
         console.warn(`✗ Animation not found in combined file: ${animName} (looked for: ${possibleNames.join(', ')})`);
       }
     }
+    
+    // Debug: verify what's actually stored
+    console.log('=== FINAL ANIMATION MAP ===');
+    this.animations.forEach((anim, name) => {
+      console.log(`  ${name} -> "${anim.clip.name}" (${anim.clip.duration.toFixed(2)}s)`);
+    });
   }
   
   /**
@@ -363,6 +369,9 @@ export class PlayerModel {
         return;
       }
     }
+    
+    // Debug: log which clip is being played
+    console.log(`▶️ Playing "${name}" -> clip: "${anim.clip.name}" (duration: ${anim.clip.duration.toFixed(2)}s, tracks: ${anim.clip.tracks.length})`);
     
     // Don't restart same animation
     if (this.currentAnimation === name && anim.action.isRunning()) {
