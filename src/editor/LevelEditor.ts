@@ -31,7 +31,6 @@ export class LevelEditor {
   private orbitControls: OrbitControls;
   private transformControls: TransformControls;
   private viewCubeContainer: HTMLElement | null = null;
-  private container: HTMLElement | null = null;
   
   private level: EditorLevelData;
   private objects: EditorObject[] = [];
@@ -67,9 +66,6 @@ export class LevelEditor {
     this.callbacks = callbacks;
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
-    
-    // Store container reference
-    this.container = container;
     
     // Create scene
     this.scene = new THREE.Scene();
