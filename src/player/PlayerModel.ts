@@ -25,21 +25,59 @@ interface LoadedAnimation {
   action: THREE.AnimationAction;
 }
 
-// Map animation names to expected clip names in the combined file
-// NOTE: FBX has heavily mislabeled animations from Meshy.ai export!
-// Mapping based on visual inspection of what each clip ACTUALLY shows:
-const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
+// Per-skin animation mappings (FBX files have different/mislabeled animations)
+// Mapping based on visual inspection of what each clip ACTUALLY shows
+
+// Tony Stonks (player-combined.fbx) - heavily mislabeled from Meshy.ai
+const TONY_STONKS_ANIMATIONS: Record<AnimationName, string[]> = {
   'idle': ['Breakdance_1990', 'breakdance 1990'],           // Actually shows: sitting idle ✓
   'rolling': ['Breakdance_1990', 'breakdance 1990'],        // Actually shows: sitting idle ✓
   'trick': ['Dozing_Elderly', 'dozing elderly'],            // Actually shows: backflip
   'push': ['Bar_Hang_Idle', 'bar hang idle'],               // Actually shows: crouching/pushing
-  'standtosit': ['Bar_Hang_Idle', 'bar hang idle'],         // Use pushing pose as transition (t-pose was broken)
+  'standtosit': ['Bar_Hang_Idle', 'bar hang idle'],         // Use pushing pose as transition
   'chairhold': ['slide_light', 'slide light'],              // Actually shows: victory/holding pose
-  'jump': ['Jump_Over_Obstacle', 'jump over obstacle'],     // Shows: parkour jump (keep it)
-  'roll': ['Parkour_Vault', 'parkour vault'],               // Actually shows: breakdancing (use for roll trick)
-  'slide': ['Step_Forward_and_Push', 'step forward'],       // Actually shows: parkour push (slide motion)
+  'jump': ['Jump_Over_Obstacle', 'jump over obstacle'],     // Shows: parkour jump
+  'roll': ['Parkour_Vault', 'parkour vault'],               // Actually shows: breakdancing
+  'slide': ['Step_Forward_and_Push', 'step forward'],       // Actually shows: parkour push
   'crash': ['falling_down', 'falling down', 'fall'],        // Correct ✓
 };
+
+// Stonks Guy (player-stonks.fbx) - different animations, also mislabeled
+// Based on David's visual inspection:
+// - Crash shows: slide on ground (wrong)
+// - Slide shows: run and push (wrong)
+// - Roll shows: careful push (wrong)
+// - Jump shows: stand to sit (wrong)
+// - Trick shows: victory (wrong)
+// - Chairhold shows: barhang (correct)
+// - Rolling shows: standing idle (wrong)
+// - Standtosit shows: stand to sit (correct)
+// - Push shows: stand to sit (wrong)
+// - Idle shows: standing idle (wrong for gameplay)
+// TODO: Need to identify correct clip names from console log
+const STONKS_GUY_ANIMATIONS: Record<AnimationName, string[]> = {
+  'idle': ['sitting', 'sit idle', 'sit', 'seated'],         // Need sitting animation
+  'rolling': ['sitting', 'sit idle', 'sit', 'seated'],      // Need sitting animation  
+  'trick': ['flip', 'backflip', 'trick'],                   // Need trick animation
+  'push': ['push', 'run', 'step forward'],                  // Need push animation
+  'standtosit': ['stand to sit', 'standtosit'],             // Correct ✓
+  'chairhold': ['bar hang', 'barhang', 'hang'],             // Correct ✓
+  'jump': ['jump', 'hop', 'leap'],                          // Need jump animation
+  'roll': ['roll', 'parkour', 'vault'],                     // Need roll animation
+  'slide': ['slide', 'duck', 'crouch'],                     // Need slide animation
+  'crash': ['fall', 'falling', 'crash', 'tumble'],          // Need crash animation
+};
+
+// Get animation mapping for current skin
+function getAnimationMappings(skin: PlayerSkin): Record<AnimationName, string[]> {
+  switch (skin) {
+    case 'stonks_guy':
+      return STONKS_GUY_ANIMATIONS;
+    case 'tony_stonks':
+    default:
+      return TONY_STONKS_ANIMATIONS;
+  }
+}
 
 export class PlayerModel {
   private model: THREE.Group | null = null;
@@ -212,21 +250,24 @@ export class PlayerModel {
    */
   private loadAnimationsFromCombined(clips: THREE.AnimationClip[]): void {
     // Log ALL clips with details so we can identify the correct animations
-    console.log(`=== ALL ${clips.length} ANIMATIONS IN FBX ===`);
+    console.log(`=== ALL ${clips.length} ANIMATIONS IN FBX (skin: ${this.currentSkin}) ===`);
     clips.forEach((clip, i) => {
       console.log(`  [${i}] "${clip.name}" (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
     });
     console.log(`=== END ANIMATION LIST ===`);
     
+    // Get skin-specific animation mappings
+    const animationMappings = getAnimationMappings(this.currentSkin);
+    
     // Debug: show what we're looking for
-    console.log('=== ANIMATION MAPPINGS WE ARE SEARCHING FOR ===');
-    for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
+    console.log(`=== ANIMATION MAPPINGS FOR ${this.currentSkin} ===`);
+    for (const [animName, possibleNames] of Object.entries(animationMappings)) {
       console.log(`  ${animName}: looking for ${JSON.stringify(possibleNames)}`);
     }
     console.log('=== END MAPPINGS ===');
     
     // Map each of our animation names to available clips
-    for (const [animName, possibleNames] of Object.entries(ANIMATION_CLIP_NAMES)) {
+    for (const [animName, possibleNames] of Object.entries(animationMappings)) {
       console.log(`\nSearching for: ${animName}...`);
       const clip = this.findClip(clips, possibleNames, animName);
       
