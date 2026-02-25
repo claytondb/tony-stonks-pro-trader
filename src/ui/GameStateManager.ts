@@ -150,22 +150,60 @@ class PlayerPreview {
     
     if (!this.model) return;
     
-    this.model.scale.set(scale, scale, scale);
-    this.model.position.set(0, 0, 0);
+    // Larger scale for preview visibility
+    const previewScale = scale * 1.5;
+    this.model.scale.set(previewScale, previewScale, previewScale);
+    this.model.position.set(0, -0.5, 0);  // Lower to fit in view
     this.model.rotation.y = Math.PI; // Face camera
     
     this.scene.add(this.model);
     
-    // Play idle animation if available
+    // Reduce shininess - make materials more matte
+    this.model.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        if (mesh.material) {
+          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          materials.forEach(mat => {
+            if ((mat as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+              const stdMat = mat as THREE.MeshStandardMaterial;
+              stdMat.metalness = 0.0;
+              stdMat.roughness = 0.8;
+            }
+          });
+        }
+      }
+    });
+    
+    // Play standing idle animation if available
     if (this.model.animations && this.model.animations.length > 0) {
+      console.log('Preview animations:', this.model.animations.map(c => c.name));
+      
       this.mixer = new THREE.AnimationMixer(this.model);
-      // Find idle animation
-      const idleClip = this.model.animations.find(clip => 
-        clip.name.toLowerCase().includes('idle') || 
-        clip.name.toLowerCase().includes('dozing')
-      ) || this.model.animations[0];
+      
+      // Find "idle 11" specifically - the standing idle animation
+      let idleClip = this.model.animations.find(clip => 
+        clip.name.toLowerCase() === 'idle 11'
+      );
+      
+      // Fallback to any clip with "idle" that's not dozing/sitting
+      if (!idleClip) {
+        idleClip = this.model.animations.find(clip => {
+          const name = clip.name.toLowerCase();
+          return name.includes('idle') && 
+                 !name.includes('dozing') && 
+                 !name.includes('sit') &&
+                 !name.includes('bar hang');
+        });
+      }
+      
+      // Last resort - just use first animation
+      if (!idleClip) {
+        idleClip = this.model.animations[0];
+      }
       
       if (idleClip) {
+        console.log('Preview playing animation:', idleClip.name);
         const action = this.mixer.clipAction(idleClip);
         action.play();
       }
