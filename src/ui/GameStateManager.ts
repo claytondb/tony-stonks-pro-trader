@@ -156,16 +156,31 @@ class PlayerPreview {
     
     this.scene.add(this.model);
     
-    // Play idle animation if available
+    // Play standing idle animation if available
     if (this.model.animations && this.model.animations.length > 0) {
       this.mixer = new THREE.AnimationMixer(this.model);
-      // Find idle animation
-      const idleClip = this.model.animations.find(clip => 
-        clip.name.toLowerCase().includes('idle') || 
-        clip.name.toLowerCase().includes('dozing')
-      ) || this.model.animations[0];
+      
+      // Find standing idle animation based on skin
+      // FBX files have mislabeled animations, so we need specific names
+      const standingIdleNames = skin === 'stonks_guy'
+        ? ['idle_11', 'idle 11', 'standing', 'idle']  // Stonks Guy: Idle_11 is standing idle
+        : ['idle_11', 'idle 11', 'standing', 'victory'];  // Tony Stonks: try Idle_11 or victory pose
+      
+      let idleClip = null;
+      for (const name of standingIdleNames) {
+        idleClip = this.model.animations.find(clip => 
+          clip.name.toLowerCase().includes(name)
+        );
+        if (idleClip) break;
+      }
+      
+      // Fallback to first animation if nothing found
+      if (!idleClip) {
+        idleClip = this.model.animations[0];
+      }
       
       if (idleClip) {
+        console.log(`Preview playing: ${idleClip.name}`);
         const action = this.mixer.clipAction(idleClip);
         action.play();
       }
