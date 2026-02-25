@@ -85,6 +85,9 @@ export class Game {
   private lastTrickTime = 0;
   private spinRotation = 0;
   
+  // Debug: animation cycling
+  private debugAnimIndex = 0;
+  
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
   }
@@ -143,6 +146,13 @@ export class Game {
       
       // Handle window resize
       window.addEventListener('resize', this.onResize.bind(this));
+      
+      // Debug: Press '[' and ']' to cycle through animations
+      window.addEventListener('keydown', (e) => {
+        if (e.key === '[' || e.key === ']') {
+          this.debugCycleAnimation(e.key === ']' ? 1 : -1);
+        }
+      });
       
       report(100, 'Ready!');
       console.log('Game.init() complete!');
@@ -2163,5 +2173,26 @@ export class Game {
     this.camera.updateProjectionMatrix();
     
     this.renderer.setSize(width, height);
+  }
+  
+  /**
+   * Debug: Cycle through all loaded animations to identify them visually
+   */
+  private debugCycleAnimation(direction: number): void {
+    if (!this.playerModel) return;
+    
+    const animNames: (import('../player/PlayerModel').AnimationName)[] = [
+      'idle', 'push', 'standtosit', 'rolling', 'chairhold', 
+      'trick', 'jump', 'roll', 'slide', 'crash'
+    ];
+    
+    this.debugAnimIndex = (this.debugAnimIndex + direction + animNames.length) % animNames.length;
+    const animName = animNames[this.debugAnimIndex];
+    
+    console.log(`🎬 DEBUG: Playing animation [${this.debugAnimIndex}] "${animName}"`);
+    this.playerModel.play(animName, { loop: true });
+    
+    // Show on screen
+    this.hud.showNotification(`Animation: ${animName}`, 2000);
   }
 }
