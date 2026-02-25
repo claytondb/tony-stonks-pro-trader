@@ -26,18 +26,19 @@ interface LoadedAnimation {
 }
 
 // Map animation names to expected clip names in the combined file
-// NOTE: FBX has mislabeled animations! slide_light (8.57s) is actually the sitting pose
+// NOTE: FBX has heavily mislabeled animations from Meshy.ai export!
+// Mapping based on visual inspection of what each clip ACTUALLY shows:
 const ANIMATION_CLIP_NAMES: Record<AnimationName, string[]> = {
-  'idle': ['slide_light_frame_rate_60', 'slide light'],  // Actually the sitting/dozing animation (8.57s)
-  'push': ['step forward and push', 'step forward', 'push'],
-  'standtosit': ['stand to sit transition', 'stand to sit', 'look back and sit', 'sitting down'],
-  'rolling': ['slide_light_frame_rate_60', 'slide light'],  // Same sitting pose while rolling
-  'chairhold': ['bar hang idle', 'bar hang', 'female bow'],  // Holding pose
-  'trick': ['breakdance 1990', 'breakdance', 'backflip'],
-  'jump': ['jump over obstacle', 'jump', 'hop'],
-  'roll': ['parkour vault', 'vault', 'roll'],
-  'slide': ['Dozing_Elderly_frame_rate_60', 'dozing elderly'],  // Swapped - this was mislabeled
-  'crash': ['falling down', 'falling', 'fall'],
+  'idle': ['Breakdance_1990', 'breakdance 1990'],           // Actually shows: sitting idle ✓
+  'rolling': ['Breakdance_1990', 'breakdance 1990'],        // Actually shows: sitting idle ✓
+  'trick': ['Dozing_Elderly', 'dozing elderly'],            // Actually shows: backflip
+  'push': ['Bar_Hang_Idle', 'bar hang idle'],               // Actually shows: crouching/pushing
+  'standtosit': ['Bar_Hang_Idle', 'bar hang idle'],         // Use pushing pose as transition (t-pose was broken)
+  'chairhold': ['slide_light', 'slide light'],              // Actually shows: victory/holding pose
+  'jump': ['Jump_Over_Obstacle', 'jump over obstacle'],     // Shows: parkour jump (keep it)
+  'roll': ['Parkour_Vault', 'parkour vault'],               // Actually shows: breakdancing (use for roll trick)
+  'slide': ['Step_Forward_and_Push', 'step forward'],       // Actually shows: parkour push (slide motion)
+  'crash': ['falling_down', 'falling down', 'fall'],        // Correct ✓
 };
 
 export class PlayerModel {
