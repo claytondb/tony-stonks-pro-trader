@@ -12,7 +12,9 @@ export interface EditorLevelData {
   chapter: number;
   
   // Environment
-  skyColor: string;
+  skyColor: string;        // Legacy single color (fallback)
+  skyColorTop: string;     // Gradient top color
+  skyColorBottom: string;  // Gradient bottom color
   fogColor: string;
   fogNear: number;
   fogFar: number;
@@ -62,6 +64,8 @@ export class EditorStorage {
       chapter: 99, // Custom levels are chapter 99
       
       skyColor: '#87CEEB',
+      skyColorTop: '#1e90ff',    // Bright blue at top
+      skyColorBottom: '#87CEEB', // Light blue at horizon
       fogColor: '#a0a0a0',
       fogNear: 30,
       fogFar: 100,

@@ -5,6 +5,7 @@
 
 import { LevelEditor, EditorObject } from './LevelEditor';
 import { EditorStorage, EditorLevelData, OBJECT_CATEGORIES } from './EditorStorage';
+import { SKY_PRESETS } from '../utils/SkyGradient';
 
 export interface EditorUICallbacks {
   onExit?: () => void;
@@ -936,19 +937,20 @@ export class EditorUI {
         <div class="prop-label">Sky Preset</div>
         <select class="prop-input" id="sky-preset">
           <option value="">Custom</option>
-          <option value="#87CEEB">☀️ Clear Day</option>
-          <option value="#1a1a2e">🌙 Night</option>
-          <option value="#ff7b00">🌅 Sunset</option>
-          <option value="#ff9a9e">🌸 Pink Dusk</option>
-          <option value="#2c3e50">🌧️ Overcast</option>
-          <option value="#0f0c29">🌌 Midnight</option>
-          <option value="#bdc3c7">☁️ Cloudy</option>
+          ${Object.entries(SKY_PRESETS).map(([key, preset]) => 
+            `<option value="${key}">${preset.icon} ${preset.name}</option>`
+          ).join('')}
         </select>
       </div>
       
       <div class="prop-group">
-        <div class="prop-label">Sky Color</div>
-        <input type="color" class="prop-color" id="level-sky-color" value="${level.skyColor}">
+        <div class="prop-label">Sky Top</div>
+        <input type="color" class="prop-color" id="level-sky-top" value="${level.skyColorTop || '#1e90ff'}">
+      </div>
+      
+      <div class="prop-group">
+        <div class="prop-label">Sky Bottom</div>
+        <input type="color" class="prop-color" id="level-sky-bottom" value="${level.skyColorBottom || '#87ceeb'}">
       </div>
       
       <div class="prop-group">
@@ -1031,13 +1033,27 @@ export class EditorUI {
       this.setStatus('Click to place spawn point...');
     });
     
+    // Sky colors
+    const skyTopColor = container.querySelector('#level-sky-top') as HTMLInputElement;
+    const skyBottomColor = container.querySelector('#level-sky-bottom') as HTMLInputElement;
+    
+    skyTopColor?.addEventListener('change', () => {
+      this.editor.setLevelProperty('skyColorTop', skyTopColor.value);
+    });
+    
+    skyBottomColor?.addEventListener('change', () => {
+      this.editor.setLevelProperty('skyColorBottom', skyBottomColor.value);
+    });
+    
     // Sky preset
     const skyPreset = container.querySelector('#sky-preset') as HTMLSelectElement;
-    const skyColor = container.querySelector('#level-sky-color') as HTMLInputElement;
     skyPreset?.addEventListener('change', () => {
-      if (skyPreset.value) {
-        skyColor.value = skyPreset.value;
-        this.editor.setLevelProperty('skyColor', skyPreset.value);
+      if (skyPreset.value && SKY_PRESETS[skyPreset.value]) {
+        const preset = SKY_PRESETS[skyPreset.value];
+        skyTopColor.value = preset.top;
+        skyBottomColor.value = preset.bottom;
+        this.editor.setLevelProperty('skyColorTop', preset.top);
+        this.editor.setLevelProperty('skyColorBottom', preset.bottom);
       }
     });
     

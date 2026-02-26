@@ -8,6 +8,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { LevelObject, ObjectType } from '../levels/LevelData';
 import { EditorLevelData, EditorStorage, ObjectPaletteItem } from './EditorStorage';
+import { SkyGradient } from '../utils/SkyGradient';
 
 export interface EditorCallbacks {
   onObjectSelected?: (object: EditorObject | null) => void;
@@ -62,6 +63,9 @@ export class LevelEditor {
   
   // Ground plane for raycasting
   private groundPlane: THREE.Mesh;
+  
+  // Sky gradient dome
+  private skyGradient: SkyGradient;
   
   // Spawn point marker
   private spawnMarker: THREE.Object3D | null = null;
@@ -161,6 +165,10 @@ export class LevelEditor {
     this.groundPlane.name = 'ground-plane';
     this.groundPlane.receiveShadow = true;
     this.scene.add(this.groundPlane);
+    
+    // Create sky gradient dome
+    this.skyGradient = new SkyGradient();
+    this.scene.add(this.skyGradient.getMesh());
     
     // Add lights
     this.setupLights();
@@ -1436,8 +1444,13 @@ export class LevelEditor {
   }
   
   updateEnvironment(): void {
-    // Update sky color
-    this.scene.background = new THREE.Color(this.level.skyColor);
+    // Update sky gradient
+    const topColor = this.level.skyColorTop || this.level.skyColor || '#1e90ff';
+    const bottomColor = this.level.skyColorBottom || this.level.skyColor || '#87ceeb';
+    this.skyGradient.setColors(topColor, bottomColor);
+    
+    // Clear any solid background color (use gradient instead)
+    this.scene.background = null;
     
     // Update grid size
     this.scene.remove(this.gridHelper);
@@ -1478,7 +1491,7 @@ export class LevelEditor {
   setLevelProperty<K extends keyof EditorLevelData>(key: K, value: EditorLevelData[K]): void {
     this.level[key] = value;
     
-    if (['skyColor', 'groundColor', 'groundSize'].includes(key as string)) {
+    if (['skyColor', 'skyColorTop', 'skyColorBottom', 'groundColor', 'groundSize'].includes(key as string)) {
       this.updateEnvironment();
     }
     

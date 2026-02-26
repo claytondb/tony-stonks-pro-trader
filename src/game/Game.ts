@@ -17,6 +17,7 @@ import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
 import { GrindParticles } from '../effects/GrindParticles';
 import { LevelData, LevelObject } from '../levels/LevelData';
+import { SkyGradient } from '../utils/SkyGradient';
 
 export class Game {
   // Core
@@ -43,6 +44,7 @@ export class Game {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private renderer!: THREE.WebGLRenderer;
+  private skyGradient!: SkyGradient;
   
   // Systems
   private input!: InputManager;
@@ -181,8 +183,12 @@ export class Game {
   
   private initScene(): void {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x87CEEB);
+    this.scene.background = null; // Use sky gradient instead of solid color
     this.scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
+    
+    // Create sky gradient dome
+    this.skyGradient = new SkyGradient();
+    this.scene.add(this.skyGradient.getMesh());
     
     // Camera
     this.camera = new THREE.PerspectiveCamera(
@@ -1094,8 +1100,12 @@ export class Game {
     // Clear existing level objects
     this.clearLevelObjects();
     
-    // Update environment settings
-    this.scene.background = new THREE.Color(level.skyColor);
+    // Update environment settings - sky gradient
+    const skyTop = (level as any).skyColorTop || level.skyColor || '#1e90ff';
+    const skyBottom = (level as any).skyColorBottom || level.skyColor || '#87ceeb';
+    this.skyGradient.setColors(skyTop, skyBottom);
+    this.scene.background = null; // Use gradient, not solid color
+    
     if (level.fogColor) {
       this.scene.fog = new THREE.Fog(level.fogColor, level.fogNear || 50, level.fogFar || 200);
     }
