@@ -1066,6 +1066,16 @@ export class GameStateManager {
             cursor: pointer;
           ">RETRY</button>
           
+          <button class="pause-btn" data-action="controls" style="
+            width: 200px;
+            padding: 15px;
+            font-size: 18px;
+            background: #333;
+            border: 3px solid #555;
+            color: #fff;
+            cursor: pointer;
+          ">CONTROLS</button>
+          
           <button class="pause-btn" data-action="quit" style="
             width: 200px;
             padding: 15px;
@@ -1091,12 +1101,113 @@ export class GameStateManager {
             this.callbacks.onRetry?.();
             this.setState('playing');
             break;
+          case 'controls':
+            this.showControlsOverlay();
+            break;
           case 'quit':
             this.callbacks.onQuit?.();
             this.setState('menu');
             break;
         }
       });
+    });
+  }
+  
+  private showControlsOverlay(): void {
+    // Create controls overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'controls-overlay';
+    overlay.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.95);
+      z-index: 1000;
+      pointer-events: auto;
+    `;
+    
+    overlay.innerHTML = `
+      <div style="
+        font-size: 36px;
+        font-weight: bold;
+        color: #00FF88;
+        margin-bottom: 30px;
+        font-family: 'Kanit', sans-serif;
+      ">CONTROLS</div>
+      
+      <div style="
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px 60px;
+        font-family: 'Kanit', sans-serif;
+        max-width: 700px;
+      ">
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">W</div>
+        <div style="color: #fff; font-size: 16px;">Push Forward</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">S</div>
+        <div style="color: #fff; font-size: 16px;">Brake</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">A / D</div>
+        <div style="color: #fff; font-size: 16px;">Turn Left / Right</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">SPACE</div>
+        <div style="color: #fff; font-size: 16px;">Jump (Ollie)</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">↑ near rail</div>
+        <div style="color: #fff; font-size: 16px;">Grind</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">← + W/A/S/D</div>
+        <div style="color: #fff; font-size: 16px;">Flip Tricks (in air)</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">→ + W/A/S/D</div>
+        <div style="color: #fff; font-size: 16px;">Grab Tricks (in air)</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">Q / E</div>
+        <div style="color: #fff; font-size: 16px;">Spin Left / Right (in air)</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">Mouse Drag</div>
+        <div style="color: #fff; font-size: 16px;">Rotate Camera</div>
+        
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">ESC</div>
+        <div style="color: #fff; font-size: 16px;">Pause</div>
+      </div>
+      
+      <div style="
+        margin-top: 20px;
+        padding: 15px 30px;
+        background: #222;
+        border-radius: 8px;
+        color: #888;
+        font-size: 14px;
+        text-align: center;
+      ">
+        💡 Chain tricks together for combo multipliers!<br>
+        Land safely to bank your points.
+      </div>
+      
+      <button id="close-controls" style="
+        margin-top: 30px;
+        padding: 15px 50px;
+        font-size: 18px;
+        background: #00AA66;
+        border: 3px solid #00FF88;
+        color: #fff;
+        cursor: pointer;
+        font-family: 'Kanit', sans-serif;
+      ">BACK</button>
+    `;
+    
+    this.uiContainer.appendChild(overlay);
+    
+    overlay.querySelector('#close-controls')?.addEventListener('click', () => {
+      overlay.remove();
     });
   }
   
