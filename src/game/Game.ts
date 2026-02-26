@@ -16,7 +16,7 @@ import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
 import { GrindParticles } from '../effects/GrindParticles';
-import { LevelData, LevelObject } from '../levels/LevelData';
+import { LevelData, LevelObject, getLevelById } from '../levels/LevelData';
 import { SkyGradient } from '../utils/SkyGradient';
 
 export class Game {
@@ -1021,44 +1021,16 @@ export class Game {
    */
   loadLevel(levelId: string): void {
     console.log(`Loading level: ${levelId}`);
-    this.currentLevelId = levelId;
-    this.levelTime = 0;
     
-    // Reset player state
-    this.specialMeter = 0;
-    this.grindBalance = 0.5;
-    this.manualBalance = 0.5;
-    this.spinRotation = 0;
-    this.playerState = {
-      isGrounded: true,
-      isAirborne: false,
-      isGrinding: false,
-      isManualing: false,
-      hasSpecial: false,
-      airTime: 0
-    };
-    
-    // Reset mount state - start standing behind chair
-    this.isMounted = false;
-    this.animState = 'standing';
-    this.updatePlayerMountPosition();
-    if (this.playerModel) {
-      this.playerModel.play('idle');
+    // Get level data from built-in levels
+    const levelData = getLevelById(levelId);
+    if (!levelData) {
+      console.error(`Level not found: ${levelId}`);
+      return;
     }
     
-    // Reset combo
-    this.comboSystem.reset();
-    
-    // For now, just reset player position
-    // TODO: Use LevelManager to load proper level
-    if (this.chairBody) {
-      this.physics.setPosition(this.chairBody, new THREE.Vector3(0, 0.5, 5));
-      this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
-      this.physics.setRotationY(this.chairBody, 0);
-    }
-    
-    // Reset HUD
-    this.hud?.reset();
+    // Use the full level loading logic
+    this.loadCustomLevel(levelData);
   }
   
   getCurrentLevelId(): string {
