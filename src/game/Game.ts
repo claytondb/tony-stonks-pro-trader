@@ -1127,6 +1127,9 @@ export class Game {
     
     // Clear grind system rails
     this.grindSystem.clearRails();
+    
+    // Clear physics colliders from previous level
+    this.physics.clearStaticBodies();
   }
   
   /**

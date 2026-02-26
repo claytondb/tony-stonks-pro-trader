@@ -9,6 +9,7 @@ import * as THREE from 'three';
 export class PhysicsWorld {
   private world!: RAPIER.World;
   private initialized = false;
+  private staticBodies: RAPIER.RigidBody[] = [];  // Track static bodies for cleanup
   
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -111,8 +112,136 @@ export class PhysicsWorld {
     ).setFriction(0.2);  // Low friction for smooth sliding
     
     this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
     
     return body;
+  }
+  
+  /**
+   * Create a static ramp collider (triangular prism for quarter pipes, ramps)
+   */
+  createStaticRamp(
+    position: THREE.Vector3,
+    width: number,
+    height: number,
+    depth: number,
+    rotation?: THREE.Euler
+  ): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(position.x, position.y, position.z);
+    
+    if (rotation) {
+      const quat = new THREE.Quaternion().setFromEuler(rotation);
+      bodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    }
+    
+    const body = this.world.createRigidBody(bodyDesc);
+    
+    // Create triangular prism vertices for ramp
+    // The ramp goes from (0,0) up to (depth, height)
+    const vertices = new Float32Array([
+      // Front face (triangle)
+      -width/2, 0, 0,
+      width/2, 0, 0,
+      width/2, height, depth,
+      -width/2, height, depth,
+      // Back bottom edge
+      -width/2, 0, depth,
+      width/2, 0, depth,
+    ]);
+    
+    const indices = new Uint32Array([
+      // Front triangle
+      0, 1, 2,
+      0, 2, 3,
+      // Back triangle  
+      4, 5, 1,
+      4, 1, 0,
+      // Top face
+      3, 2, 5,
+      3, 5, 4,
+      // Left face
+      0, 3, 4,
+      // Right face
+      1, 5, 2,
+      // Bottom face
+      0, 4, 5,
+      0, 5, 1,
+    ]);
+    
+    const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
+      .setFriction(0.3);
+    
+    this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
+    
+    return body;
+  }
+  
+  /**
+   * Create a curved quarter pipe collider (approximated with segments)
+   */
+  createQuarterPipeCollider(
+    position: THREE.Vector3,
+    radius: number,
+    width: number,
+    segments: number = 8,
+    rotation?: THREE.Euler
+  ): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(position.x, position.y, position.z);
+    
+    if (rotation) {
+      const quat = new THREE.Quaternion().setFromEuler(rotation);
+      bodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    }
+    
+    const body = this.world.createRigidBody(bodyDesc);
+    
+    // Generate curved surface vertices
+    const vertices: number[] = [];
+    const indices: number[] = [];
+    
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI / 2;
+      const x = radius - Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+      
+      // Two vertices per segment (left and right side)
+      vertices.push(-width/2, y, x);
+      vertices.push(width/2, y, x);
+    }
+    
+    // Create triangles between segments
+    for (let i = 0; i < segments; i++) {
+      const bl = i * 2;
+      const br = i * 2 + 1;
+      const tl = (i + 1) * 2;
+      const tr = (i + 1) * 2 + 1;
+      
+      indices.push(bl, br, tr);
+      indices.push(bl, tr, tl);
+    }
+    
+    const colliderDesc = RAPIER.ColliderDesc.trimesh(
+      new Float32Array(vertices),
+      new Uint32Array(indices)
+    ).setFriction(0.3);
+    
+    this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
+    
+    return body;
+  }
+  
+  /**
+   * Clear all static bodies (for level reload)
+   */
+  clearStaticBodies(): void {
+    for (const body of this.staticBodies) {
+      this.world.removeRigidBody(body);
+    }
+    this.staticBodies = [];
   }
   
   /**
