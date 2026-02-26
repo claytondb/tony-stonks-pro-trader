@@ -1143,19 +1143,178 @@ export class Game {
   }
   
   /**
-   * Load objects from level data
+   * Load objects from level data with instancing optimization
    */
   private loadLevelObjects(objects: LevelObject[], groundSize: number, groundColor: string = '#555555'): void {
     // Create ground for the level
     this.createLevelGround(groundSize, groundColor);
     
-    // Create each object
+    // Types that can be instanced (decorative objects with simple/no physics)
+    const instanceableTypes = new Set([
+      'shrub_small', 'shrub_medium', 'shrub_large', 
+      'tree_small', 'cone', 'trash_can', 'planter'
+    ]);
+    
+    // Group objects by type for instancing
+    const instanceGroups = new Map<string, LevelObject[]>();
+    const regularObjects: LevelObject[] = [];
+    
     for (const objData of objects) {
+      if (instanceableTypes.has(objData.type)) {
+        if (!instanceGroups.has(objData.type)) {
+          instanceGroups.set(objData.type, []);
+        }
+        instanceGroups.get(objData.type)!.push(objData);
+      } else {
+        regularObjects.push(objData);
+      }
+    }
+    
+    // Create instanced meshes for grouped objects
+    for (const [type, group] of instanceGroups) {
+      if (group.length > 0) {
+        this.createInstancedObjects(type, group);
+      }
+    }
+    
+    // Create regular objects individually
+    for (const objData of regularObjects) {
       const mesh = this.createLevelObject(objData);
       if (mesh) {
         this.scene.add(mesh);
         this.levelObjects.push(mesh);
       }
+    }
+  }
+  
+  /**
+   * Create instanced mesh for multiple objects of the same type
+   */
+  private createInstancedObjects(type: string, objects: LevelObject[]): void {
+    // Get template geometry and material
+    const template = this.getInstanceTemplate(type);
+    if (!template) return;
+    
+    const { geometry, material } = template;
+    
+    // Create instanced mesh
+    const instancedMesh = new THREE.InstancedMesh(geometry, material, objects.length);
+    instancedMesh.castShadow = true;
+    instancedMesh.receiveShadow = true;
+    
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const rotation = new THREE.Euler();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3(1, 1, 1);
+    
+    objects.forEach((objData, i) => {
+      position.set(objData.position[0], objData.position[1] || 0, objData.position[2]);
+      
+      if (objData.rotation) {
+        rotation.set(
+          THREE.MathUtils.degToRad(objData.rotation[0] || 0),
+          THREE.MathUtils.degToRad(objData.rotation[1] || 0),
+          THREE.MathUtils.degToRad(objData.rotation[2] || 0)
+        );
+        quaternion.setFromEuler(rotation);
+      } else {
+        quaternion.identity();
+      }
+      
+      matrix.compose(position, quaternion, scale);
+      instancedMesh.setMatrixAt(i, matrix);
+      
+      // Still create physics colliders for each instance
+      this.createInstancePhysics(type, objData);
+    });
+    
+    instancedMesh.instanceMatrix.needsUpdate = true;
+    this.scene.add(instancedMesh);
+    this.levelObjects.push(instancedMesh);
+  }
+  
+  /**
+   * Get template geometry and material for instanced objects
+   */
+  private getInstanceTemplate(type: string): { geometry: THREE.BufferGeometry; material: THREE.Material } | null {
+    switch (type) {
+      case 'shrub_small': {
+        const geo = new THREE.SphereGeometry(0.5, 8, 6);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.9 });
+        return { geometry: geo, material: mat };
+      }
+      case 'shrub_medium': {
+        const geo = new THREE.SphereGeometry(0.8, 8, 6);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.9 });
+        return { geometry: geo, material: mat };
+      }
+      case 'shrub_large': {
+        const geo = new THREE.SphereGeometry(1.2, 8, 6);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.9 });
+        return { geometry: geo, material: mat };
+      }
+      case 'tree_small': {
+        // Simplified tree as merged geometry
+        const trunkGeo = new THREE.CylinderGeometry(0.2, 0.25, 2, 8);
+        const leavesGeo = new THREE.ConeGeometry(1.5, 3, 8);
+        leavesGeo.translate(0, 3.5, 0);
+        const merged = new THREE.BufferGeometry();
+        // For simplicity, just use cone for instances (leaves)
+        const mat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.9 });
+        return { geometry: leavesGeo, material: mat };
+      }
+      case 'cone': {
+        const geo = new THREE.ConeGeometry(0.3, 0.7, 8);
+        geo.translate(0, 0.35, 0);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xff6600, roughness: 0.8 });
+        return { geometry: geo, material: mat };
+      }
+      case 'trash_can': {
+        const geo = new THREE.CylinderGeometry(0.3, 0.25, 0.8, 8);
+        geo.translate(0, 0.4, 0);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x444444, roughness: 0.6, metalness: 0.4 });
+        return { geometry: geo, material: mat };
+      }
+      case 'planter': {
+        const geo = new THREE.BoxGeometry(1.5, 1.2, 1.5);
+        geo.translate(0, 0.6, 0);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.9 });
+        return { geometry: geo, material: mat };
+      }
+      default:
+        return null;
+    }
+  }
+  
+  /**
+   * Create physics collider for an instanced object
+   */
+  private createInstancePhysics(type: string, data: LevelObject): void {
+    const pos = new THREE.Vector3(data.position[0], 0, data.position[2]);
+    
+    switch (type) {
+      case 'shrub_small':
+        this.physics.createStaticBox(pos.clone().setY(0.3), new THREE.Vector3(0.25, 0.3, 0.25));
+        break;
+      case 'shrub_medium':
+        this.physics.createStaticBox(pos.clone().setY(0.5), new THREE.Vector3(0.4, 0.5, 0.4));
+        break;
+      case 'shrub_large':
+        this.physics.createStaticBox(pos.clone().setY(0.75), new THREE.Vector3(0.6, 0.75, 0.6));
+        break;
+      case 'tree_small':
+        this.physics.createStaticBox(pos.clone().setY(2), new THREE.Vector3(0.2, 2, 0.2));
+        break;
+      case 'cone':
+        this.physics.createStaticBox(pos.clone().setY(0.25), new THREE.Vector3(0.15, 0.25, 0.15));
+        break;
+      case 'trash_can':
+        this.physics.createStaticBox(pos.clone().setY(0.4), new THREE.Vector3(0.2, 0.4, 0.2));
+        break;
+      case 'planter':
+        this.physics.createStaticBox(pos.clone().setY(0.75), new THREE.Vector3(0.75, 0.75, 0.75));
+        break;
     }
   }
   

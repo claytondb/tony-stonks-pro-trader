@@ -10,42 +10,46 @@ export class SkyGradient {
   private material: THREE.ShaderMaterial;
   
   constructor() {
-    // Create a large sphere for the sky dome (smaller to stay within camera frustum)
-    const geometry = new THREE.SphereGeometry(400, 32, 16);
+    // Create a large sphere for the sky dome
+    const geometry = new THREE.SphereGeometry(450, 32, 16);
     
-    // Shader for vertical gradient
+    // Shader for vertical gradient - use LOCAL position (not world)
+    // This way the gradient stays correct even when the sphere moves
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         topColor: { value: new THREE.Color(0x1e90ff) },
         bottomColor: { value: new THREE.Color(0x87ceeb) },
       },
       vertexShader: `
-        varying vec3 vWorldPosition;
+        varying float vY;
         void main() {
-          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-          vWorldPosition = worldPosition.xyz;
+          // Use local position Y normalized to sphere radius
+          vY = normalize(position).y;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
       fragmentShader: `
         uniform vec3 topColor;
         uniform vec3 bottomColor;
-        varying vec3 vWorldPosition;
+        varying float vY;
         void main() {
-          // Normalize Y based on position relative to mesh center
-          vec3 normalizedPos = normalize(vWorldPosition);
-          float h = normalizedPos.y * 0.5 + 0.5; // Map -1..1 to 0..1
-          gl_FragColor = vec4(mix(bottomColor, topColor, h), 1.0);
+          // vY goes from -1 (bottom) to 1 (top)
+          // Map to 0..1 for mixing
+          float t = vY * 0.5 + 0.5;
+          // Apply slight curve for more natural sky look
+          t = pow(t, 0.8);
+          gl_FragColor = vec4(mix(bottomColor, topColor, t), 1.0);
         }
       `,
       side: THREE.BackSide,
       depthWrite: false,
-      fog: false  // Don't apply fog to sky
+      depthTest: false,  // Always draw behind everything
+      fog: false
     });
     
     this.mesh = new THREE.Mesh(geometry, this.material);
-    this.mesh.frustumCulled = false; // Always render
-    this.mesh.renderOrder = -1000; // Render first (behind everything)
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = -1000;
   }
   
   getMesh(): THREE.Mesh {
