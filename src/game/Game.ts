@@ -1255,12 +1255,9 @@ export class Game {
         return { geometry: geo, material: mat };
       }
       case 'tree_small': {
-        // Simplified tree as merged geometry
-        const trunkGeo = new THREE.CylinderGeometry(0.2, 0.25, 2, 8);
+        // Simplified tree - just the foliage cone for instancing
         const leavesGeo = new THREE.ConeGeometry(1.5, 3, 8);
         leavesGeo.translate(0, 3.5, 0);
-        const merged = new THREE.BufferGeometry();
-        // For simplicity, just use cone for instances (leaves)
         const mat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.9 });
         return { geometry: leavesGeo, material: mat };
       }
