@@ -969,7 +969,7 @@ export class EditorUI {
   
   loadLevel(level: EditorLevelData): void {
     this.editor.loadLevel(level);
-    this.updatePropertyPanel();
+    this.updatePropertiesPanel();
     this.setStatus(`Loaded: ${level.name}`);
   }
   
