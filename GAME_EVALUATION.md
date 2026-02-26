@@ -166,11 +166,11 @@ Tony Stonks Pro Trader is a web-based skateboarding-style game where players per
 ## Improvement Priorities
 
 ### Phase 1: Core Polish (This Sprint)
-1. ✅ Fix grid lines in gameplay
-2. ✅ Add visible HUD (score, combo)
-3. ✅ Add trick name popups
-4. ✅ Fix sky gradient in built-in levels
-5. ✅ Add controls help screen
+1. ✅ Fix grid lines in gameplay - FIXED (loadLevel now properly loads level data)
+2. ✅ Add visible HUD (score, combo) - FIXED (z-index + proper level loading)
+3. ✅ Add trick name popups - EXISTS in HUD code
+4. ✅ Fix sky gradient in built-in levels - FIXED (added skyColorTop/Bottom to all 3 levels)
+5. ✅ Add controls help screen - ADDED to pause menu
 
 ### Phase 2: Gameplay Depth
 1. Manual/Nose Manual system
