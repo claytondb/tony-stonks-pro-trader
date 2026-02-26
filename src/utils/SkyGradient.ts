@@ -10,16 +10,14 @@ export class SkyGradient {
   private material: THREE.ShaderMaterial;
   
   constructor() {
-    // Create a large sphere for the sky dome
-    const geometry = new THREE.SphereGeometry(500, 32, 32);
+    // Create a large sphere for the sky dome (smaller to stay within camera frustum)
+    const geometry = new THREE.SphereGeometry(400, 32, 16);
     
     // Shader for vertical gradient
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         topColor: { value: new THREE.Color(0x1e90ff) },
         bottomColor: { value: new THREE.Color(0x87ceeb) },
-        offset: { value: 0 },
-        exponent: { value: 0.6 }
       },
       vertexShader: `
         varying vec3 vWorldPosition;
@@ -32,19 +30,21 @@ export class SkyGradient {
       fragmentShader: `
         uniform vec3 topColor;
         uniform vec3 bottomColor;
-        uniform float offset;
-        uniform float exponent;
         varying vec3 vWorldPosition;
         void main() {
-          float h = normalize(vWorldPosition + offset).y;
-          gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);
+          // Normalize Y based on position relative to mesh center
+          vec3 normalizedPos = normalize(vWorldPosition);
+          float h = normalizedPos.y * 0.5 + 0.5; // Map -1..1 to 0..1
+          gl_FragColor = vec4(mix(bottomColor, topColor, h), 1.0);
         }
       `,
       side: THREE.BackSide,
-      depthWrite: false
+      depthWrite: false,
+      fog: false  // Don't apply fog to sky
     });
     
     this.mesh = new THREE.Mesh(geometry, this.material);
+    this.mesh.frustumCulled = false; // Always render
     this.mesh.renderOrder = -1000; // Render first (behind everything)
   }
   

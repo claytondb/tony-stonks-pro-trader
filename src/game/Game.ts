@@ -1885,6 +1885,11 @@ export class Game {
       }
     }
     
+    // Update sky gradient to follow camera
+    if (this.skyGradient && this.camera) {
+      this.skyGradient.update(this.camera.position);
+    }
+    
     // Always render (even when paused)
     this.render();
     

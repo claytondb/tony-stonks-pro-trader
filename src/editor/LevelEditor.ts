@@ -1951,6 +1951,12 @@ export class LevelEditor {
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.orbitControls.update();
+    
+    // Update sky gradient to follow camera
+    if (this.skyGradient) {
+      this.skyGradient.update(this.camera.position);
+    }
+    
     this.renderer.render(this.scene, this.camera);
   };
   
