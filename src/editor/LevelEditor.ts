@@ -13,6 +13,7 @@ export interface EditorCallbacks {
   onObjectSelected?: (object: EditorObject | null) => void;
   onObjectsChanged?: () => void;
   onLevelChanged?: () => void;
+  canAddObject?: () => boolean;
 }
 
 export interface EditorObject {
@@ -755,6 +756,11 @@ export class LevelEditor {
   
   private placeObject(): void {
     if (!this.placementItem || !this.placementPreview) return;
+    
+    // Check if we can add more objects (limit check)
+    if (this.callbacks.canAddObject && !this.callbacks.canAddObject()) {
+      return;
+    }
     
     const pos = this.placementPreview.position;
     const rot = this.placementPreview.rotation;

@@ -1288,6 +1288,13 @@ export class Game {
       case 'stairs': {
         const steps = (data.params?.steps as number) || 5;
         mesh = this.createStairsMesh(concreteMaterial, steps);
+        // Collision: approximate as ramp-like box
+        const stairHeight = steps * 0.25;
+        const stairDepth = steps * 0.3;
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], stairHeight / 2, data.position[2]),
+          new THREE.Vector3(1.5, stairHeight / 2, stairDepth / 2)
+        );
         break;
       }
       
@@ -1302,36 +1309,78 @@ export class Game {
           const depth = (data.params?.depth as number) || 3;
           mesh = this.createCubicleMesh(officeMaterial, woodMaterial, width, depth);
         }
+        // Collision: cubicle walls
+        const cubWidth = (data.params?.width as number) || 3;
+        const cubDepth = (data.params?.depth as number) || 3;
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.6, data.position[2]),
+          new THREE.Vector3(cubWidth / 2, 0.6, cubDepth / 2)
+        );
         break;
       }
       
       case 'car':
         mesh = this.createCarMesh();
+        // Collision: car body (approx 4x1.5x2)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.75, data.position[2]),
+          new THREE.Vector3(2, 0.75, 1)
+        );
         break;
         
       case 'bench':
         mesh = this.createBenchMesh(woodMaterial, metalMaterial);
+        // Collision: bench (approx 2x0.5x0.5)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.3, data.position[2]),
+          new THREE.Vector3(1, 0.3, 0.25)
+        );
         break;
         
       case 'planter':
         mesh = this.createPlanterMesh(concreteMaterial);
+        // Collision: planter box (approx 1.5x1.5x1.5)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.75, data.position[2]),
+          new THREE.Vector3(0.75, 0.75, 0.75)
+        );
         break;
         
       case 'water_cooler':
         mesh = this.createWaterCoolerMesh();
+        // Collision: water cooler (approx 0.4x1.2x0.4)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.6, data.position[2]),
+          new THREE.Vector3(0.2, 0.6, 0.2)
+        );
         break;
         
       case 'trash_can':
         mesh = this.createTrashCanMesh(metalMaterial);
+        // Collision: trash can cylinder approx as box (0.4x0.8x0.4)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.4, data.position[2]),
+          new THREE.Vector3(0.2, 0.4, 0.2)
+        );
         break;
         
       case 'cone':
         mesh = this.createConeMesh();
+        // Collision: small cone base (0.3x0.5x0.3)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.25, data.position[2]),
+          new THREE.Vector3(0.15, 0.25, 0.15)
+        );
         break;
         
       case 'barrier': {
         const length = (data.params?.length as number) || 5;
         mesh = this.createBarrierMesh(metalMaterial, length);
+        // Collision: barrier (length x 0.8 x 0.1)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.5, data.position[2]),
+          new THREE.Vector3(length / 2, 0.4, 0.05)
+        );
         break;
       }
       
@@ -1339,11 +1388,18 @@ export class Game {
       case 'building_medium':
       case 'building_large':
       case 'building_wide': {
+        const defaults: Record<string, { width: number; depth: number; height: number }> = {
+          'building_small': { width: 10, depth: 10, height: 15 },
+          'building_medium': { width: 15, depth: 15, height: 30 },
+          'building_large': { width: 20, depth: 20, height: 50 },
+          'building_wide': { width: 30, depth: 15, height: 12 },
+        };
+        const def = defaults[data.type] || defaults['building_small'];
+        const bWidth = (data.params?.width as number) || def.width;
+        const bDepth = (data.params?.depth as number) || def.depth;
+        const bHeight = (data.params?.height as number) || def.height;
         mesh = this.createBuildingMesh(data.type, data.params);
-        // Add physics collider
-        const bWidth = (data.params?.width as number) || 10;
-        const bDepth = (data.params?.depth as number) || 10;
-        const bHeight = (data.params?.height as number) || 15;
+        // Collision: full building box
         this.physics.createStaticBox(
           new THREE.Vector3(data.position[0], bHeight / 2, data.position[2]),
           new THREE.Vector3(bWidth / 2, bHeight / 2, bDepth / 2)
@@ -1353,18 +1409,38 @@ export class Game {
       
       case 'shrub_small':
         mesh = this.createShrubMesh(0.5, 0.6);
+        // Collision: small sphere approx (0.5x0.6x0.5)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.3, data.position[2]),
+          new THREE.Vector3(0.25, 0.3, 0.25)
+        );
         break;
         
       case 'shrub_medium':
         mesh = this.createShrubMesh(0.8, 1.0);
+        // Collision: medium shrub (0.8x1.0x0.8)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.5, data.position[2]),
+          new THREE.Vector3(0.4, 0.5, 0.4)
+        );
         break;
         
       case 'shrub_large':
         mesh = this.createShrubMesh(1.2, 1.5);
+        // Collision: large shrub (1.2x1.5x1.2)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.75, data.position[2]),
+          new THREE.Vector3(0.6, 0.75, 0.6)
+        );
         break;
         
       case 'tree_small':
         mesh = this.createTreeMesh();
+        // Collision: tree trunk only (0.4x4x0.4)
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 2, data.position[2]),
+          new THREE.Vector3(0.2, 2, 0.2)
+        );
         break;
       
       default:

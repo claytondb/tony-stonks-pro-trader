@@ -11,6 +11,9 @@ export interface EditorUICallbacks {
   onPlayTest?: (level: EditorLevelData) => void;
 }
 
+// Maximum objects allowed per level (for performance)
+const MAX_OBJECTS = 500;
+
 export class EditorUI {
   private editor: LevelEditor;
   private callbacks: EditorUICallbacks;
@@ -44,7 +47,8 @@ export class EditorUI {
     this.editor = new LevelEditor(viewport, {
       onObjectSelected: (obj) => this.onObjectSelected(obj),
       onObjectsChanged: () => this.onObjectsChanged(),
-      onLevelChanged: () => this.onLevelChanged()
+      onLevelChanged: () => this.onLevelChanged(),
+      canAddObject: () => this.canAddObject()
     });
     
     // Setup UI interactions
@@ -113,11 +117,37 @@ export class EditorUI {
           <span id="status-text">Ready</span>
           <span id="status-position"></span>
           <span id="status-grid">Grid: 1</span>
+          <span id="object-count-container" style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
+            <span id="object-count-label">Objects: 0/500</span>
+            <div id="object-count-bar" style="width: 100px; height: 8px; background: #333; border-radius: 4px; overflow: hidden;">
+              <div id="object-count-fill" style="width: 0%; height: 100%; background: #00ff88; transition: width 0.2s, background 0.2s;"></div>
+            </div>
+          </span>
         </div>
       </div>
       
       <!-- File input (hidden) -->
       <input type="file" id="import-input" accept=".json" style="display: none;">
+      
+      <!-- Object limit dialog (hidden) -->
+      <div id="limit-dialog" class="dialog-overlay" style="display: none;">
+        <div class="dialog-content" style="max-width: 400px;">
+          <div class="dialog-header">
+            <h3>⚠️ Object Limit Reached</h3>
+            <button class="dialog-close">✕</button>
+          </div>
+          <p style="padding: 20px; color: #ccc; line-height: 1.5;">
+            You've reached the maximum number of objects (500) allowed in a level. 
+            This limit ensures good performance during gameplay.
+          </p>
+          <p style="padding: 0 20px 20px; color: #888;">
+            Delete some objects to free up space for new ones.
+          </p>
+          <div class="dialog-footer">
+            <button id="btn-close-limit">OK</button>
+          </div>
+        </div>
+      </div>
       
       <!-- Load dialog (hidden) -->
       <div id="load-dialog" class="dialog-overlay" style="display: none;">
@@ -619,6 +649,15 @@ export class EditorUI {
     loadDialog.querySelector('#btn-cancel-load')?.addEventListener('click', () => {
       loadDialog.style.display = 'none';
     });
+    
+    // Limit dialog handlers
+    const limitDialog = this.uiRoot.querySelector('#limit-dialog') as HTMLElement;
+    limitDialog?.querySelector('.dialog-close')?.addEventListener('click', () => {
+      limitDialog.style.display = 'none';
+    });
+    limitDialog?.querySelector('#btn-close-limit')?.addEventListener('click', () => {
+      limitDialog.style.display = 'none';
+    });
   }
   
   private setupPalette(): void {
@@ -713,6 +752,44 @@ export class EditorUI {
   private onObjectsChanged(): void {
     const level = this.editor.getLevel();
     this.setStatus(`${level.objects.length} objects`);
+    this.updateObjectCount();
+  }
+  
+  private updateObjectCount(): void {
+    const level = this.editor.getLevel();
+    const count = level.objects.length;
+    const percent = (count / MAX_OBJECTS) * 100;
+    
+    const label = this.statusBar.querySelector('#object-count-label');
+    const fill = this.statusBar.querySelector('#object-count-fill') as HTMLElement;
+    
+    if (label) label.textContent = `Objects: ${count}/${MAX_OBJECTS}`;
+    if (fill) {
+      fill.style.width = `${Math.min(percent, 100)}%`;
+      
+      // Color coding: green -> orange -> red
+      if (percent >= 90) {
+        fill.style.background = '#ff4444';
+      } else if (percent >= 75) {
+        fill.style.background = '#ffaa00';
+      } else {
+        fill.style.background = '#00ff88';
+      }
+    }
+  }
+  
+  canAddObject(): boolean {
+    const level = this.editor.getLevel();
+    if (level.objects.length >= MAX_OBJECTS) {
+      this.showLimitDialog();
+      return false;
+    }
+    return true;
+  }
+  
+  private showLimitDialog(): void {
+    const dialog = this.uiRoot.querySelector('#limit-dialog') as HTMLElement;
+    if (dialog) dialog.style.display = 'flex';
   }
   
   private onLevelChanged(): void {
@@ -970,6 +1047,7 @@ export class EditorUI {
   loadLevel(level: EditorLevelData): void {
     this.editor.loadLevel(level);
     this.updatePropertiesPanel(null);
+    this.updateObjectCount();
     this.setStatus(`Loaded: ${level.name}`);
   }
   
