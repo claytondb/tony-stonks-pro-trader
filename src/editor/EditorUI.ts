@@ -386,6 +386,20 @@ export class EditorUI {
         cursor: pointer;
       }
       
+      .prop-btn {
+        padding: 6px 12px;
+        background: #3a3a6e;
+        border: none;
+        border-radius: 4px;
+        color: white;
+        cursor: pointer;
+        font-size: 16px;
+      }
+      
+      .prop-btn:hover {
+        background: #4a4a8e;
+      }
+      
       /* Viewport */
       #editor-viewport {
         flex: 1;

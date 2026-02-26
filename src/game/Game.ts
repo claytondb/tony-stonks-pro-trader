@@ -1101,7 +1101,7 @@ export class Game {
     }
     
     // Load level objects
-    this.loadLevelObjects(level.objects, level.groundSize);
+    this.loadLevelObjects(level.objects, level.groundSize, level.groundColor || '#555555');
     
     // Set player spawn
     const spawn = level.spawnPoint;
@@ -1135,9 +1135,9 @@ export class Game {
   /**
    * Load objects from level data
    */
-  private loadLevelObjects(objects: LevelObject[], groundSize: number): void {
+  private loadLevelObjects(objects: LevelObject[], groundSize: number, groundColor: string = '#555555'): void {
     // Create ground for the level
-    this.createLevelGround(groundSize);
+    this.createLevelGround(groundSize, groundColor);
     
     // Create each object
     for (const objData of objects) {
@@ -1152,37 +1152,14 @@ export class Game {
   /**
    * Create ground plane for a level
    */
-  private createLevelGround(size: number): void {
-    const groundGeometry = new THREE.PlaneGeometry(size, size, 50, 50);
+  private createLevelGround(size: number, groundColor: string = '#555555'): void {
+    const groundGeometry = new THREE.PlaneGeometry(size, size);
     
-    // Create grid texture
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = '#555555';
-    ctx.fillRect(0, 0, 512, 512);
-    ctx.strokeStyle = '#666666';
-    ctx.lineWidth = 2;
-    for (let i = 0; i <= 16; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * 32, 0);
-      ctx.lineTo(i * 32, 512);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(0, i * 32);
-      ctx.lineTo(512, i * 32);
-      ctx.stroke();
-    }
-    
-    const groundTexture = new THREE.CanvasTexture(canvas);
-    groundTexture.wrapS = THREE.RepeatWrapping;
-    groundTexture.wrapT = THREE.RepeatWrapping;
-    groundTexture.repeat.set(size / 5, size / 5);
-    
+    // Simple solid color ground - no grid lines during gameplay
     const groundMaterial = new THREE.MeshStandardMaterial({ 
-      map: groundTexture,
-      roughness: 0.9
+      color: groundColor,
+      roughness: 0.9,
+      metalness: 0.1
     });
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
     ground.rotation.x = -Math.PI / 2;
