@@ -81,6 +81,10 @@ export class LevelEditor {
   private paintMinDistance: number = 2;  // Min distance between painted objects
   private toolbarContainer: HTMLElement | null = null;
   
+  // Spawn placement mode
+  private isPlacingSpawn: boolean = false;
+  private onSpawnPlaced: ((x: number, z: number) => void) | null = null;
+  
   constructor(container: HTMLElement, callbacks: EditorCallbacks = {}) {
     this.callbacks = callbacks;
     this.raycaster = new THREE.Raycaster();
@@ -144,12 +148,18 @@ export class LevelEditor {
     this.gridHelper = new THREE.GridHelper(100, 100, 0x444444, 0x888888);
     this.scene.add(this.gridHelper);
     
-    // Create invisible ground plane for raycasting
+    // Create visible ground plane with color
     const groundGeom = new THREE.PlaneGeometry(200, 200);
-    const groundMat = new THREE.MeshBasicMaterial({ visible: false });
+    const groundMat = new THREE.MeshStandardMaterial({ 
+      color: 0x555555,
+      roughness: 0.9,
+      metalness: 0.1
+    });
     this.groundPlane = new THREE.Mesh(groundGeom, groundMat);
     this.groundPlane.rotation.x = -Math.PI / 2;
+    this.groundPlane.position.y = -0.01; // Slightly below grid
     this.groundPlane.name = 'ground-plane';
+    this.groundPlane.receiveShadow = true;
     this.scene.add(this.groundPlane);
     
     // Add lights
@@ -312,6 +322,21 @@ export class LevelEditor {
   }
   
   private handleClick(_e: MouseEvent, deleteMode: boolean = false): void {
+    // Check for spawn placement mode first
+    if (this.isPlacingSpawn) {
+      this.raycaster.setFromCamera(this.mouse, this.camera);
+      const intersects = this.raycaster.intersectObject(this.groundPlane);
+      if (intersects.length > 0) {
+        const pos = intersects[0].point;
+        const x = this.gridSnap > 0 ? Math.round(pos.x / this.gridSnap) * this.gridSnap : pos.x;
+        const z = this.gridSnap > 0 ? Math.round(pos.z / this.gridSnap) * this.gridSnap : pos.z;
+        this.onSpawnPlaced?.(x, z);
+        this.isPlacingSpawn = false;
+        this.onSpawnPlaced = null;
+      }
+      return;
+    }
+    
     if (this.currentTool === 'select') {
       // Select mode - just select objects
       this.selectObjectAtMouse();
@@ -1341,6 +1366,17 @@ export class LevelEditor {
     this.callbacks.onLevelChanged?.();
   }
   
+  /**
+   * Start spawn point placement mode - click to place
+   */
+  startSpawnPlacement(callback: (x: number, z: number) => void): void {
+    this.isPlacingSpawn = true;
+    this.onSpawnPlaced = callback;
+    // Temporarily disable other interactions
+    this.cancelPlacement();
+    this.deselectObject();
+  }
+  
   // =============================================
   // LEVEL MANAGEMENT
   // =============================================
@@ -1400,11 +1436,18 @@ export class LevelEditor {
   }
   
   updateEnvironment(): void {
+    // Update sky color
     this.scene.background = new THREE.Color(this.level.skyColor);
+    
     // Update grid size
     this.scene.remove(this.gridHelper);
     this.gridHelper = new THREE.GridHelper(this.level.groundSize, this.level.groundSize, 0x444444, 0x888888);
     this.scene.add(this.gridHelper);
+    
+    // Update ground plane color and size
+    const groundMat = this.groundPlane.material as THREE.MeshStandardMaterial;
+    groundMat.color.set(this.level.groundColor);
+    this.groundPlane.scale.set(this.level.groundSize / 200, this.level.groundSize / 200, 1);
   }
   
   save(): boolean {
@@ -1435,7 +1478,7 @@ export class LevelEditor {
   setLevelProperty<K extends keyof EditorLevelData>(key: K, value: EditorLevelData[K]): void {
     this.level[key] = value;
     
-    if (['skyColor', 'groundSize'].includes(key as string)) {
+    if (['skyColor', 'groundColor', 'groundSize'].includes(key as string)) {
       this.updateEnvironment();
     }
     

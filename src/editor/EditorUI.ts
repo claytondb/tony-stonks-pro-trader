@@ -919,8 +919,36 @@ export class EditorUI {
       </div>
       
       <div class="prop-group">
+        <div class="prop-label">Sky Preset</div>
+        <select class="prop-input" id="sky-preset">
+          <option value="">Custom</option>
+          <option value="#87CEEB">☀️ Clear Day</option>
+          <option value="#1a1a2e">🌙 Night</option>
+          <option value="#ff7b00">🌅 Sunset</option>
+          <option value="#ff9a9e">🌸 Pink Dusk</option>
+          <option value="#2c3e50">🌧️ Overcast</option>
+          <option value="#0f0c29">🌌 Midnight</option>
+          <option value="#bdc3c7">☁️ Cloudy</option>
+        </select>
+      </div>
+      
+      <div class="prop-group">
         <div class="prop-label">Sky Color</div>
         <input type="color" class="prop-color" id="level-sky-color" value="${level.skyColor}">
+      </div>
+      
+      <div class="prop-group">
+        <div class="prop-label">Ground Preset</div>
+        <select class="prop-input" id="ground-preset">
+          <option value="">Custom</option>
+          <option value="#555555">⬛ Asphalt</option>
+          <option value="#3d5c3d">🌿 Grass</option>
+          <option value="#c2b280">🏖️ Sand</option>
+          <option value="#4a4a5e">🏢 Office Floor</option>
+          <option value="#2d2d2d">🌑 Dark Concrete</option>
+          <option value="#8B4513">🪵 Wood</option>
+          <option value="#87ceeb">💧 Water</option>
+        </select>
       </div>
       
       <div class="prop-group">
@@ -930,16 +958,17 @@ export class EditorUI {
       
       <div class="prop-group">
         <div class="prop-label">Spawn Point</div>
-        <div class="prop-row">
-          <div class="prop-group">
-            <input type="number" class="prop-input" id="spawn-x" value="${level.spawnPoint.position[0]}" step="1">
+        <div class="prop-row" style="align-items: center;">
+          <div class="prop-group" style="flex: 1;">
+            <input type="number" class="prop-input" id="spawn-x" value="${level.spawnPoint.position[0]}" step="1" placeholder="X">
           </div>
-          <div class="prop-group">
-            <input type="number" class="prop-input" id="spawn-z" value="${level.spawnPoint.position[2]}" step="1">
+          <div class="prop-group" style="flex: 1;">
+            <input type="number" class="prop-input" id="spawn-z" value="${level.spawnPoint.position[2]}" step="1" placeholder="Z">
           </div>
-          <div class="prop-group">
-            <input type="number" class="prop-input" id="spawn-rot" value="${level.spawnPoint.rotation}" step="15" title="Rotation">
+          <div class="prop-group" style="flex: 1;">
+            <input type="number" class="prop-input" id="spawn-rot" value="${level.spawnPoint.rotation}" step="15" title="Rotation" placeholder="Rot">
           </div>
+          <button id="place-spawn-btn" class="prop-btn" title="Click to place spawn point">📍</button>
         </div>
       </div>
     `;
@@ -976,6 +1005,37 @@ export class EditorUI {
     spawnX?.addEventListener('change', updateSpawn);
     spawnZ?.addEventListener('change', updateSpawn);
     spawnRot?.addEventListener('change', updateSpawn);
+    
+    // Place spawn button
+    const placeSpawnBtn = container.querySelector('#place-spawn-btn');
+    placeSpawnBtn?.addEventListener('click', () => {
+      this.editor.startSpawnPlacement((x, z) => {
+        spawnX.value = x.toFixed(0);
+        spawnZ.value = z.toFixed(0);
+        updateSpawn();
+      });
+      this.setStatus('Click to place spawn point...');
+    });
+    
+    // Sky preset
+    const skyPreset = container.querySelector('#sky-preset') as HTMLSelectElement;
+    const skyColor = container.querySelector('#level-sky-color') as HTMLInputElement;
+    skyPreset?.addEventListener('change', () => {
+      if (skyPreset.value) {
+        skyColor.value = skyPreset.value;
+        this.editor.setLevelProperty('skyColor', skyPreset.value);
+      }
+    });
+    
+    // Ground preset
+    const groundPreset = container.querySelector('#ground-preset') as HTMLSelectElement;
+    const groundColor = container.querySelector('#level-ground-color') as HTMLInputElement;
+    groundPreset?.addEventListener('change', () => {
+      if (groundPreset.value) {
+        groundColor.value = groundPreset.value;
+        this.editor.setLevelProperty('groundColor', groundPreset.value);
+      }
+    });
   }
   
   private showLoadDialog(): void {
