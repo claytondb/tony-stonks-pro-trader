@@ -244,6 +244,8 @@ export class EditorStorage {
       description: editorLevel.description,
       
       skyColor: editorLevel.skyColor,
+      skyColorTop: editorLevel.skyColorTop,
+      skyColorBottom: editorLevel.skyColorBottom,
       fogColor: editorLevel.fogColor,
       fogNear: editorLevel.fogNear,
       fogFar: editorLevel.fogFar,

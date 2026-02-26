@@ -77,6 +77,8 @@ export interface LevelData {
   
   // Environment settings
   skyColor: string;
+  skyColorTop?: string;
+  skyColorBottom?: string;
   fogColor: string;
   fogNear: number;
   fogFar: number;
