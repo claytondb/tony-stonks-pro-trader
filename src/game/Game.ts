@@ -219,6 +219,7 @@ export class Game {
     
     // Camera controller
     this.cameraController = new CameraController(this.camera);
+    this.cameraController.setupMouseControls(this.canvas);
   }
   
   // Physics is now initialized in init() before other systems

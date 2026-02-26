@@ -1,6 +1,6 @@
 /**
  * Camera Controller
- * Smooth follow camera for player
+ * Smooth follow camera for player with mouse orbit
  */
 
 import * as THREE from 'three';
@@ -25,9 +25,70 @@ export class CameraController {
   private shakeTimeRemaining = 0;
   private shakeOffset = new THREE.Vector3();
   
+  // Mouse orbit state
+  private isDragging = false;
+  private orbitAngleX = 0;  // Horizontal orbit (yaw)
+  private orbitAngleY = 0;  // Vertical orbit (pitch)
+  private targetOrbitX = 0;
+  private targetOrbitY = 0;
+  private lastMouseX = 0;
+  private lastMouseY = 0;
+  private orbitSensitivity = 0.005;
+  private orbitReturnSpeed = 2;  // Speed to return to default view
+  private maxOrbitY = Math.PI / 3;  // Limit vertical rotation
+  private minOrbitY = -Math.PI / 6;
+  
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
     this.currentOffset.copy(this.offset);
+  }
+  
+  /**
+   * Set up mouse event listeners for orbit control
+   */
+  setupMouseControls(canvas: HTMLCanvasElement): void {
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 0 || e.button === 2) {  // Left or right click
+        this.isDragging = true;
+        this.lastMouseX = e.clientX;
+        this.lastMouseY = e.clientY;
+      }
+    });
+    
+    canvas.addEventListener('mouseup', () => {
+      this.isDragging = false;
+    });
+    
+    canvas.addEventListener('mouseleave', () => {
+      this.isDragging = false;
+    });
+    
+    canvas.addEventListener('mousemove', (e) => {
+      if (!this.isDragging) return;
+      
+      const deltaX = e.clientX - this.lastMouseX;
+      const deltaY = e.clientY - this.lastMouseY;
+      
+      this.targetOrbitX += deltaX * this.orbitSensitivity;
+      this.targetOrbitY += deltaY * this.orbitSensitivity;
+      
+      // Clamp vertical orbit
+      this.targetOrbitY = Math.max(this.minOrbitY, Math.min(this.maxOrbitY, this.targetOrbitY));
+      
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+    });
+    
+    // Prevent context menu on right click
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+  
+  /**
+   * Reset orbit to default view
+   */
+  resetOrbit(): void {
+    this.targetOrbitX = 0;
+    this.targetOrbitY = 0;
   }
   
   setTarget(target: THREE.Object3D): void {
@@ -43,6 +104,16 @@ export class CameraController {
   update(dt: number): void {
     if (!this.target) return;
     
+    // Smoothly return orbit to default when not dragging
+    if (!this.isDragging) {
+      this.targetOrbitX *= (1 - this.orbitReturnSpeed * dt);
+      this.targetOrbitY *= (1 - this.orbitReturnSpeed * dt);
+    }
+    
+    // Smooth orbit angle transitions
+    this.orbitAngleX += (this.targetOrbitX - this.orbitAngleX) * 5 * dt;
+    this.orbitAngleY += (this.targetOrbitY - this.orbitAngleY) * 5 * dt;
+    
     // Get target's forward direction
     const targetForward = new THREE.Vector3(0, 0, 1);
     targetForward.applyQuaternion(this.target.quaternion);
@@ -57,6 +128,13 @@ export class CameraController {
     // Rotate offset based on target rotation (only Y axis for now)
     const targetRotationY = new THREE.Euler().setFromQuaternion(this.target.quaternion, 'YXZ').y;
     desiredOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), targetRotationY);
+    
+    // Apply mouse orbit rotation
+    desiredOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.orbitAngleX);
+    
+    // Apply vertical orbit (pitch) - rotate around the horizontal axis perpendicular to offset
+    const horizontalAxis = new THREE.Vector3(-desiredOffset.z, 0, desiredOffset.x).normalize();
+    desiredOffset.applyAxisAngle(horizontalAxis, this.orbitAngleY);
     
     // Smooth offset transition
     this.currentOffset.lerp(desiredOffset, this.rotationSmooth * dt);
