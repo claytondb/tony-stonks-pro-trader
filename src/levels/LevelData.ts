@@ -135,6 +135,8 @@ export const LEVELS: LevelData[] = [
     description: 'Navigate through the open office floor as SEC agents close in!',
     
     skyColor: '#87CEEB',
+    skyColorTop: '#1e90ff',
+    skyColorBottom: '#87CEEB',
     fogColor: '#a0a0a0',
     fogNear: 30,
     fogFar: 100,
@@ -224,6 +226,8 @@ export const LEVELS: LevelData[] = [
     description: 'Shred through the parking garage to reach your getaway vehicle!',
     
     skyColor: '#333333',
+    skyColorTop: '#1a1a2e',
+    skyColorBottom: '#333333',
     fogColor: '#222222',
     fogNear: 20,
     fogFar: 80,
@@ -297,6 +301,8 @@ export const LEVELS: LevelData[] = [
     description: 'Hit the streets and show off your skills while evading pursuit!',
     
     skyColor: '#6699CC',
+    skyColorTop: '#4a90d9',
+    skyColorBottom: '#87ceeb',
     fogColor: '#888888',
     fogNear: 40,
     fogFar: 150,
