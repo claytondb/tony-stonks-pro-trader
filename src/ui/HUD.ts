@@ -345,17 +345,38 @@ export class HUD {
   
   /**
    * Update displayed score (called each frame for smooth counting)
+   * Uses ease-out curve for satisfying score counting
    */
   update(dt: number): void {
-    // Smooth score counting
+    // Smooth score counting with ease-out
     if (this.displayedScore < this.currentScore) {
       const diff = this.currentScore - this.displayedScore;
-      const increment = Math.max(1, Math.floor(diff * dt * 5));
+      
+      // Ease-out: fast at first, slows down as it approaches target
+      // The larger the diff, the faster we count
+      // Minimum speed of 10/sec, max proportional to difference
+      const speed = Math.max(10, diff * 3); // Increased speed multiplier for snappier feel
+      const increment = Math.max(1, Math.round(speed * dt));
+      
+      const prevScore = this.displayedScore;
       this.displayedScore = Math.min(this.currentScore, this.displayedScore + increment);
       
-      const scoreValue = this.scoreElement.querySelector('.hud-score-value');
+      const scoreValue = this.scoreElement.querySelector('.hud-score-value') as HTMLElement;
       if (scoreValue) {
         scoreValue.textContent = this.displayedScore.toLocaleString();
+        
+        // Add subtle scale pop when score is actively counting up big numbers
+        if (diff > 100 && this.displayedScore !== prevScore) {
+          // Calculate scale based on how fast we're counting (more = bigger pop)
+          const scale = 1 + Math.min(0.15, (increment / 500));
+          scoreValue.style.transform = `scale(${scale})`;
+          scoreValue.style.transition = 'transform 0.1s ease-out';
+          
+          // Reset scale shortly after
+          setTimeout(() => {
+            scoreValue.style.transform = 'scale(1)';
+          }, 50);
+        }
       }
     }
   }

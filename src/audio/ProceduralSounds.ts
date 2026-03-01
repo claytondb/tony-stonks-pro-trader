@@ -9,6 +9,12 @@ export class ProceduralSounds {
   private masterGain: GainNode | null = null;
   private isInitialized = false;
   
+  // Wheel roll sound system
+  private wheelRollNoise: AudioBufferSourceNode | null = null;
+  private wheelRollGain: GainNode | null = null;
+  private wheelRollFilter: BiquadFilterNode | null = null;
+  private wheelRollActive = false;
+  
   /**
    * Initialize audio context (must be called after user interaction)
    */
@@ -368,6 +374,93 @@ export class ProceduralSounds {
     
     osc.start();
     osc.stop(this.audioContext.currentTime + 0.1);
+  }
+  
+  /**
+   * Start continuous wheel roll sound
+   * Creates a rumbling noise that varies with speed
+   */
+  startWheelRoll(): void {
+    if (!this.audioContext || !this.masterGain || this.wheelRollActive) return;
+    
+    // Create a long looping noise buffer for rolling sound
+    const bufferSize = this.audioContext.sampleRate * 2; // 2 second loop
+    const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    
+    // Generate rumbling noise with some periodic variation (simulates wheel rotation)
+    for (let i = 0; i < bufferSize; i++) {
+      // Base random noise
+      const noise = Math.random() * 2 - 1;
+      // Add subtle periodic component for wheel rotation feel
+      const periodic = Math.sin(i * 0.02) * 0.3;
+      // Combine with envelope variation for texture
+      const texture = 0.7 + Math.sin(i * 0.001) * 0.3;
+      data[i] = noise * texture * 0.5 + periodic * 0.2;
+    }
+    
+    this.wheelRollNoise = this.audioContext.createBufferSource();
+    this.wheelRollNoise.buffer = buffer;
+    this.wheelRollNoise.loop = true;
+    
+    // Low-pass filter - frequency will be modulated by speed
+    this.wheelRollFilter = this.audioContext.createBiquadFilter();
+    this.wheelRollFilter.type = 'lowpass';
+    this.wheelRollFilter.frequency.value = 200; // Start low
+    this.wheelRollFilter.Q.value = 1;
+    
+    // Gain control - will be modulated by speed
+    this.wheelRollGain = this.audioContext.createGain();
+    this.wheelRollGain.gain.value = 0; // Start silent
+    
+    // Connect the chain
+    this.wheelRollNoise.connect(this.wheelRollFilter);
+    this.wheelRollFilter.connect(this.wheelRollGain);
+    this.wheelRollGain.connect(this.masterGain);
+    
+    this.wheelRollNoise.start();
+    this.wheelRollActive = true;
+  }
+  
+  /**
+   * Update wheel roll sound based on current speed
+   * @param speed - Current player speed (0-18 typical range)
+   * @param isGrounded - Whether player is on the ground
+   */
+  updateWheelRoll(speed: number, isGrounded: boolean): void {
+    if (!this.wheelRollGain || !this.wheelRollFilter || !this.audioContext) return;
+    
+    // Only play when grounded and moving
+    if (!isGrounded || speed < 0.5) {
+      // Fade out quickly
+      this.wheelRollGain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.1);
+      return;
+    }
+    
+    // Normalize speed (0-18 range to 0-1)
+    const normalizedSpeed = Math.min(1, speed / 18);
+    
+    // Volume increases with speed (0.02 to 0.12 range - subtle but present)
+    const targetVolume = 0.02 + normalizedSpeed * 0.10;
+    this.wheelRollGain.gain.linearRampToValueAtTime(targetVolume, this.audioContext.currentTime + 0.05);
+    
+    // Filter frequency increases with speed (200Hz to 800Hz)
+    // Higher speed = more high frequencies = brighter, more energetic sound
+    const targetFreq = 200 + normalizedSpeed * 600;
+    this.wheelRollFilter.frequency.linearRampToValueAtTime(targetFreq, this.audioContext.currentTime + 0.05);
+  }
+  
+  /**
+   * Stop wheel roll sound
+   */
+  stopWheelRoll(): void {
+    if (this.wheelRollNoise) {
+      this.wheelRollNoise.stop();
+      this.wheelRollNoise = null;
+      this.wheelRollGain = null;
+      this.wheelRollFilter = null;
+      this.wheelRollActive = false;
+    }
   }
 }
 

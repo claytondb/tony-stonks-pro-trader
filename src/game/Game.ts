@@ -994,11 +994,15 @@ export class Game {
     this.isPaused = false;
     this.lastTime = performance.now();
     this.levelTime = 0;
+    // Start wheel roll sound (will be silent until moving)
+    proceduralSounds.startWheelRoll();
     requestAnimationFrame(this.loop.bind(this));
   }
   
   pause(): void {
     this.isPaused = true;
+    // Silence wheel roll when paused
+    proceduralSounds.updateWheelRoll(0, false);
   }
   
   resume(): void {
@@ -1992,6 +1996,8 @@ export class Game {
   
   stop(): void {
     this.isRunning = false;
+    // Stop wheel roll sound
+    proceduralSounds.stopWheelRoll();
   }
   
   private loop(currentTime: number): void {
@@ -2152,6 +2158,11 @@ export class Game {
     
     // Update camera
     this.cameraController.update(dt);
+    
+    // Update wheel roll sound based on speed
+    const currentVel = this.physics.getVelocity(this.chairBody);
+    const currentSpeed = new THREE.Vector3(currentVel.x, 0, currentVel.z).length();
+    proceduralSounds.updateWheelRoll(currentSpeed, this.playerState.isGrounded && !this.playerState.isGrinding);
     
     // Update combo system
     this.comboSystem.update(dt);

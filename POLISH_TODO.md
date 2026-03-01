@@ -9,7 +9,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ## 🎯 Quick Wins (< 30 min each)
 
 ### Audio & Feedback
-- [ ] **Add wheel roll sound** - Continuous rolling noise proportional to speed (currently silent when moving)
+- [x] **Add wheel roll sound** - Continuous rolling noise proportional to speed ✅ Implemented (procedural)
 - [x] **Landing screen shake** - Small camera shake on successful combo land (not just bail) ✅ Enhanced
 - [ ] **Trick pitch variation** - Vary the procedural trick sound pitch based on trick value (higher points = higher pitch)
 - [ ] **Balance warning sound** - Audio cue when grind balance is in danger zone (near edges)
@@ -28,7 +28,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [ ] **Trick input queue** - Queue next trick input while current trick animating
 
 ### UI Polish
-- [ ] **Score number animation** - Score counts up with easing, not linear
+- [x] **Score number animation** - Score counts up with easing + scale pop effect ✅ Implemented
 - [ ] **Special meter glow** - Pulsing glow effect when special is full (beyond current animation)
 - [ ] **Combo timer bar** - Visual indicator of time remaining to extend combo
 - [ ] **Hide controls hint after first play** - Use localStorage to track
@@ -174,7 +174,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ## 📊 Priority Ranking (Impact vs Effort)
 
 ### Highest Impact, Lowest Effort
-1. Wheel roll sound (movement feels silent)
+1. ~~Wheel roll sound~~ ✅ DONE (procedural rumble based on speed)
 2. ~~Landing screen shake~~ ✅ DONE (enhanced for combo lands)
 3. Push sound effect (input feedback)
 4. ~~Jump buffer + coyote time~~ ✅ DONE (controls feel tighter)
@@ -235,6 +235,10 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-01 (2:00 AM)
+- ✅ **Wheel roll sound** - Procedural rumbling noise that varies with speed (louder and brighter at high speed)
+- ✅ **Score animation polish** - Ease-out counting curve with subtle scale pop on big score gains
 
 ### 2026-03-01 (1:00 AM)
 - ✅ **Trick name colors** - Tricks now color-coded by type (flip=cyan, grab=gold, grind=orange, manual=lime, special=magenta)
