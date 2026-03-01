@@ -250,6 +250,7 @@ export class Game {
         // Update combo display
         const state = this.comboSystem.getState();
         this.hud.updateCombo(state.tricks, state.totalPoints, state.multiplier);
+        this.hud.updateComboTimer(state.timeRemaining, 2000); // 2000ms max combo time
         
         // Play sounds based on combo events
         if (event.type === 'combo_landed' && event.totalScore) {
@@ -2049,7 +2050,7 @@ export class Game {
     if (trick && performance.now() - this.lastTrickTime > trick.duration) {
       this.comboSystem.addTrick(trick);
       this.lastTrickTime = performance.now();
-      proceduralSounds.playTrick();
+      proceduralSounds.playTrick(trick.basePoints);
       
       // Add to special meter
       const prevSpecial = this.specialMeter;
@@ -2166,6 +2167,12 @@ export class Game {
     
     // Update combo system
     this.comboSystem.update(dt);
+    
+    // Update combo timer bar every frame for smooth animation
+    if (this.hud && this.comboSystem.hasActiveCombo()) {
+      const comboState = this.comboSystem.getState();
+      this.hud.updateComboTimer(comboState.timeRemaining, 2000);
+    }
     
     // Update HUD balance meter
     if (this.playerState.isGrinding || this.playerState.isManualing) {

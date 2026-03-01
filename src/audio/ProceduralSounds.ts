@@ -220,18 +220,33 @@ export class ProceduralSounds {
   
   /**
    * Play trick success sound - bright ding
+   * Pitch varies based on trick points: higher value tricks = higher pitch
+   * @param points - Base points of the trick (typically 100-2000+)
    */
-  playTrick(): void {
+  playTrick(points: number = 500): void {
     if (!this.audioContext || !this.masterGain) return;
     
     const osc = this.audioContext.createOscillator();
     const gain = this.audioContext.createGain();
     
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, this.audioContext.currentTime);
-    osc.frequency.setValueAtTime(1100, this.audioContext.currentTime + 0.05);
+    // Calculate pitch multiplier based on points
+    // Low tricks (~100 pts): 0.8x pitch
+    // Medium tricks (~500 pts): 1.0x pitch  
+    // High tricks (~1000+ pts): 1.3x+ pitch
+    // Special tricks (~2000+ pts): 1.6x+ pitch
+    const normalizedPoints = Math.max(100, Math.min(2500, points));
+    const pitchMultiplier = 0.7 + (normalizedPoints / 2500) * 0.9; // 0.7 to 1.6 range
     
-    gain.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+    const baseFreq = 880 * pitchMultiplier;
+    const peakFreq = 1100 * pitchMultiplier;
+    
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(baseFreq, this.audioContext.currentTime);
+    osc.frequency.setValueAtTime(peakFreq, this.audioContext.currentTime + 0.05);
+    
+    // Slightly louder for bigger tricks
+    const volumeBoost = 0.15 + (pitchMultiplier - 0.7) * 0.1; // 0.15 to 0.24
+    gain.gain.setValueAtTime(volumeBoost, this.audioContext.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.3);
     
     osc.connect(gain);

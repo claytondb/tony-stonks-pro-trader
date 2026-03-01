@@ -19,6 +19,7 @@ export class HUD {
   private container: HTMLElement;
   private scoreElement!: HTMLElement;
   private comboElement!: HTMLElement;
+  private comboTimerFill!: HTMLElement;
   private trickPopup!: HTMLElement;
   private specialMeter!: HTMLElement;
   private specialFill!: HTMLElement;
@@ -102,6 +103,39 @@ export class HUD {
         0% { transform: scale(1); }
         50% { transform: scale(1.4); color: #FFFF00; }
         100% { transform: scale(1); }
+      }
+      
+      .hud-combo-timer {
+        width: 200px;
+        height: 6px;
+        background: rgba(0,0,0,0.5);
+        border-radius: 3px;
+        margin-top: 8px;
+        overflow: hidden;
+        opacity: 0;
+        transition: opacity 0.2s;
+      }
+      
+      .hud-combo.active .hud-combo-timer {
+        opacity: 1;
+      }
+      
+      .hud-combo-timer-fill {
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(90deg, #FF4444, #FFD700, #00FF88);
+        border-radius: 3px;
+        transition: width 0.05s linear;
+        transform-origin: left;
+      }
+      
+      .hud-combo-timer-fill.urgent {
+        animation: timerUrgent 0.3s infinite;
+      }
+      
+      @keyframes timerUrgent {
+        0%, 100% { filter: brightness(1); }
+        50% { filter: brightness(1.5); background: #FF4444; }
       }
       
       .hud-trick-popup {
@@ -280,7 +314,11 @@ export class HUD {
       <div class="hud-combo-tricks"></div>
       <div class="hud-combo-score"></div>
       <div class="hud-combo-multiplier"></div>
+      <div class="hud-combo-timer">
+        <div class="hud-combo-timer-fill"></div>
+      </div>
     `;
+    this.comboTimerFill = this.comboElement.querySelector('.hud-combo-timer-fill')!;
     hud.appendChild(this.comboElement);
     
     // Trick popup
@@ -407,6 +445,23 @@ export class HUD {
   }
   
   /**
+   * Update combo timer bar
+   * @param timeRemaining - Time left in ms to extend combo
+   * @param maxTime - Maximum combo time in ms
+   */
+  updateComboTimer(timeRemaining: number, maxTime: number): void {
+    const percent = Math.max(0, Math.min(100, (timeRemaining / maxTime) * 100));
+    this.comboTimerFill.style.width = `${percent}%`;
+    
+    // Add urgent animation when timer is low (< 30%)
+    if (percent < 30 && percent > 0) {
+      this.comboTimerFill.classList.add('urgent');
+    } else {
+      this.comboTimerFill.classList.remove('urgent');
+    }
+  }
+  
+  /**
    * Update combo display with multiplier pulse animation
    */
   updateCombo(tricks: ComboTrick[], totalPoints: number, multiplier: number): void {
@@ -530,6 +585,8 @@ export class HUD {
     this.specialFill.style.width = '0%';
     this.specialMeter.classList.remove('full');
     this.comboElement.classList.remove('active');
+    this.comboTimerFill.style.width = '100%';
+    this.comboTimerFill.classList.remove('urgent');
     this.trickPopup.classList.remove('show');
     this.balanceMeter.classList.remove('active');
   }
