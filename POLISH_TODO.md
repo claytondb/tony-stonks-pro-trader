@@ -11,7 +11,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ### Audio & Feedback
 - [x] **Add wheel roll sound** - Continuous rolling noise proportional to speed ✅ Implemented (procedural)
 - [x] **Landing screen shake** - Small camera shake on successful combo land (not just bail) ✅ Enhanced
-- [ ] **Trick pitch variation** - Vary the procedural trick sound pitch based on trick value (higher points = higher pitch)
+- [x] **Trick pitch variation** - Vary the procedural trick sound pitch based on trick value (higher points = higher pitch) ✅ Implemented
 - [ ] **Balance warning sound** - Audio cue when grind balance is in danger zone (near edges)
 - [ ] **Push sound effect** - Satisfying "kick" sound when player pushes (W key)
 
@@ -30,7 +30,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ### UI Polish
 - [x] **Score number animation** - Score counts up with easing + scale pop effect ✅ Implemented
 - [ ] **Special meter glow** - Pulsing glow effect when special is full (beyond current animation)
-- [ ] **Combo timer bar** - Visual indicator of time remaining to extend combo
+- [x] **Combo timer bar** - Visual indicator of time remaining to extend combo ✅ Implemented
 - [ ] **Hide controls hint after first play** - Use localStorage to track
 
 ---
