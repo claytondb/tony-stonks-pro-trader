@@ -39,6 +39,10 @@ export class InputManager {
   private justPressedKeys: Set<string> = new Set();
   private gamepad: Gamepad | null = null;
   
+  // Jump buffer - track when jump was last pressed
+  private lastJumpPressTime: number = 0;
+  private readonly JUMP_BUFFER_MS = 100; // Allow jump input 100ms before landing
+  
   constructor() {
     this.initKeyboard();
     this.initGamepad();
@@ -53,6 +57,10 @@ export class InputManager {
       // Track just-pressed keys (not already held)
       if (!this.keys.has(e.code)) {
         this.justPressedKeys.add(e.code);
+        // Track jump buffer timing
+        if (e.code === 'Space') {
+          this.lastJumpPressTime = performance.now();
+        }
       }
       this.keys.add(e.code);
     });
@@ -139,6 +147,21 @@ export class InputManager {
     }
     
     return state;
+  }
+  
+  /**
+   * Check if jump was pressed within the buffer window
+   * Used for jump buffering - allows pressing jump slightly before landing
+   */
+  isJumpBuffered(): boolean {
+    return performance.now() - this.lastJumpPressTime < this.JUMP_BUFFER_MS;
+  }
+  
+  /**
+   * Clear the jump buffer (call after consuming a buffered jump)
+   */
+  clearJumpBuffer(): void {
+    this.lastJumpPressTime = 0;
   }
   
   private mergeGamepad(state: InputState, gp: Gamepad): InputState {

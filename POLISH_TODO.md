@@ -23,8 +23,8 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [ ] **Wheel spin indicator** - Visual feedback on chair wheels rotating with speed
 
 ### Controls & Feel
-- [ ] **Jump buffer** - Allow jump input slightly before landing (~100ms window)
-- [ ] **Coyote time** - Brief window to jump after leaving ground (~80ms)
+- [x] **Jump buffer** - Allow jump input slightly before landing (~100ms window) ✅ Implemented
+- [x] **Coyote time** - Brief window to jump after leaving ground (~80ms) ✅ Implemented
 - [ ] **Trick input queue** - Queue next trick input while current trick animating
 
 ### UI Polish
@@ -177,7 +177,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 1. Wheel roll sound (movement feels silent)
 2. Landing screen shake (missing reward feedback)
 3. Push sound effect (input feedback)
-4. Jump buffer + coyote time (controls feel tighter)
+4. ~~Jump buffer + coyote time~~ ✅ DONE (controls feel tighter)
 5. Speed lines effect (sense of speed)
 
 ### Highest Impact, Medium Effort
@@ -201,8 +201,8 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ### Controls (like THPS 1+2)
 - [x] Responsive, snappy inputs
 - [x] WASD + Arrow keys scheme
-- [ ] Jump buffer
-- [ ] Coyote time
+- [x] Jump buffer ✅
+- [x] Coyote time ✅
 - [ ] Revert for combo links
 - [ ] Manual balance
 
@@ -231,5 +231,5 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-02-28*
+*Last updated: 2026-03-01*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*

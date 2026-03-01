@@ -39,6 +39,7 @@ export class Game {
   // Constants
   private readonly PHYSICS_TIMESTEP = 1 / 60;
   private readonly MAX_FRAME_SKIP = 5;
+  private readonly COYOTE_TIME_MS = 80; // Allow jumping 80ms after leaving ground
   
   // Three.js
   private scene!: THREE.Scene;
@@ -86,6 +87,7 @@ export class Game {
   private manualBalance = 0.5;
   private lastTrickTime = 0;
   private spinRotation = 0;
+  private lastGroundedTime = 0;  // Coyote time tracking
   
   // Debug: animation cycling
   private debugAnimIndex = 0;
@@ -2380,6 +2382,11 @@ export class Game {
     this.playerState.isGrounded = pos.y < 1.0 && Math.abs(vel.y) < 2.0;
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
+    // Track last grounded time for coyote time
+    if (this.playerState.isGrounded) {
+      this.lastGroundedTime = performance.now();
+    }
+    
     // Track air time
     if (this.playerState.isAirborne) {
       this.playerState.airTime += dt * 1000;
@@ -2479,9 +2486,20 @@ export class Game {
       this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
     }
     
-    // JUMP (Space) - Ollie
-    if (input.jump && this.playerState.isGrounded) {
+    // JUMP (Space) - Ollie with coyote time + jump buffer
+    // Coyote time: can jump briefly after leaving ground
+    const withinCoyoteTime = performance.now() - this.lastGroundedTime < this.COYOTE_TIME_MS;
+    const canJump = this.playerState.isGrounded || withinCoyoteTime;
+    
+    // Jump buffer: pressing jump slightly before landing still triggers jump on land
+    const wantsJump = input.jump || this.input.isJumpBuffered();
+    
+    if (wantsJump && canJump) {
       proceduralSounds.playJump();
+      // Clear the jump buffer so we don't double-jump
+      this.input.clearJumpBuffer();
+      // Reset coyote time so we can't double-jump
+      this.lastGroundedTime = 0;
       // Set vertical velocity directly for reliable jumping
       const newVel = velocity.clone();
       newVel.y = jumpImpulse;
