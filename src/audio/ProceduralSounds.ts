@@ -368,6 +368,88 @@ export class ProceduralSounds {
     });
   }
   
+  // Balance warning sound system
+  private balanceWarningOsc: OscillatorNode | null = null;
+  private balanceWarningGain: GainNode | null = null;
+  private balanceWarningActive = false;
+  
+  /**
+   * Start balance warning sound (pulsing alert when grind balance is in danger zone)
+   * Call this when balance is < 0.25 or > 0.75
+   */
+  startBalanceWarning(): void {
+    if (!this.audioContext || !this.masterGain || this.balanceWarningActive) return;
+    
+    // Create pulsing warning tone
+    this.balanceWarningOsc = this.audioContext.createOscillator();
+    this.balanceWarningGain = this.audioContext.createGain();
+    
+    // Slightly dissonant warning tone
+    this.balanceWarningOsc.type = 'square';
+    this.balanceWarningOsc.frequency.value = 180;
+    
+    // Pulsing effect via LFO on gain
+    const lfo = this.audioContext.createOscillator();
+    const lfoGain = this.audioContext.createGain();
+    lfo.type = 'sine';
+    lfo.frequency.value = 6; // 6Hz pulse
+    lfoGain.gain.value = 0.08; // Modulation depth
+    
+    lfo.connect(lfoGain);
+    lfoGain.connect(this.balanceWarningGain.gain);
+    
+    this.balanceWarningGain.gain.value = 0.06; // Base volume (quiet but noticeable)
+    
+    this.balanceWarningOsc.connect(this.balanceWarningGain);
+    this.balanceWarningGain.connect(this.masterGain);
+    
+    this.balanceWarningOsc.start();
+    lfo.start();
+    this.balanceWarningActive = true;
+  }
+  
+  /**
+   * Update balance warning intensity based on how close to edge
+   * @param balance - Current balance (0-1, 0.5 is center)
+   */
+  updateBalanceWarning(balance: number): void {
+    if (!this.balanceWarningGain || !this.balanceWarningOsc || !this.audioContext) return;
+    
+    // Calculate danger level (0 = safe, 1 = about to bail)
+    const distFromCenter = Math.abs(0.5 - balance);
+    const dangerZoneStart = 0.25; // Start warning at 0.25 or 0.75
+    const dangerZoneEnd = 0.4;    // Max warning at 0.1 or 0.9
+    
+    if (distFromCenter < dangerZoneStart) {
+      // Safe zone - silence warning
+      this.balanceWarningGain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.1);
+      return;
+    }
+    
+    // In danger zone - scale intensity
+    const dangerLevel = Math.min(1, (distFromCenter - dangerZoneStart) / (dangerZoneEnd - dangerZoneStart));
+    
+    // Volume increases with danger (0.04 to 0.12)
+    const volume = 0.04 + dangerLevel * 0.08;
+    this.balanceWarningGain.gain.linearRampToValueAtTime(volume, this.audioContext.currentTime + 0.05);
+    
+    // Pitch increases with danger (180Hz to 280Hz)
+    const pitch = 180 + dangerLevel * 100;
+    this.balanceWarningOsc.frequency.linearRampToValueAtTime(pitch, this.audioContext.currentTime + 0.05);
+  }
+  
+  /**
+   * Stop balance warning sound
+   */
+  stopBalanceWarning(): void {
+    if (this.balanceWarningOsc) {
+      this.balanceWarningOsc.stop();
+      this.balanceWarningOsc = null;
+      this.balanceWarningGain = null;
+      this.balanceWarningActive = false;
+    }
+  }
+  
   /**
    * Play menu select sound
    */

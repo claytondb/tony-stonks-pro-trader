@@ -12,8 +12,8 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [x] **Add wheel roll sound** - Continuous rolling noise proportional to speed ✅ Implemented (procedural)
 - [x] **Landing screen shake** - Small camera shake on successful combo land (not just bail) ✅ Enhanced
 - [x] **Trick pitch variation** - Vary the procedural trick sound pitch based on trick value (higher points = higher pitch) ✅ Implemented
-- [ ] **Balance warning sound** - Audio cue when grind balance is in danger zone (near edges)
-- [ ] **Push sound effect** - Satisfying "kick" sound when player pushes (W key)
+- [x] **Balance warning sound** - Audio cue when grind balance is in danger zone (near edges) ✅ Implemented (pulsing warning tone)
+- [x] **Push sound effect** - Satisfying "kick" sound when player pushes (W key) ✅ Implemented (with 400ms cooldown)
 
 ### Visual Juice
 - [ ] **Speed lines/blur** - Simple radial blur or speed lines shader when moving fast (>12 speed)
@@ -176,7 +176,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ### Highest Impact, Lowest Effort
 1. ~~Wheel roll sound~~ ✅ DONE (procedural rumble based on speed)
 2. ~~Landing screen shake~~ ✅ DONE (enhanced for combo lands)
-3. Push sound effect (input feedback)
+3. ~~Push sound effect~~ ✅ DONE (satisfying kick with cooldown)
 4. ~~Jump buffer + coyote time~~ ✅ DONE (controls feel tighter)
 5. Speed lines effect (sense of speed)
 
@@ -207,9 +207,11 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [ ] Manual balance
 
 ### Audio (like THPS 1+2)
-- [ ] Satisfying trick sounds
-- [ ] Wheel/rolling sounds
-- [ ] Grind metallic sounds
+- [x] Satisfying trick sounds (pitch varies by value) ✅
+- [x] Wheel/rolling sounds ✅
+- [x] Grind metallic sounds ✅
+- [x] Push/kick sounds ✅
+- [x] Balance warning sounds ✅
 - [ ] Music that matches energy
 - [ ] Sound variety (not repetitive)
 
@@ -231,10 +233,14 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-03-01 (1:00 AM nightly run)*
+*Last updated: 2026-03-01 (5:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-01 (5:00 AM)
+- ✅ **Balance warning sound** - Pulsing warning tone when grind balance is in danger zone (pitch and volume increase as you get closer to bailing)
+- ✅ **Push sound effect** - Procedural "kick" sound when pushing (W key), with 400ms cooldown to prevent spam
 
 ### 2026-03-01 (2:00 AM)
 - ✅ **Wheel roll sound** - Procedural rumbling noise that varies with speed (louder and brighter at high speed)

@@ -90,6 +90,7 @@ export class Game {
   private lastTrickTime = 0;
   private spinRotation = 0;
   private lastGroundedTime = 0;  // Coyote time tracking
+  private lastPushSoundTime = 0;  // Cooldown for push sound
   
   // Debug: animation cycling
   private debugAnimIndex = 0;
@@ -2079,6 +2080,7 @@ export class Game {
         this.grindScore = 0;  // Reset grind score
         proceduralSounds.playGrindStart();
         proceduralSounds.startGrindLoop();
+        proceduralSounds.startBalanceWarning();  // Start balance warning system (initially silent)
       }
     }
     
@@ -2094,6 +2096,7 @@ export class Game {
         this.grindSystem.forceEndGrind();
         this.playerState.isGrinding = false;
         proceduralSounds.stopGrindLoop();
+        proceduralSounds.stopBalanceWarning();
         proceduralSounds.playJump();
         // Apply jump impulse
         this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, 10, 0));
@@ -2104,6 +2107,9 @@ export class Game {
         // Update balance display
         const grindState = this.grindSystem.getState();
         this.grindBalance = grindState.balance;
+        
+        // Update balance warning sound (gets louder/higher pitch near edges)
+        proceduralSounds.updateBalanceWarning(this.grindBalance);
         
         // Earn stonks while grinding (10 per second base, up to 50 with good balance)
         const balanceBonus = 1 + Math.abs(0.5 - grindState.balance) * -4 + 2;  // Better balance = more stonks
@@ -2127,6 +2133,7 @@ export class Game {
         if (!this.grindSystem.isGrinding()) {
           this.playerState.isGrinding = false;
           proceduralSounds.stopGrindLoop();
+          proceduralSounds.stopBalanceWarning();
         }
       }
     } else {
@@ -2495,6 +2502,13 @@ export class Game {
         newVel.x += boost.x;
         newVel.z += boost.z;
         this.physics.setVelocity(this.chairBody, newVel);
+        
+        // Play push sound with cooldown (every 400ms max)
+        const now = performance.now();
+        if (now - this.lastPushSoundTime > 400) {
+          proceduralSounds.playPush();
+          this.lastPushSoundTime = now;
+        }
       }
     }
     
