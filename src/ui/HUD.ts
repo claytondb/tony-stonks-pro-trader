@@ -4,6 +4,16 @@
  */
 
 import { ComboEvent, ComboTrick } from '../tricks/ComboSystem';
+import { TrickType } from '../tricks/TrickRegistry';
+
+// Color mapping for trick types
+const TRICK_TYPE_COLORS: Record<TrickType, string> = {
+  flip: '#00FFFF',    // Cyan
+  grab: '#FFD700',    // Gold
+  grind: '#FF8C00',   // Orange
+  manual: '#32CD32',  // Lime
+  special: '#FF00FF', // Magenta/Purple
+};
 
 export class HUD {
   private container: HTMLElement;
@@ -18,6 +28,7 @@ export class HUD {
   private currentScore = 0;
   private displayedScore = 0;
   private specialAmount = 0;
+  private lastMultiplier = 1;
   
   constructor(container: HTMLElement) {
     this.container = container;
@@ -80,6 +91,17 @@ export class HUD {
       .hud-combo-multiplier {
         font-size: 28px;
         color: #00FF88;
+        transition: transform 0.15s ease-out;
+      }
+      
+      .hud-combo-multiplier.pulse {
+        animation: multiplierPulse 0.3s ease-out;
+      }
+      
+      @keyframes multiplierPulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.4); color: #FFFF00; }
+        100% { transform: scale(1); }
       }
       
       .hud-trick-popup {
@@ -339,13 +361,17 @@ export class HUD {
   }
   
   /**
-   * Show trick popup
+   * Show trick popup with color based on trick type
    */
-  showTrick(name: string, points: number, multiplier: number): void {
-    const nameEl = this.trickPopup.querySelector('.hud-trick-name');
+  showTrick(name: string, points: number, multiplier: number, trickType?: TrickType): void {
+    const nameEl = this.trickPopup.querySelector('.hud-trick-name') as HTMLElement;
     const pointsEl = this.trickPopup.querySelector('.hud-trick-points');
     
-    if (nameEl) nameEl.textContent = name;
+    if (nameEl) {
+      nameEl.textContent = name;
+      // Color based on trick type
+      nameEl.style.color = trickType ? TRICK_TYPE_COLORS[trickType] : '#00FFFF';
+    }
     if (pointsEl) pointsEl.textContent = `+${points} × ${multiplier}`;
     
     this.trickPopup.classList.remove('show');
@@ -360,29 +386,43 @@ export class HUD {
   }
   
   /**
-   * Update combo display
+   * Update combo display with multiplier pulse animation
    */
   updateCombo(tricks: ComboTrick[], totalPoints: number, multiplier: number): void {
-    const tricksEl = this.comboElement.querySelector('.hud-combo-tricks');
+    const tricksEl = this.comboElement.querySelector('.hud-combo-tricks') as HTMLElement;
     const scoreEl = this.comboElement.querySelector('.hud-combo-score');
-    const multEl = this.comboElement.querySelector('.hud-combo-multiplier');
+    const multEl = this.comboElement.querySelector('.hud-combo-multiplier') as HTMLElement;
     
     if (tricks.length > 0) {
       this.comboElement.classList.add('active');
       
-      // Show last 5 tricks
+      // Show last 5 tricks with color coding
       const recentTricks = tricks.slice(-5);
       if (tricksEl) {
-        tricksEl.textContent = recentTricks.map(t => t.trick.displayName).join(' + ');
+        // Create colored spans for each trick
+        tricksEl.innerHTML = recentTricks.map(t => {
+          const color = TRICK_TYPE_COLORS[t.trick.type] || '#00FFFF';
+          return `<span style="color:${color}">${t.trick.displayName}</span>`;
+        }).join(' <span style="color:#888">+</span> ');
       }
       if (scoreEl) {
         scoreEl.textContent = (totalPoints * multiplier).toLocaleString();
       }
       if (multEl) {
         multEl.textContent = `× ${multiplier}`;
+        
+        // Pulse animation when multiplier increases
+        if (multiplier > this.lastMultiplier) {
+          multEl.classList.remove('pulse');
+          void multEl.offsetWidth; // Force reflow
+          multEl.classList.add('pulse');
+        }
       }
+      
+      this.lastMultiplier = multiplier;
     } else {
       this.comboElement.classList.remove('active');
+      this.lastMultiplier = 1;
     }
   }
   
@@ -393,7 +433,7 @@ export class HUD {
     switch (event.type) {
       case 'trick_added':
         if (event.trick && event.points !== undefined && event.multiplier !== undefined) {
-          this.showTrick(event.trick.displayName, event.points, event.multiplier);
+          this.showTrick(event.trick.displayName, event.points, event.multiplier, event.trick.type);
         }
         break;
         

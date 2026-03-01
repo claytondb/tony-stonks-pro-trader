@@ -16,6 +16,7 @@ import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
 import { GrindParticles } from '../effects/GrindParticles';
+import { LandingParticles } from '../effects/LandingParticles';
 import { LevelData, LevelObject, getLevelById } from '../levels/LevelData';
 import { SkyGradient } from '../utils/SkyGradient';
 
@@ -52,6 +53,7 @@ export class Game {
   private physics!: PhysicsWorld;
   private grindSystem!: GrindSystem;
   private grindParticles!: GrindParticles;
+  private landingParticles!: LandingParticles;
   private cameraController!: CameraController;
   private trickDetector!: TrickDetector;
   private comboSystem!: ComboSystem;
@@ -129,6 +131,7 @@ export class Game {
       report(45, 'Setting up grind system...');
       this.grindSystem = new GrindSystem();
       this.grindParticles = new GrindParticles(this.scene);
+      this.landingParticles = new LandingParticles(this.scene);
       
       report(50, 'Loading trick system...');
       this.initTricks();
@@ -2127,6 +2130,9 @@ export class Game {
       this.grindParticles.update(dt, false);
     }
     
+    // Always update landing particles
+    this.landingParticles.update(dt);
+    
     // Step physics (but not during grinding - grind system controls position)
     if (!this.grindSystem.isGrinding()) {
       this.physics.step(dt);
@@ -2398,17 +2404,31 @@ export class Game {
     if (!wasGrounded && this.playerState.isGrounded) {
       // Just landed
       proceduralSounds.playLand();
+      
+      // Calculate landing intensity based on air time (0-1)
+      const landingIntensity = Math.min(1, this.playerState.airTime / 1500);
+      
+      // Spawn landing dust particles
+      if (landingIntensity > 0.1) {
+        this.landingParticles.spawn(pos.clone(), landingIntensity);
+      }
+      
+      // Camera shake on impact (stronger for bigger air or combo lands)
+      let impactShake = Math.min(0.3, this.playerState.airTime / 2000);
+      
       if (this.comboSystem.hasActiveCombo()) {
+        // Bigger shake for successful combo landing
+        const comboState = this.comboSystem.getState();
+        impactShake = Math.min(0.5, impactShake + comboState.multiplier * 0.05);
         this.comboSystem.land();
         // playComboLanded is called via combo event
       }
-      this.spinRotation = 0;
       
-      // Small camera shake on impact (stronger for bigger air)
-      const impactShake = Math.min(0.3, this.playerState.airTime / 2000);
       if (impactShake > 0.05) {
-        this.cameraController.shake(impactShake, 0.15);
+        this.cameraController.shake(impactShake, 0.2);
       }
+      
+      this.spinRotation = 0;
     }
     
     // Update special availability

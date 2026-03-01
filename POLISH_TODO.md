@@ -10,16 +10,16 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ### Audio & Feedback
 - [ ] **Add wheel roll sound** - Continuous rolling noise proportional to speed (currently silent when moving)
-- [ ] **Landing screen shake** - Small camera shake on successful combo land (not just bail)
+- [x] **Landing screen shake** - Small camera shake on successful combo land (not just bail) ✅ Enhanced
 - [ ] **Trick pitch variation** - Vary the procedural trick sound pitch based on trick value (higher points = higher pitch)
 - [ ] **Balance warning sound** - Audio cue when grind balance is in danger zone (near edges)
 - [ ] **Push sound effect** - Satisfying "kick" sound when player pushes (W key)
 
 ### Visual Juice
 - [ ] **Speed lines/blur** - Simple radial blur or speed lines shader when moving fast (>12 speed)
-- [ ] **Combo multiplier pulse** - HUD multiplier scales up briefly when it increases
-- [ ] **Trick name colors** - Color-code trick names by type (flip=cyan, grab=gold, grind=orange)
-- [ ] **Landing dust particles** - Small puff when landing from air (similar to grind sparks system)
+- [x] **Combo multiplier pulse** - HUD multiplier scales up briefly when it increases ✅ Implemented
+- [x] **Trick name colors** - Color-code trick names by type (flip=cyan, grab=gold, grind=orange) ✅ Implemented
+- [x] **Landing dust particles** - Small puff when landing from air (similar to grind sparks system) ✅ Implemented
 - [ ] **Wheel spin indicator** - Visual feedback on chair wheels rotating with speed
 
 ### Controls & Feel
@@ -175,7 +175,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ### Highest Impact, Lowest Effort
 1. Wheel roll sound (movement feels silent)
-2. Landing screen shake (missing reward feedback)
+2. ~~Landing screen shake~~ ✅ DONE (enhanced for combo lands)
 3. Push sound effect (input feedback)
 4. ~~Jump buffer + coyote time~~ ✅ DONE (controls feel tighter)
 5. Speed lines effect (sense of speed)
@@ -217,9 +217,9 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [x] Trick name popups
 - [x] Combo display
 - [x] Special meter
-- [ ] Screen shake on impacts
+- [x] Screen shake on impacts ✅
 - [ ] Speed effects
-- [ ] Particle polish
+- [x] Particle polish (landing dust) ✅
 - [ ] Camera dynamism
 
 ### Progression (like THPS 1+2)
@@ -231,5 +231,17 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-03-01*
+*Last updated: 2026-03-01 (1:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
+
+## Recent Changes (Nightly Runs)
+
+### 2026-03-01 (1:00 AM)
+- ✅ **Trick name colors** - Tricks now color-coded by type (flip=cyan, grab=gold, grind=orange, manual=lime, special=magenta)
+- ✅ **Combo multiplier pulse** - Multiplier now pulses yellow when it increases
+- ✅ **Landing dust particles** - Dust puff on landing, intensity based on air time
+- ✅ **Enhanced landing shake** - Camera shake on successful combo lands (bigger shake for bigger combos)
+
+### 2026-03-01 (12:00 AM)
+- ✅ **Jump buffer** - 100ms window before landing
+- ✅ **Coyote time** - 80ms grace period after leaving ground
