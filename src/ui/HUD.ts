@@ -28,6 +28,7 @@ export class HUD {
   private balanceMeter!: HTMLElement;
   private balanceArrow!: HTMLElement;
   private controlsHint!: HTMLElement;
+  private spinCounterElement!: HTMLElement;
   
   private currentScore = 0;
   private displayedScore = 0;
@@ -272,6 +273,30 @@ export class HUD {
         transition: left 0.05s;
       }
       
+      .hud-spin-counter {
+        position: absolute;
+        top: 25%;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 48px;
+        font-weight: bold;
+        color: #FFD700;
+        text-shadow: 0 0 20px rgba(255,215,0,0.8), 3px 3px 6px rgba(0,0,0,0.9);
+        opacity: 0;
+        transition: opacity 0.15s ease-out;
+        letter-spacing: 4px;
+      }
+      
+      .hud-spin-counter.active {
+        opacity: 1;
+        animation: spinPulse 0.15s ease-out;
+      }
+      
+      @keyframes spinPulse {
+        0% { transform: translateX(-50%) scale(1.3); }
+        100% { transform: translateX(-50%) scale(1); }
+      }
+      
       .hud-controls {
         position: absolute;
         bottom: 20px;
@@ -358,6 +383,11 @@ export class HUD {
     `;
     this.balanceArrow = this.balanceMeter.querySelector('.hud-balance-arrow')!;
     hud.appendChild(this.balanceMeter);
+    
+    // Spin counter (shown during air spins)
+    this.spinCounterElement = document.createElement('div');
+    this.spinCounterElement.className = 'hud-spin-counter';
+    hud.appendChild(this.spinCounterElement);
     
     // Controls hint (hidden if player has played before)
     this.controlsHint = document.createElement('div');
@@ -601,6 +631,31 @@ export class HUD {
     this.comboTimerFill.classList.remove('urgent');
     this.trickPopup.classList.remove('show');
     this.balanceMeter.classList.remove('active');
+    this.spinCounterElement.classList.remove('active');
+    this.spinCounterElement.textContent = '';
+  }
+  
+  /**
+   * Update spin counter display
+   * Shows "180", "360", "540", etc. during air spins
+   * Pass 0 to hide the counter
+   */
+  setSpinCounter(degrees: number): void {
+    if (degrees >= 180) {
+      const displayDegrees = Math.floor(degrees / 180) * 180;
+      const newText = `${displayDegrees}°`;
+      
+      // Only update if changed (avoids animation spam)
+      if (this.spinCounterElement.textContent !== newText) {
+        this.spinCounterElement.textContent = newText;
+        this.spinCounterElement.classList.remove('active');
+        void this.spinCounterElement.offsetWidth; // Force reflow
+        this.spinCounterElement.classList.add('active');
+      }
+    } else {
+      // Hide when < 180
+      this.spinCounterElement.classList.remove('active');
+    }
   }
   
   /**

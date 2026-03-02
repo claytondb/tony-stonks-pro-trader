@@ -91,6 +91,8 @@ export class Game {
   private manualBalance = 0.5;
   private lastTrickTime = 0;
   private spinRotation = 0;
+  private cumulativeSpinDegrees = 0;  // Track total spin during air time
+  private airStartRotation = 0;  // Chair Y rotation when leaving ground
   private lastGroundedTime = 0;  // Coyote time tracking
   private lastPushSoundTime = 0;  // Cooldown for push sound
   
@@ -2431,11 +2433,27 @@ export class Game {
       this.lastGroundedTime = performance.now();
     }
     
-    // Track air time
+    // Track air time and spin
     if (this.playerState.isAirborne) {
       this.playerState.airTime += dt * 1000;
+      
+      // Track spin - calculate cumulative rotation since leaving ground
+      const currentRotation = this.chair.rotation.y;
+      const spinDelta = (currentRotation - this.airStartRotation) * (180 / Math.PI);
+      // Normalize to handle wrap-around (accumulates properly)
+      this.cumulativeSpinDegrees = Math.abs(spinDelta);
+      
+      // Update HUD with spin counter (only show if >= 90 degrees)
+      const roundedSpin = Math.floor(this.cumulativeSpinDegrees / 180) * 180;
+      this.hud?.setSpinCounter(roundedSpin >= 180 ? roundedSpin : 0);
     } else {
       this.playerState.airTime = 0;
+    }
+    
+    // Becoming airborne - store starting rotation
+    if (wasGrounded && !this.playerState.isGrounded) {
+      this.airStartRotation = this.chair.rotation.y;
+      this.cumulativeSpinDegrees = 0;
     }
     
     // Landing detection
@@ -2467,6 +2485,8 @@ export class Game {
       }
       
       this.spinRotation = 0;
+      this.cumulativeSpinDegrees = 0;
+      this.hud?.setSpinCounter(0);  // Hide spin counter on landing
     }
     
     // Update special availability

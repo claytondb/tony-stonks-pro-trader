@@ -66,7 +66,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [ ] **Combo land celebration** - Small confetti burst on landing big combos (>10k)
 
 ### Trick System Polish
-- [ ] **Spin counter display** - Show "180", "360", "540" etc. during spins
+- [x] **Spin counter display** - Show "180", "360", "540" etc. during spins ✅
 - [ ] **Revert system** - Add revert (Ctrl) to connect landings to manuals
 - [ ] **Manual balance meter** - Implement manual trick with balance (up/down to start)
 - [ ] **Trick variations** - Display "FS" / "BS" prefix based on approach direction
@@ -233,10 +233,13 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-03-02 (12:00 AM nightly run)*
+*Last updated: 2026-03-02 (4:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-02 (4:00 AM)
+- ✅ **Spin counter display** - Shows "180°", "360°", "540°", etc. during air spins. Gold text with glow effect, pulses on each 180° increment. Adds satisfying visual feedback for rotation tricks.
 
 ### 2026-03-02 (1:00 AM)
 - ✅ **Hide controls hint after first play** - Controls hint now fades out on first input and stays hidden on return visits using localStorage.
