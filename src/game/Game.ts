@@ -66,6 +66,7 @@ export class Game {
   private chair!: THREE.Group;
   private chairBody!: RAPIER.RigidBody;
   private useGLBModel = true; // Set to false to use primitive shapes
+  private wheelMeshes: THREE.Object3D[] = []; // Chair wheel meshes for spin animation
   
   // Level objects (can be cleared and reloaded)
   private levelObjects: THREE.Object3D[] = [];
@@ -289,16 +290,22 @@ export class Game {
       chairModel.position.set(0, -0.3, 0);  // Offset to sit on ground
       // Model's natural +Z should face forward (away from camera)
       
-      // Enable shadows
+      // Enable shadows and find wheel meshes
+      this.wheelMeshes = [];
       chairModel.traverse((child) => {
         if (child instanceof THREE.Mesh) {
           child.castShadow = true;
           child.receiveShadow = true;
         }
+        // Find wheel meshes by name (common patterns: wheel, caster, roller)
+        const nameLower = child.name.toLowerCase();
+        if (nameLower.includes('wheel') || nameLower.includes('caster') || nameLower.includes('roller')) {
+          this.wheelMeshes.push(child);
+        }
       });
       
       this.chair.add(chairModel);
-      console.log('Chair GLB model loaded');
+      console.log(`Chair GLB model loaded with ${this.wheelMeshes.length} wheel meshes`);
     } catch (error) {
       console.warn('Failed to load chair GLB, using primitives:', error);
       // Fallback to primitive chair
@@ -2183,6 +2190,17 @@ export class Game {
     const currentVel = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(currentVel.x, 0, currentVel.z).length();
     proceduralSounds.updateWheelRoll(currentSpeed, this.playerState.isGrounded && !this.playerState.isGrinding);
+    
+    // Rotate wheel meshes based on speed (visual feedback)
+    // Assuming ~5cm wheel diameter (0.025m radius), rotation = speed / radius
+    if (this.wheelMeshes.length > 0 && this.playerState.isGrounded && !this.playerState.isGrinding) {
+      const wheelRadius = 0.025;
+      const rotationDelta = (currentSpeed / wheelRadius) * dt;
+      for (const wheel of this.wheelMeshes) {
+        // Rotate around local X axis (wheels roll forward/back)
+        wheel.rotation.x += rotationDelta;
+      }
+    }
     
     // Update speed lines effect (radial blur at high speeds)
     this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);

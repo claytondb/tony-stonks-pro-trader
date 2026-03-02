@@ -20,7 +20,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [x] **Combo multiplier pulse** - HUD multiplier scales up briefly when it increases ✅ Implemented
 - [x] **Trick name colors** - Color-code trick names by type (flip=cyan, grab=gold, grind=orange) ✅ Implemented
 - [x] **Landing dust particles** - Small puff when landing from air (similar to grind sparks system) ✅ Implemented
-- [ ] **Wheel spin indicator** - Visual feedback on chair wheels rotating with speed
+- [x] **Wheel spin indicator** - Visual feedback on chair wheels rotating with speed ✅
 
 ### Controls & Feel
 - [x] **Jump buffer** - Allow jump input slightly before landing (~100ms window) ✅ Implemented
