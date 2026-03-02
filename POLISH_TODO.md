@@ -31,7 +31,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [x] **Score number animation** - Score counts up with easing + scale pop effect ✅ Implemented
 - [ ] **Special meter glow** - Pulsing glow effect when special is full (beyond current animation)
 - [x] **Combo timer bar** - Visual indicator of time remaining to extend combo ✅ Implemented
-- [ ] **Hide controls hint after first play** - Use localStorage to track
+- [x] **Hide controls hint after first play** - Use localStorage to track ✅
 
 ---
 
@@ -237,6 +237,9 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-02 (1:00 AM)
+- ✅ **Hide controls hint after first play** - Controls hint now fades out on first input and stays hidden on return visits using localStorage.
 
 ### 2026-03-02 (12:00 AM)
 - ✅ **Speed lines effect** - Radial blur-like speed streaks at screen edges when moving fast (>10 speed), full effect at 18+ speed. Adds dramatic sense of velocity.

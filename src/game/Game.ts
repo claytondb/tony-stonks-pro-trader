@@ -2047,6 +2047,12 @@ export class Game {
     this.input.update();
     const input = this.input.getState();
     
+    // Hide controls hint on first meaningful input
+    if (input.forward || input.brake || input.turnLeft || input.turnRight || 
+        input.jump || input.flip || input.grab || input.grind) {
+      this.hud?.hideControlsHint();
+    }
+    
     // Update player state
     this.updatePlayerState(dt);
     

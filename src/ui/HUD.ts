@@ -15,6 +15,8 @@ const TRICK_TYPE_COLORS: Record<TrickType, string> = {
   special: '#FF00FF', // Magenta/Purple
 };
 
+const STORAGE_KEY_HAS_PLAYED = 'tonyStonks_hasPlayed';
+
 export class HUD {
   private container: HTMLElement;
   private scoreElement!: HTMLElement;
@@ -25,11 +27,13 @@ export class HUD {
   private specialFill!: HTMLElement;
   private balanceMeter!: HTMLElement;
   private balanceArrow!: HTMLElement;
+  private controlsHint!: HTMLElement;
   
   private currentScore = 0;
   private displayedScore = 0;
   private specialAmount = 0;
   private lastMultiplier = 1;
+  private controlsHidden = false;
   
   constructor(container: HTMLElement) {
     this.container = container;
@@ -355,10 +359,10 @@ export class HUD {
     this.balanceArrow = this.balanceMeter.querySelector('.hud-balance-arrow')!;
     hud.appendChild(this.balanceMeter);
     
-    // Controls hint
-    const controls = document.createElement('div');
-    controls.className = 'hud-controls';
-    controls.innerHTML = `
+    // Controls hint (hidden if player has played before)
+    this.controlsHint = document.createElement('div');
+    this.controlsHint.className = 'hud-controls';
+    this.controlsHint.innerHTML = `
       W - Push forward<br>
       S - Brake<br>
       A/D - Turn<br>
@@ -369,7 +373,15 @@ export class HUD {
       Q/E - Spin (in air)<br>
       ESC - Pause
     `;
-    hud.appendChild(controls);
+    
+    // Check if player has played before
+    const hasPlayed = localStorage.getItem(STORAGE_KEY_HAS_PLAYED) === 'true';
+    if (hasPlayed) {
+      this.controlsHint.style.display = 'none';
+      this.controlsHidden = true;
+    }
+    
+    hud.appendChild(this.controlsHint);
     
     this.container.appendChild(hud);
   }
@@ -589,5 +601,31 @@ export class HUD {
     this.comboTimerFill.classList.remove('urgent');
     this.trickPopup.classList.remove('show');
     this.balanceMeter.classList.remove('active');
+  }
+  
+  /**
+   * Hide controls hint and mark player as having played
+   * Called on first input to remember the player knows the controls
+   */
+  hideControlsHint(): void {
+    if (this.controlsHidden) return;
+    
+    // Fade out the controls hint
+    this.controlsHint.style.transition = 'opacity 0.5s ease-out';
+    this.controlsHint.style.opacity = '0';
+    
+    // Hide completely after fade
+    setTimeout(() => {
+      this.controlsHint.style.display = 'none';
+    }, 500);
+    
+    // Remember for next time
+    try {
+      localStorage.setItem(STORAGE_KEY_HAS_PLAYED, 'true');
+    } catch {
+      // localStorage might be unavailable
+    }
+    
+    this.controlsHidden = true;
   }
 }
