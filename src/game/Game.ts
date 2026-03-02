@@ -17,6 +17,7 @@ import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
 import { GrindParticles } from '../effects/GrindParticles';
 import { LandingParticles } from '../effects/LandingParticles';
+import { SpeedLines } from '../effects/SpeedLines';
 import { LevelData, LevelObject, getLevelById } from '../levels/LevelData';
 import { SkyGradient } from '../utils/SkyGradient';
 
@@ -54,6 +55,7 @@ export class Game {
   private grindSystem!: GrindSystem;
   private grindParticles!: GrindParticles;
   private landingParticles!: LandingParticles;
+  private speedLines!: SpeedLines;
   private cameraController!: CameraController;
   private trickDetector!: TrickDetector;
   private comboSystem!: ComboSystem;
@@ -133,6 +135,8 @@ export class Game {
       this.grindSystem = new GrindSystem();
       this.grindParticles = new GrindParticles(this.scene);
       this.landingParticles = new LandingParticles(this.scene);
+      this.speedLines = new SpeedLines(this.camera);
+      this.scene.add(this.speedLines.getMesh());
       
       report(50, 'Loading trick system...');
       this.initTricks();
@@ -2171,6 +2175,9 @@ export class Game {
     const currentVel = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(currentVel.x, 0, currentVel.z).length();
     proceduralSounds.updateWheelRoll(currentSpeed, this.playerState.isGrounded && !this.playerState.isGrinding);
+    
+    // Update speed lines effect (radial blur at high speeds)
+    this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);
     
     // Update combo system
     this.comboSystem.update(dt);

@@ -16,7 +16,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [x] **Push sound effect** - Satisfying "kick" sound when player pushes (W key) ✅ Implemented (with 400ms cooldown)
 
 ### Visual Juice
-- [ ] **Speed lines/blur** - Simple radial blur or speed lines shader when moving fast (>12 speed)
+- [x] **Speed lines/blur** - Simple radial blur or speed lines shader when moving fast (>12 speed) ✅ Implemented
 - [x] **Combo multiplier pulse** - HUD multiplier scales up briefly when it increases ✅ Implemented
 - [x] **Trick name colors** - Color-code trick names by type (flip=cyan, grab=gold, grind=orange) ✅ Implemented
 - [x] **Landing dust particles** - Small puff when landing from air (similar to grind sparks system) ✅ Implemented
@@ -178,7 +178,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 2. ~~Landing screen shake~~ ✅ DONE (enhanced for combo lands)
 3. ~~Push sound effect~~ ✅ DONE (satisfying kick with cooldown)
 4. ~~Jump buffer + coyote time~~ ✅ DONE (controls feel tighter)
-5. Speed lines effect (sense of speed)
+5. ~~Speed lines effect~~ ✅ DONE (radial streaks at screen edges)
 
 ### Highest Impact, Medium Effort
 1. Real sound effects (huge feel improvement)
@@ -233,10 +233,13 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-03-01 (5:00 AM nightly run)*
+*Last updated: 2026-03-02 (12:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-02 (12:00 AM)
+- ✅ **Speed lines effect** - Radial blur-like speed streaks at screen edges when moving fast (>10 speed), full effect at 18+ speed. Adds dramatic sense of velocity.
 
 ### 2026-03-01 (5:00 AM)
 - ✅ **Balance warning sound** - Pulsing warning tone when grind balance is in danger zone (pitch and volume increase as you get closer to bailing)
