@@ -306,16 +306,18 @@ export class GameStateManager {
   
   // Persistent background element (stays across menu transitions)
   private backgroundContainer: HTMLElement | null = null;
+  // Content container (gets cleared on state change, background stays)
+  private contentContainer: HTMLElement | null = null;
   
   constructor(container: HTMLElement, callbacks: GameStateCallbacks = {}) {
     this.uiContainer = container;
     this.callbacks = callbacks;
     
     this.initKeyboardControls();
-    this.initPersistentBackground();
+    this.initContainers();
   }
   
-  private initPersistentBackground(): void {
+  private initContainers(): void {
     // Create persistent background that stays across menu states
     this.backgroundContainer = document.createElement('div');
     this.backgroundContainer.id = 'persistent-bg';
@@ -331,8 +333,20 @@ export class GameStateManager {
       pointer-events: none;
       display: none;
     `;
-    // Insert at the beginning of uiContainer so it's behind other content
-    this.uiContainer.insertBefore(this.backgroundContainer, this.uiContainer.firstChild);
+    this.uiContainer.appendChild(this.backgroundContainer);
+    
+    // Create content container that sits on top of background
+    this.contentContainer = document.createElement('div');
+    this.contentContainer.id = 'ui-content';
+    this.contentContainer.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    `;
+    this.uiContainer.appendChild(this.contentContainer);
   }
   
 
@@ -433,19 +447,17 @@ export class GameStateManager {
    * Render UI based on current state
    */
   private renderUI(): void {
-    // Save background reference before clearing
-    const bg = this.backgroundContainer;
-    
-    this.uiContainer.innerHTML = '';
+    // Clear only the content container, leave background intact
+    if (this.contentContainer) {
+      this.contentContainer.innerHTML = '';
+    }
     
     // Show persistent background for menu states, hide for gameplay
     const menuStates: GameState[] = ['title', 'menu', 'level_select', 'options'];
     const showBg = menuStates.includes(this.state);
     
-    // Re-add background container (it was removed by innerHTML = '')
-    if (bg) {
-      bg.style.display = showBg ? 'block' : 'none';
-      this.uiContainer.appendChild(bg);
+    if (this.backgroundContainer) {
+      this.backgroundContainer.style.display = showBg ? 'block' : 'none';
     }
     
     switch (this.state) {
@@ -480,7 +492,7 @@ export class GameStateManager {
   }
   
   private renderLoading(): void {
-    this.uiContainer.innerHTML = `
+    this.contentContainer!.innerHTML = `
       <div style="
         position: absolute;
         top: 50%;
@@ -516,7 +528,7 @@ export class GameStateManager {
       this.titleGlitchTimeout = null;
     }
     
-    this.uiContainer.innerHTML = `
+    this.contentContainer!.innerHTML = `
       <div id="title-screen" style="
         position: absolute;
         top: 0;
@@ -738,7 +750,7 @@ export class GameStateManager {
       { label: 'CREDITS', action: 'credits' }
     ];
     
-    this.uiContainer.innerHTML = `
+    this.contentContainer!.innerHTML = `
       <div style="
         position: absolute;
         top: 0;
@@ -778,7 +790,7 @@ export class GameStateManager {
     `;
     
     // Add click handlers
-    this.uiContainer.querySelectorAll('.menu-btn').forEach(btn => {
+    this.contentContainer!.querySelectorAll('.menu-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.getAttribute('data-action');
         if (action === 'level_select' || action === 'career') {
@@ -822,7 +834,7 @@ export class GameStateManager {
       'D': '#FF4444'
     };
     
-    this.uiContainer.innerHTML = `
+    this.contentContainer!.innerHTML = `
       <div style="
         position: absolute;
         top: 0;
@@ -936,7 +948,7 @@ export class GameStateManager {
     `;
     
     // Add click handlers
-    this.uiContainer.querySelectorAll('.level-btn').forEach(btn => {
+    this.contentContainer!.querySelectorAll('.level-btn').forEach(btn => {
       const levelId = btn.getAttribute('data-id');
       btn.addEventListener('click', () => {
         if (levelId) {
@@ -955,7 +967,7 @@ export class GameStateManager {
       });
     });
     
-    this.uiContainer.querySelector('#back-btn')?.addEventListener('click', () => {
+    this.contentContainer!.querySelector('#back-btn')?.addEventListener('click', () => {
       this.setState('menu');
     });
   }
@@ -974,7 +986,7 @@ export class GameStateManager {
       { id: 'stonks_guy', name: 'Stonks Guy' }
     ];
     
-    this.uiContainer.innerHTML = `
+    this.contentContainer!.innerHTML = `
       <div style="
         position: absolute;
         top: 0;
@@ -1108,14 +1120,14 @@ export class GameStateManager {
     `;
     
     // Initialize preview
-    const previewContainer = this.uiContainer.querySelector('#player-preview') as HTMLElement;
+    const previewContainer = this.contentContainer!.querySelector('#player-preview') as HTMLElement;
     if (previewContainer) {
       this.playerPreview = new PlayerPreview(previewContainer);
       this.playerPreview.loadSkin(settings.playerSkin);
     }
     
     // Skin button handlers
-    this.uiContainer.querySelectorAll('.skin-btn').forEach(btn => {
+    this.contentContainer!.querySelectorAll('.skin-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const skinId = btn.getAttribute('data-skin') as PlayerSkin;
         const newSettings = loadSettings();
@@ -1123,7 +1135,7 @@ export class GameStateManager {
         saveSettings(newSettings);
         
         // Update button styles
-        this.uiContainer.querySelectorAll('.skin-btn').forEach(b => {
+        this.contentContainer!.querySelectorAll('.skin-btn').forEach(b => {
           const isSelected = b.getAttribute('data-skin') === skinId;
           (b as HTMLElement).style.background = isSelected ? '#00AA66' : '#333';
           (b as HTMLElement).style.borderColor = isSelected ? '#00FF88' : '#555';
@@ -1151,8 +1163,8 @@ export class GameStateManager {
     });
     
     // Volume handlers
-    const musicSlider = this.uiContainer.querySelector('#music-volume') as HTMLInputElement;
-    const sfxSlider = this.uiContainer.querySelector('#sfx-volume') as HTMLInputElement;
+    const musicSlider = this.contentContainer!.querySelector('#music-volume') as HTMLInputElement;
+    const sfxSlider = this.contentContainer!.querySelector('#sfx-volume') as HTMLInputElement;
     
     musicSlider?.addEventListener('input', () => {
       const newSettings = loadSettings();
@@ -1167,7 +1179,7 @@ export class GameStateManager {
     });
     
     // Back button
-    this.uiContainer.querySelector('#back-btn')?.addEventListener('click', () => {
+    this.contentContainer!.querySelector('#back-btn')?.addEventListener('click', () => {
       // Clean up preview
       if (this.playerPreview) {
         this.playerPreview.dispose();
@@ -1191,7 +1203,7 @@ export class GameStateManager {
           ">BACK TO EDITOR</button>
     ` : '';
     
-    this.uiContainer.innerHTML = `
+    this.contentContainer!.innerHTML = `
       <div style="
         position: absolute;
         top: 0;
@@ -1259,7 +1271,7 @@ export class GameStateManager {
       </div>
     `;
     
-    this.uiContainer.querySelectorAll('.pause-btn').forEach(btn => {
+    this.contentContainer!.querySelectorAll('.pause-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.getAttribute('data-action');
         switch (action) {
@@ -1421,7 +1433,7 @@ export class GameStateManager {
         ">High Score: ${result.previousHighScore.toLocaleString()}</div>
       ` : '');
     
-    this.uiContainer.innerHTML = `
+    this.contentContainer!.innerHTML = `
       <style>
         @keyframes newHighScore {
           0% { transform: scale(1); }
@@ -1528,7 +1540,7 @@ export class GameStateManager {
       </div>
     `;
     
-    this.uiContainer.querySelectorAll('.result-btn').forEach(btn => {
+    this.contentContainer!.querySelectorAll('.result-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.getAttribute('data-action');
         switch (action) {
