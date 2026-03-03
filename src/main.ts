@@ -86,6 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               onPlayTest: (level: EditorLevelData) => {
                 isPlayTesting = true;
                 playTestLevel = level;
+                gameStateManager?.setPlayTesting(true);
                 const gameLevel = EditorStorage.toGameLevel(level);
                 game?.loadCustomLevel(gameLevel);
                 game?.start();
@@ -128,9 +129,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         // If play testing, return to editor
         if (isPlayTesting && playTestLevel) {
           isPlayTesting = false;
+          gameStateManager?.setPlayTesting(false);
           gameStateManager?.setState('editor');
           // Editor will be recreated by state change handler
         }
+      },
+      
+      onBackToEditor: () => {
+        game?.stop();
+        isPlayTesting = false;
+        gameStateManager?.setPlayTesting(false);
+        gameStateManager?.setState('editor');
+        // Editor will be recreated by state change handler with playTestLevel
       },
       
       onSkinChange: async (skin) => {
@@ -148,6 +158,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Store level for returning to editor
             isPlayTesting = true;
             playTestLevel = level;
+            gameStateManager?.setPlayTesting(true);
             
             // Convert to game level and play
             const gameLevel = EditorStorage.toGameLevel(level);

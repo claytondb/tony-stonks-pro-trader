@@ -278,6 +278,7 @@ export interface GameStateCallbacks {
   onRetry?: () => void;
   onQuit?: () => void;
   onOpenEditor?: () => void;
+  onBackToEditor?: () => void;
   onSkinChange?: (skin: PlayerSkin) => void;
 }
 
@@ -301,6 +302,7 @@ export class GameStateManager {
   private lastResult: LevelResult | null = null;
   private titleGlitchTimeout: number | null = null;
   private playerPreview: PlayerPreview | null = null;
+  private isPlayTesting: boolean = false;  // Track if playing from editor
   
   constructor(container: HTMLElement, callbacks: GameStateCallbacks = {}) {
     this.uiContainer = container;
@@ -351,6 +353,13 @@ export class GameStateManager {
    */
   getState(): GameState {
     return this.state;
+  }
+  
+  /**
+   * Set play testing mode (for editor integration)
+   */
+  setPlayTesting(value: boolean): void {
+    this.isPlayTesting = value;
   }
   
   /**
@@ -1145,6 +1154,19 @@ export class GameStateManager {
   }
   
   private renderPauseMenu(): void {
+    // Show "Back to Editor" button when play testing
+    const backToEditorBtn = this.isPlayTesting ? `
+          <button class="pause-btn" data-action="backToEditor" style="
+            width: 200px;
+            padding: 15px;
+            font-size: 18px;
+            background: #AA6600;
+            border: 3px solid #FF8800;
+            color: #fff;
+            cursor: pointer;
+          ">BACK TO EDITOR</button>
+    ` : '';
+    
     this.uiContainer.innerHTML = `
       <div style="
         position: absolute;
@@ -1165,7 +1187,7 @@ export class GameStateManager {
           color: #FFD700;
           margin-bottom: 50px;
           font-family: 'Kanit', sans-serif;
-        ">PAUSED</div>
+        ">${this.isPlayTesting ? 'PLAY TEST' : 'PAUSED'}</div>
         
         <div style="display: flex; flex-direction: column; gap: 15px;">
           <button class="pause-btn" data-action="resume" style="
@@ -1198,6 +1220,8 @@ export class GameStateManager {
             cursor: pointer;
           ">CONTROLS</button>
           
+          ${backToEditorBtn}
+          
           <button class="pause-btn" data-action="quit" style="
             width: 200px;
             padding: 15px;
@@ -1225,6 +1249,10 @@ export class GameStateManager {
             break;
           case 'controls':
             this.showControlsOverlay();
+            break;
+          case 'backToEditor':
+            this.isPlayTesting = false;
+            this.callbacks.onBackToEditor?.();
             break;
           case 'quit':
             this.callbacks.onQuit?.();

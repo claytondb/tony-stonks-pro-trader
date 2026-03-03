@@ -132,11 +132,25 @@ export class LevelEditor {
     this.renderer.shadowMap.enabled = true;
     container.appendChild(this.renderer.domElement);
     
-    // Create orbit controls
+    // Create orbit controls with custom mouse buttons:
+    // Middle click + drag = pan (horizontal/vertical)
+    // Right click + drag = orbit/rotate
+    // Scroll wheel = zoom
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
     this.orbitControls.dampingFactor = 0.1;
     this.orbitControls.maxPolarAngle = Math.PI / 2 - 0.05;
+    
+    // Reconfigure mouse buttons
+    this.orbitControls.mouseButtons = {
+      LEFT: null as unknown as THREE.MOUSE,  // Left click reserved for selection
+      MIDDLE: THREE.MOUSE.PAN,               // Middle click = pan
+      RIGHT: THREE.MOUSE.ROTATE              // Right click = orbit/rotate
+    };
+    
+    // Enable zoom via scroll wheel (already default, but be explicit)
+    this.orbitControls.enableZoom = true;
+    this.orbitControls.zoomSpeed = 1.2;
     
     // Create transform controls
     this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
