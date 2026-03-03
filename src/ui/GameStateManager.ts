@@ -304,11 +304,39 @@ export class GameStateManager {
   private playerPreview: PlayerPreview | null = null;
   private isPlayTesting: boolean = false;  // Track if playing from editor
   
+  // Persistent background element (stays across menu transitions)
+  private backgroundContainer: HTMLElement | null = null;
+  
   constructor(container: HTMLElement, callbacks: GameStateCallbacks = {}) {
     this.uiContainer = container;
     this.callbacks = callbacks;
     
     this.initKeyboardControls();
+    this.initPersistentBackground();
+  }
+  
+  private initPersistentBackground(): void {
+    // Create persistent background that stays across menu states
+    this.backgroundContainer = document.createElement('div');
+    this.backgroundContainer.id = 'persistent-bg';
+    this.backgroundContainer.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: url('./ui/titlebg.png') center center / cover no-repeat;
+      background-color: #1a1a2e;
+      z-index: -1;
+      display: none;
+    `;
+    this.uiContainer.parentElement?.appendChild(this.backgroundContainer);
+  }
+  
+  private showPersistentBackground(show: boolean): void {
+    if (this.backgroundContainer) {
+      this.backgroundContainer.style.display = show ? 'block' : 'none';
+    }
   }
   
   private initKeyboardControls(): void {
@@ -409,6 +437,10 @@ export class GameStateManager {
   private renderUI(): void {
     this.uiContainer.innerHTML = '';
     
+    // Show persistent background for menu states, hide for gameplay
+    const menuStates: GameState[] = ['title', 'menu', 'level_select', 'options'];
+    this.showPersistentBackground(menuStates.includes(this.state));
+    
     switch (this.state) {
       case 'loading':
         this.renderLoading();
@@ -487,16 +519,7 @@ export class GameStateManager {
         overflow: hidden;
         pointer-events: auto;
       ">
-        <!-- Background image -->
-        <div style="
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: url('./ui/titlebg.png') center center / cover no-repeat;
-          background-color: #1a1a2e;
-        "></div>
+        <!-- Background is now persistent, no need to duplicate -->
         
         <!-- Content container -->
         <div style="
@@ -719,17 +742,9 @@ export class GameStateManager {
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        background: rgba(0, 0, 0, 0.7);
         pointer-events: auto;
       ">
-        <div style="
-          font-size: 48px;
-          font-weight: bold;
-          color: #00FF88;
-          margin-bottom: 60px;
-          font-family: 'Kanit', sans-serif;
-        ">MAIN MENU</div>
-        
         <div id="menu-items" style="
           display: flex;
           flex-direction: column;
@@ -743,7 +758,7 @@ export class GameStateManager {
               font-weight: bold;
               font-family: 'Kanit', sans-serif;
               color: #fff;
-              background: ${i === 0 ? '#00AA66' : '#333'};
+              background: ${i === 0 ? '#00AA66' : 'rgba(51, 51, 51, 0.9)'};
               border: 3px solid ${i === 0 ? '#00FF88' : '#555'};
               cursor: pointer;
               transition: all 0.15s;
@@ -812,7 +827,7 @@ export class GameStateManager {
         justify-content: flex-start;
         align-items: center;
         padding-top: 60px;
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        background: rgba(0, 0, 0, 0.7);
         pointer-events: auto;
       ">
         <div style="
@@ -821,6 +836,7 @@ export class GameStateManager {
           color: #00FF88;
           margin-bottom: 40px;
           font-family: 'Kanit', sans-serif;
+          text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
         ">SELECT LEVEL</div>
         
         <div style="
@@ -962,7 +978,7 @@ export class GameStateManager {
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+        background: rgba(0, 0, 0, 0.7);
         pointer-events: auto;
       ">
         <div style="
@@ -971,6 +987,7 @@ export class GameStateManager {
           color: #00FF88;
           margin-bottom: 40px;
           font-family: 'Kanit', sans-serif;
+          text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
         ">OPTIONS</div>
         
         <div style="
