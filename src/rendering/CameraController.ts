@@ -15,6 +15,13 @@ export class CameraController {
   private smoothSpeed = 5;
   private rotationSmooth = 3;
   
+  // Dynamic FOV settings
+  private baseFOV = 75;      // Default FOV when stationary
+  private maxFOV = 90;       // FOV at max speed
+  private currentFOV = 75;
+  private targetFOV = 75;
+  private fovSmoothSpeed = 4;  // How fast FOV transitions
+  
   // Current state
   private currentOffset = new THREE.Vector3();
   private currentLookAt = new THREE.Vector3();
@@ -177,6 +184,11 @@ export class CameraController {
     this.currentLookAt.lerp(desiredLookAt, this.smoothSpeed * dt);
     
     this.camera.lookAt(this.currentLookAt);
+    
+    // Smooth FOV transition
+    this.currentFOV += (this.targetFOV - this.currentFOV) * this.fovSmoothSpeed * dt;
+    this.camera.fov = this.currentFOV;
+    this.camera.updateProjectionMatrix();
   }
   
   /**
@@ -199,5 +211,29 @@ export class CameraController {
   setZoom(zoom: number): void {
     this.offset.z = -8 * zoom;
     this.offset.y = 4 * zoom;
+  }
+  
+  /**
+   * Update FOV based on player speed
+   * Creates a sense of velocity - wider FOV when moving fast
+   * @param speed - Current player speed (0 to maxSpeed)
+   * @param maxSpeed - Speed at which FOV reaches maximum (e.g., 18)
+   */
+  updateFOVFromSpeed(speed: number, maxSpeed: number = 18): void {
+    // Calculate speed ratio (0 to 1)
+    const speedRatio = Math.min(speed / maxSpeed, 1);
+    
+    // Use easing for smoother feel - starts slow, accelerates
+    const easedRatio = speedRatio * speedRatio;
+    
+    // Interpolate between base and max FOV
+    this.targetFOV = this.baseFOV + (this.maxFOV - this.baseFOV) * easedRatio;
+  }
+  
+  /**
+   * Reset FOV to default (for menus, pauses, etc.)
+   */
+  resetFOV(): void {
+    this.targetFOV = this.baseFOV;
   }
 }

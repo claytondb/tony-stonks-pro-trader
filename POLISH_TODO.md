@@ -54,7 +54,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
   - Music volume control in options (already has slider, just needs implementation)
 
 ### Camera Improvements
-- [ ] **Dynamic FOV** - Widen FOV slightly when moving fast, narrow when slow
+- [x] **Dynamic FOV** - Widen FOV slightly when moving fast, narrow when slow ✅
 - [ ] **Trick zoom** - Subtle zoom out during air time for better trick visibility
 - [ ] **Grind camera angle** - Rotate camera slightly to better show rail during grinds
 - [ ] **Impact zoom pulse** - Brief zoom on big landings (>5000 points)
@@ -237,6 +237,9 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-03 (2:00 AM)
+- ✅ **Dynamic FOV** - Camera FOV now widens from 75° to 90° based on player speed, creating a sense of velocity. Uses eased interpolation for smooth transitions.
 
 ### 2026-03-03 (1:00 AM)
 - ✅ **Special meter glow** - Full special meter now has dramatic pulsing glow effect with box-shadow, glowing border, and animated label text for better "SPECIAL READY" visibility.

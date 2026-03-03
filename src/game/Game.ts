@@ -2226,6 +2226,9 @@ export class Game {
     // Update speed lines effect (radial blur at high speeds)
     this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);
     
+    // Update dynamic FOV based on speed (wider FOV at high speeds)
+    this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
+    
     // Update combo system
     this.comboSystem.update(dt);
     
