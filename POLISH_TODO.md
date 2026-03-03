@@ -25,7 +25,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ### Controls & Feel
 - [x] **Jump buffer** - Allow jump input slightly before landing (~100ms window) ✅ Implemented
 - [x] **Coyote time** - Brief window to jump after leaving ground (~80ms) ✅ Implemented
-- [ ] **Trick input queue** - Queue next trick input while current trick animating
+- [x] **Trick input queue** - Queue next trick input while current trick animating ✅ Implemented
 
 ### UI Polish
 - [x] **Score number animation** - Score counts up with easing + scale pop effect ✅ Implemented
@@ -233,10 +233,13 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-03-02 (4:00 AM nightly run)*
+*Last updated: 2026-03-03 (12:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-03 (12:00 AM)
+- ✅ **Trick input queue** - Queue next trick input while current trick is animating. Queued trick executes automatically when ready. Clears on landing. Makes rapid trick sequences feel responsive.
 
 ### 2026-03-02 (4:00 AM)
 - ✅ **Spin counter display** - Shows "180°", "360°", "540°", etc. during air spins. Gold text with glow effect, pulses on each 180° increment. Adds satisfying visual feedback for rotation tricks.

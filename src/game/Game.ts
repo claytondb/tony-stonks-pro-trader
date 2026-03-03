@@ -11,6 +11,7 @@ import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { GrindSystem } from '../physics/GrindSystem';
 import { CameraController } from '../rendering/CameraController';
 import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
+import { TrickDefinition } from '../tricks/TrickRegistry';
 import { ComboSystem } from '../tricks/ComboSystem';
 import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
@@ -91,6 +92,7 @@ export class Game {
   private totalStonks = 0;  // Total stonks earned
   private manualBalance = 0.5;
   private lastTrickTime = 0;
+  private queuedTrick: TrickDefinition | null = null;  // Trick input queue
   private spinRotation = 0;
   private cumulativeSpinDegrees = 0;  // Track total spin during air time
   private airStartRotation = 0;  // Chair Y rotation when leaving ground
@@ -2065,22 +2067,41 @@ export class Game {
     // Update player state
     this.updatePlayerState(dt);
     
-    // Detect and execute tricks
-    const trick = this.trickDetector.detectTrick(input, this.playerState);
-    if (trick && performance.now() - this.lastTrickTime > trick.duration) {
-      this.comboSystem.addTrick(trick);
-      this.lastTrickTime = performance.now();
-      proceduralSounds.playTrick(trick.basePoints);
+    // Detect and execute tricks (with input queue support)
+    const detectedTrick = this.trickDetector.detectTrick(input, this.playerState);
+    const now = performance.now();
+    const trickCooldownActive = now - this.lastTrickTime < 200; // ~200ms trick animation window
+    
+    // Queue trick if we're still in a trick animation
+    if (detectedTrick && trickCooldownActive && !this.queuedTrick) {
+      this.queuedTrick = detectedTrick;
+    }
+    
+    // Determine which trick to execute: queued trick takes priority, then newly detected
+    const trickToExecute = !trickCooldownActive 
+      ? (this.queuedTrick || detectedTrick)
+      : null;
+    
+    if (trickToExecute) {
+      this.comboSystem.addTrick(trickToExecute);
+      this.lastTrickTime = now;
+      this.queuedTrick = null;  // Clear queue after executing
+      proceduralSounds.playTrick(trickToExecute.basePoints);
       
       // Add to special meter
       const prevSpecial = this.specialMeter;
-      this.specialMeter = Math.min(1, this.specialMeter + trick.basePoints / 5000);
+      this.specialMeter = Math.min(1, this.specialMeter + trickToExecute.basePoints / 5000);
       this.hud?.setSpecial(this.specialMeter);
       
       // Special meter just filled
       if (prevSpecial < 1 && this.specialMeter >= 1) {
         proceduralSounds.playSpecialReady();
       }
+    }
+    
+    // Clear queued trick if player lands (no longer airborne)
+    if (!this.playerState.isAirborne) {
+      this.queuedTrick = null;
     }
     
     // Update grind cooldown
