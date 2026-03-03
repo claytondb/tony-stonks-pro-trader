@@ -452,4 +452,125 @@ export class PhysicsWorld {
   setAngularVelocity(body: RAPIER.RigidBody, angvel: THREE.Vector3): void {
     body.setAngvel({ x: angvel.x, y: angvel.y, z: angvel.z }, true);
   }
+  
+  /**
+   * THPS-style ground raycast - detect surface below player
+   * Returns surface info or null if airborne
+   */
+  raycastGround(origin: THREE.Vector3, maxDistance: number = 2.0): {
+    hit: boolean;
+    distance: number;
+    point: THREE.Vector3;
+    normal: THREE.Vector3;
+  } | null {
+    if (!this.initialized) return null;
+    
+    const rayOrigin = { x: origin.x, y: origin.y, z: origin.z };
+    const rayDir = { x: 0, y: -1, z: 0 }; // Straight down
+    
+    const ray = new RAPIER.Ray(rayOrigin, rayDir);
+    const hit = this.world.castRay(ray, maxDistance, true);
+    
+    if (hit) {
+      const toi = hit.toi;
+      const hitPoint = ray.pointAt(toi);
+      const hitNormal = hit.collider.castRayAndGetNormal(ray, maxDistance, true);
+      
+      let normal = new THREE.Vector3(0, 1, 0); // Default up
+      if (hitNormal) {
+        normal = new THREE.Vector3(hitNormal.normal.x, hitNormal.normal.y, hitNormal.normal.z);
+      }
+      
+      return {
+        hit: true,
+        distance: toi,
+        point: new THREE.Vector3(hitPoint.x, hitPoint.y, hitPoint.z),
+        normal: normal
+      };
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Multi-ray ground check for better surface detection
+   * Casts rays at player center and 4 corners
+   */
+  raycastGroundMulti(origin: THREE.Vector3, radius: number = 0.3, maxDistance: number = 2.0): {
+    hit: boolean;
+    distance: number;
+    point: THREE.Vector3;
+    normal: THREE.Vector3;
+    surfaceAngle: number; // Angle from horizontal in degrees
+  } | null {
+    // Cast multiple rays for better surface detection
+    const offsets = [
+      new THREE.Vector3(0, 0, 0),         // Center
+      new THREE.Vector3(radius, 0, 0),    // Right
+      new THREE.Vector3(-radius, 0, 0),   // Left
+      new THREE.Vector3(0, 0, radius),    // Front
+      new THREE.Vector3(0, 0, -radius),   // Back
+    ];
+    
+    let closestHit: ReturnType<typeof this.raycastGround> = null;
+    let closestDist = Infinity;
+    const normals: THREE.Vector3[] = [];
+    
+    for (const offset of offsets) {
+      const rayOrigin = origin.clone().add(offset);
+      const hit = this.raycastGround(rayOrigin, maxDistance);
+      
+      if (hit && hit.distance < closestDist) {
+        closestDist = hit.distance;
+        closestHit = hit;
+      }
+      if (hit) {
+        normals.push(hit.normal);
+      }
+    }
+    
+    if (!closestHit) return null;
+    
+    // Average the normals for smoother surface detection
+    const avgNormal = new THREE.Vector3();
+    for (const n of normals) {
+      avgNormal.add(n);
+    }
+    avgNormal.divideScalar(normals.length).normalize();
+    
+    // Calculate surface angle from horizontal
+    const up = new THREE.Vector3(0, 1, 0);
+    const surfaceAngle = THREE.MathUtils.radToDeg(Math.acos(avgNormal.dot(up)));
+    
+    return {
+      hit: true,
+      distance: closestHit.distance,
+      point: closestHit.point,
+      normal: avgNormal,
+      surfaceAngle: surfaceAngle
+    };
+  }
+  
+  /**
+   * Get the movement direction adjusted for surface slope (THPS-style)
+   * This makes the player follow ramps instead of fighting them
+   */
+  getSurfaceMovementDirection(forward: THREE.Vector3, surfaceNormal: THREE.Vector3): THREE.Vector3 {
+    // Project forward direction onto the surface plane
+    // This makes movement follow the ramp angle
+    const up = new THREE.Vector3(0, 1, 0);
+    
+    // If surface is flat, just return forward
+    if (surfaceNormal.dot(up) > 0.99) {
+      return forward.clone();
+    }
+    
+    // Calculate the direction along the surface
+    // Cross product gives us a vector perpendicular to both normal and forward
+    const right = new THREE.Vector3().crossVectors(surfaceNormal, forward).normalize();
+    // Cross again to get the "forward" direction along the surface
+    const surfaceForward = new THREE.Vector3().crossVectors(right, surfaceNormal).normalize();
+    
+    return surfaceForward;
+  }
 }

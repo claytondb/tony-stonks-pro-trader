@@ -99,6 +99,12 @@ export class Game {
   private lastGroundedTime = 0;  // Coyote time tracking
   private lastPushSoundTime = 0;  // Cooldown for push sound
   
+  // THPS-style surface tracking
+  private surfaceNormal = new THREE.Vector3(0, 1, 0);  // Current surface we're on
+  private surfaceAngle = 0;  // Angle of surface in degrees (0 = flat)
+  private readonly GROUND_SNAP_DISTANCE = 1.5;  // Max distance to snap to ground
+  private readonly LAUNCH_ANGLE = 45;  // Surface angle that triggers launch
+  
   // Debug: animation cycling
   private debugAnimIndex = 0;
   private debugAnimLockUntil = 0;  // Timestamp when debug lock expires
@@ -2470,9 +2476,50 @@ export class Game {
     const pos = this.physics.getPosition(this.chairBody);
     const vel = this.physics.getVelocity(this.chairBody);
     
-    // Ground detection - capsule collider (halfHeight=0.3, radius=0.4) rests at ~0.7-0.8
+    // THPS-style ground detection using raycasts
     const wasGrounded = this.playerState.isGrounded;
-    this.playerState.isGrounded = pos.y < 1.0 && Math.abs(vel.y) < 2.0;
+    
+    // Cast rays downward to find the surface
+    const groundCheck = this.physics.raycastGroundMulti(pos, 0.3, this.GROUND_SNAP_DISTANCE);
+    
+    if (groundCheck && groundCheck.distance < this.GROUND_SNAP_DISTANCE) {
+      // We're near a surface
+      this.surfaceNormal.copy(groundCheck.normal);
+      this.surfaceAngle = groundCheck.surfaceAngle;
+      
+      // Grounded if close enough and not moving too fast upward
+      const closeEnough = groundCheck.distance < 0.9; // Capsule radius + small buffer
+      const notLaunching = vel.y < 5; // Not actively jumping up
+      
+      // On steep surfaces (ramps), check if we're moving up or down
+      if (this.surfaceAngle > this.LAUNCH_ANGLE) {
+        // On a steep ramp - check if we should launch
+        // Launch if moving fast and going up the ramp
+        const movingUpRamp = vel.y > 2 && this.surfaceAngle > 60;
+        if (movingUpRamp) {
+          this.playerState.isGrounded = false;
+        } else {
+          this.playerState.isGrounded = closeEnough && notLaunching;
+        }
+      } else {
+        this.playerState.isGrounded = closeEnough && notLaunching;
+      }
+      
+      // THPS-style: snap to surface when grounded (follow ramps smoothly)
+      if (this.playerState.isGrounded && groundCheck.distance > 0.5 && groundCheck.distance < 0.85) {
+        // Gently push player toward surface
+        const snapForce = (0.8 - groundCheck.distance) * 15;
+        const newVel = vel.clone();
+        newVel.y -= snapForce;
+        this.physics.setVelocity(this.chairBody, newVel);
+      }
+    } else {
+      // No ground detected - airborne
+      this.playerState.isGrounded = false;
+      this.surfaceNormal.set(0, 1, 0);
+      this.surfaceAngle = 0;
+    }
+    
     this.playerState.isAirborne = !this.playerState.isGrounded;
     
     // Track last grounded time for coyote time
@@ -2573,13 +2620,17 @@ export class Game {
     const velocity = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
     
-    // FORWARD (W) - Push in facing direction
+    // THPS-style: Get movement direction along the surface (for ramps)
+    const surfaceForward = this.physics.getSurfaceMovementDirection(forward, this.surfaceNormal);
+    
+    // FORWARD (W) - Push in facing direction (follows surface on ramps!)
     if (input.forward && this.playerState.isGrounded) {
       if (currentSpeed < maxSpeed) {
-        // Directly add to velocity for reliable movement
-        const boost = forward.clone().multiplyScalar(accelSpeed);
+        // Use surface-relative direction for smooth ramp riding
+        const boost = surfaceForward.clone().multiplyScalar(accelSpeed);
         const newVel = velocity.clone();
         newVel.x += boost.x;
+        newVel.y += boost.y; // This is key - adds vertical component on ramps!
         newVel.z += boost.z;
         this.physics.setVelocity(this.chairBody, newVel);
         
@@ -2592,15 +2643,25 @@ export class Game {
       }
     }
     
-    // BACKWARD (S) - Move backward
+    // BACKWARD (S) - Move backward (also follows surface)
     if (input.brake && this.playerState.isGrounded) {
       if (currentSpeed < maxSpeed) {
-        const boost = forward.clone().multiplyScalar(-accelSpeed * 0.6); // Slower backward
+        const boost = surfaceForward.clone().multiplyScalar(-accelSpeed * 0.6);
         const newVel = velocity.clone();
         newVel.x += boost.x;
+        newVel.y += boost.y;
         newVel.z += boost.z;
         this.physics.setVelocity(this.chairBody, newVel);
       }
+    }
+    
+    // On steep ramps going up, preserve momentum
+    if (this.playerState.isGrounded && this.surfaceAngle > 20) {
+      // Reduce gravity effect on ramps to maintain speed
+      const gravityReduction = Math.min(0.8, this.surfaceAngle / 60);
+      const newVel = velocity.clone();
+      newVel.y += gravityReduction * 0.3; // Counter some gravity
+      this.physics.setVelocity(this.chairBody, newVel);
     }
     
     // TURNING (A/D) - Rotate left/right (direct angular velocity)
