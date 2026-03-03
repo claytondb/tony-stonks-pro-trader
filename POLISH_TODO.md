@@ -29,7 +29,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ### UI Polish
 - [x] **Score number animation** - Score counts up with easing + scale pop effect ✅ Implemented
-- [ ] **Special meter glow** - Pulsing glow effect when special is full (beyond current animation)
+- [x] **Special meter glow** - Pulsing glow effect when special is full (beyond current animation) ✅ Implemented
 - [x] **Combo timer bar** - Visual indicator of time remaining to extend combo ✅ Implemented
 - [x] **Hide controls hint after first play** - Use localStorage to track ✅
 
@@ -233,10 +233,13 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-03-03 (12:00 AM nightly run)*
+*Last updated: 2026-03-03 (1:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-03 (1:00 AM)
+- ✅ **Special meter glow** - Full special meter now has dramatic pulsing glow effect with box-shadow, glowing border, and animated label text for better "SPECIAL READY" visibility.
 
 ### 2026-03-03 (12:00 AM)
 - ✅ **Trick input queue** - Queue next trick input while current trick is animating. Queued trick executes automatically when ready. Clears on landing. Makes rapid trick sequences feel responsive.

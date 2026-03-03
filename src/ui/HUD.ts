@@ -193,13 +193,42 @@ export class HUD {
         transition: width 0.3s;
       }
       
+      .hud-special-meter.full {
+        animation: specialGlow 0.6s infinite alternate ease-in-out;
+        border-color: #FFFF00;
+      }
+      
       .hud-special-meter.full .hud-special-fill {
         animation: specialPulse 0.5s infinite alternate;
+      }
+      
+      .hud-special-meter.full .hud-special-label {
+        animation: specialLabelGlow 0.6s infinite alternate ease-in-out;
       }
       
       @keyframes specialPulse {
         from { filter: brightness(1); }
         to { filter: brightness(1.5); }
+      }
+      
+      @keyframes specialGlow {
+        from {
+          box-shadow: 0 0 10px #FFD700, 0 0 20px rgba(255, 215, 0, 0.5), inset 0 0 10px rgba(255, 215, 0, 0.3);
+        }
+        to {
+          box-shadow: 0 0 20px #FFFF00, 0 0 40px rgba(255, 215, 0, 0.8), 0 0 60px rgba(255, 107, 0, 0.4), inset 0 0 15px rgba(255, 215, 0, 0.5);
+        }
+      }
+      
+      @keyframes specialLabelGlow {
+        from {
+          color: #FFD700;
+          text-shadow: 0 0 5px #FFD700;
+        }
+        to {
+          color: #FFFF00;
+          text-shadow: 0 0 10px #FFFF00, 0 0 20px #FFD700;
+        }
       }
       
       .hud-special-label {
