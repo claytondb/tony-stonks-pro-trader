@@ -327,17 +327,15 @@ export class GameStateManager {
       height: 100%;
       background: url('./ui/titlebg.png') center center / cover no-repeat;
       background-color: #1a1a2e;
-      z-index: -1;
+      z-index: 0;
+      pointer-events: none;
       display: none;
     `;
-    this.uiContainer.parentElement?.appendChild(this.backgroundContainer);
+    // Insert at the beginning of uiContainer so it's behind other content
+    this.uiContainer.insertBefore(this.backgroundContainer, this.uiContainer.firstChild);
   }
   
-  private showPersistentBackground(show: boolean): void {
-    if (this.backgroundContainer) {
-      this.backgroundContainer.style.display = show ? 'block' : 'none';
-    }
-  }
+
   
   private initKeyboardControls(): void {
     window.addEventListener('keydown', (e) => {
@@ -435,11 +433,20 @@ export class GameStateManager {
    * Render UI based on current state
    */
   private renderUI(): void {
+    // Save background reference before clearing
+    const bg = this.backgroundContainer;
+    
     this.uiContainer.innerHTML = '';
     
     // Show persistent background for menu states, hide for gameplay
     const menuStates: GameState[] = ['title', 'menu', 'level_select', 'options'];
-    this.showPersistentBackground(menuStates.includes(this.state));
+    const showBg = menuStates.includes(this.state);
+    
+    // Re-add background container (it was removed by innerHTML = '')
+    if (bg) {
+      bg.style.display = showBg ? 'block' : 'none';
+      this.uiContainer.appendChild(bg);
+    }
     
     switch (this.state) {
       case 'loading':
