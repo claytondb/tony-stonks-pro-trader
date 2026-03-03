@@ -22,6 +22,12 @@ export class CameraController {
   private targetFOV = 75;
   private fovSmoothSpeed = 4;  // How fast FOV transitions
   
+  // Trick zoom settings (zoom out during air time for better visibility)
+  private trickZoomAmount = 0.15;   // How much to zoom out (0-1, where 1 = full offset change)
+  private targetZoomMultiplier = 1; // Current target zoom (1 = normal, >1 = zoomed out)
+  private currentZoomMultiplier = 1;
+  private zoomSmoothSpeed = 6;      // How fast zoom transitions
+  
   // Current state
   private currentOffset = new THREE.Vector3();
   private currentLookAt = new THREE.Vector3();
@@ -125,11 +131,15 @@ export class CameraController {
     const targetForward = new THREE.Vector3(0, 0, 1);
     targetForward.applyQuaternion(this.target.quaternion);
     
+    // Smooth zoom multiplier transition
+    this.currentZoomMultiplier += (this.targetZoomMultiplier - this.currentZoomMultiplier) * this.zoomSmoothSpeed * dt;
+    
     // Calculate desired camera position (behind and above target)
+    // Apply zoom multiplier (>1 = further away for trick visibility)
     const desiredOffset = new THREE.Vector3(
       0,
-      this.offset.y,
-      this.offset.z
+      this.offset.y * this.currentZoomMultiplier,
+      this.offset.z * this.currentZoomMultiplier
     );
     
     // Rotate offset based on target rotation (only Y axis for now)
@@ -235,5 +245,31 @@ export class CameraController {
    */
   resetFOV(): void {
     this.targetFOV = this.baseFOV;
+  }
+  
+  /**
+   * Update trick zoom based on air state
+   * Zooms out slightly during air time for better trick visibility
+   * @param isAirborne - Whether player is in the air
+   * @param airTime - Time in air (seconds), used for gradual zoom
+   */
+  setTrickZoom(isAirborne: boolean, airTime: number = 0): void {
+    if (isAirborne) {
+      // Gradually zoom out as air time increases (max effect at ~0.5s)
+      const airTimeFactor = Math.min(airTime / 0.5, 1);
+      // Ease in for smooth transition
+      const easedFactor = airTimeFactor * airTimeFactor;
+      this.targetZoomMultiplier = 1 + (this.trickZoomAmount * easedFactor);
+    } else {
+      // Return to normal zoom
+      this.targetZoomMultiplier = 1;
+    }
+  }
+  
+  /**
+   * Reset trick zoom to default
+   */
+  resetTrickZoom(): void {
+    this.targetZoomMultiplier = 1;
   }
 }

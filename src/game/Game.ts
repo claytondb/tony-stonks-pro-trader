@@ -2229,6 +2229,9 @@ export class Game {
     // Update dynamic FOV based on speed (wider FOV at high speeds)
     this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
     
+    // Update trick zoom (zoom out slightly during air time for better trick visibility)
+    this.cameraController.setTrickZoom(this.playerState.isAirborne, this.playerState.airTime);
+    
     // Update combo system
     this.comboSystem.update(dt);
     
