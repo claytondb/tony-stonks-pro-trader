@@ -265,6 +265,8 @@ export class Game {
         // Play sounds based on combo events
         if (event.type === 'combo_landed' && event.totalScore) {
           proceduralSounds.playComboLanded(state.multiplier);
+          // Impact zoom pulse on big landings (>5000 points)
+          this.cameraController.impactZoomPulse(event.totalScore);
         } else if (event.type === 'combo_failed') {
           proceduralSounds.playBail();
           // Shake camera on bail

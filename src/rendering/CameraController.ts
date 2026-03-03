@@ -195,8 +195,12 @@ export class CameraController {
     
     this.camera.lookAt(this.currentLookAt);
     
-    // Smooth FOV transition
-    this.currentFOV += (this.targetFOV - this.currentFOV) * this.fovSmoothSpeed * dt;
+    // Update impact zoom decay
+    this.updateImpactZoom(dt);
+    
+    // Smooth FOV transition (with impact zoom pulse subtracted)
+    const effectiveFOV = this.targetFOV - this.impactZoomCurrent;
+    this.currentFOV += (effectiveFOV - this.currentFOV) * this.fovSmoothSpeed * dt;
     this.camera.fov = this.currentFOV;
     this.camera.updateProjectionMatrix();
   }
@@ -272,4 +276,39 @@ export class CameraController {
   resetTrickZoom(): void {
     this.targetZoomMultiplier = 1;
   }
+  
+  // Impact zoom pulse state (brief zoom on big landings)
+  private impactZoomCurrent = 0;      // Current FOV reduction
+  private impactZoomDecay = 8;        // How fast the pulse fades (higher = faster)
+  
+  /**
+   * Trigger an impact zoom pulse on big landings
+   * Briefly narrows FOV then returns to normal, creating a "punch" effect
+   * @param points - Points scored on this landing (used to scale intensity)
+   */
+  impactZoomPulse(points: number): void {
+    // Only trigger for landings worth 5000+ points
+    if (points < 5000) return;
+    
+    // Scale intensity based on points (5000 = subtle, 50000+ = dramatic)
+    // FOV reduction: 5-15 degrees based on points
+    const pointsFactor = Math.min((points - 5000) / 45000, 1); // 0 at 5000, 1 at 50000
+    const fovReduction = 5 + pointsFactor * 10; // 5 to 15 degrees
+    
+    // Set the impact zoom (will decay back to 0)
+    this.impactZoomCurrent = fovReduction;
+  }
+  
+  /**
+   * Update impact zoom (call in main update loop)
+   */
+  updateImpactZoom(dt: number): void {
+    // Decay the impact zoom effect
+    if (this.impactZoomCurrent > 0.1) {
+      this.impactZoomCurrent -= this.impactZoomCurrent * this.impactZoomDecay * dt;
+    } else {
+      this.impactZoomCurrent = 0;
+    }
+  }
+  
 }

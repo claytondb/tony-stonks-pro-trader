@@ -57,7 +57,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [x] **Dynamic FOV** - Widen FOV slightly when moving fast, narrow when slow ✅
 - [x] **Trick zoom** - Subtle zoom out during air time for better trick visibility ✅
 - [ ] **Grind camera angle** - Rotate camera slightly to better show rail during grinds
-- [ ] **Impact zoom pulse** - Brief zoom on big landings (>5000 points)
+- [x] **Impact zoom pulse** - Brief zoom on big landings (>5000 points) ✅
 
 ### Particle Effects
 - [ ] **Landing impact particles** - Dust/debris burst on landing (intensity based on air time)
