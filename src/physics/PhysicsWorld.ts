@@ -118,6 +118,121 @@ export class PhysicsWorld {
   }
   
   /**
+   * Create a static cylinder collider
+   */
+  createStaticCylinder(
+    position: THREE.Vector3,
+    halfHeight: number,
+    radius: number,
+    rotation?: THREE.Euler
+  ): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(position.x, position.y, position.z);
+    
+    if (rotation) {
+      const quat = new THREE.Quaternion().setFromEuler(rotation);
+      bodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    }
+    
+    const body = this.world.createRigidBody(bodyDesc);
+    
+    const colliderDesc = RAPIER.ColliderDesc.cylinder(halfHeight, radius)
+      .setFriction(0.2);
+    
+    this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
+    
+    return body;
+  }
+  
+  /**
+   * Create a static cone collider
+   */
+  createStaticCone(
+    position: THREE.Vector3,
+    halfHeight: number,
+    radius: number
+  ): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(position.x, position.y, position.z);
+    
+    const body = this.world.createRigidBody(bodyDesc);
+    
+    const colliderDesc = RAPIER.ColliderDesc.cone(halfHeight, radius)
+      .setFriction(0.2);
+    
+    this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
+    
+    return body;
+  }
+  
+  /**
+   * Create a compound collider from multiple shapes on one body
+   */
+  createCompoundBody(position: THREE.Vector3, rotation?: THREE.Euler): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(position.x, position.y, position.z);
+    
+    if (rotation) {
+      const quat = new THREE.Quaternion().setFromEuler(rotation);
+      bodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    }
+    
+    const body = this.world.createRigidBody(bodyDesc);
+    this.staticBodies.push(body);
+    
+    return body;
+  }
+  
+  /**
+   * Add a box collider to an existing body (for compound shapes)
+   */
+  addBoxCollider(
+    body: RAPIER.RigidBody,
+    localPosition: THREE.Vector3,
+    halfExtents: THREE.Vector3,
+    localRotation?: THREE.Euler
+  ): void {
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(
+      halfExtents.x,
+      halfExtents.y,
+      halfExtents.z
+    )
+    .setTranslation(localPosition.x, localPosition.y, localPosition.z)
+    .setFriction(0.2);
+    
+    if (localRotation) {
+      const quat = new THREE.Quaternion().setFromEuler(localRotation);
+      colliderDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    }
+    
+    this.world.createCollider(colliderDesc, body);
+  }
+  
+  /**
+   * Add a cylinder collider to an existing body (for compound shapes)
+   */
+  addCylinderCollider(
+    body: RAPIER.RigidBody,
+    localPosition: THREE.Vector3,
+    halfHeight: number,
+    radius: number,
+    localRotation?: THREE.Euler
+  ): void {
+    const colliderDesc = RAPIER.ColliderDesc.cylinder(halfHeight, radius)
+      .setTranslation(localPosition.x, localPosition.y, localPosition.z)
+      .setFriction(0.2);
+    
+    if (localRotation) {
+      const quat = new THREE.Quaternion().setFromEuler(localRotation);
+      colliderDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    }
+    
+    this.world.createCollider(colliderDesc, body);
+  }
+  
+  /**
    * Create a static ramp collider (triangular prism for quarter pipes, ramps)
    */
   createStaticRamp(

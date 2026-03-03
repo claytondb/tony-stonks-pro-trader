@@ -524,12 +524,15 @@ export class LevelManager {
     group.position.copy(pos);
     group.rotation.copy(rot);
     
-    // Physics - just the desk edge for grinding
-    this.physics.createStaticBox(
-      new THREE.Vector3(pos.x, pos.y + 0.75, pos.z + depth * 0.2),
-      new THREE.Vector3(width * 0.4, 0.025, depth * 0.2),
-      rot
-    );
+    // Compound collider matching all parts
+    const compoundBody = this.physics.createCompoundBody(pos, rot);
+    // Back wall: BoxGeometry(width, height, 0.05) at (0, height/2, depth/2)
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, height / 2, depth / 2), new THREE.Vector3(width / 2, height / 2, 0.025));
+    // Side walls: BoxGeometry(0.05, height, depth) at (±width/2, height/2, 0)
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(-width / 2, height / 2, 0), new THREE.Vector3(0.025, height / 2, depth / 2));
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(width / 2, height / 2, 0), new THREE.Vector3(0.025, height / 2, depth / 2));
+    // Desk: BoxGeometry(width * 0.8, 0.05, depth * 0.4) at (0, 0.75, depth * 0.2)
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, 0.75, depth * 0.2), new THREE.Vector3(width * 0.4, 0.025, depth * 0.2));
     
     return group;
   }
@@ -555,14 +558,14 @@ export class LevelManager {
     
     // Wheels
     const wheelGeom = new THREE.CylinderGeometry(0.3, 0.3, 0.15, 12);
-    const positions = [
+    const wheelPositions: [number, number, number][] = [
       [-0.9, 0.3, 1.3],
       [0.9, 0.3, 1.3],
       [-0.9, 0.3, -1.3],
       [0.9, 0.3, -1.3]
     ];
     
-    for (const [x, y, z] of positions) {
+    for (const [x, y, z] of wheelPositions) {
       const wheel = new THREE.Mesh(wheelGeom, wheelMat);
       wheel.position.set(x, y, z);
       wheel.rotation.z = Math.PI / 2;
@@ -572,12 +575,17 @@ export class LevelManager {
     group.position.copy(pos);
     group.rotation.copy(rot);
     
-    // Physics
-    this.physics.createStaticBox(
-      new THREE.Vector3(pos.x, pos.y + 0.8, pos.z),
-      new THREE.Vector3(1, 0.5, 2),
-      rot
-    );
+    // Compound collider matching each mesh part
+    const compoundBody = this.physics.createCompoundBody(pos, rot);
+    // Main body: BoxGeometry(2, 1, 4) at y=0.8
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, 0.8, 0), new THREE.Vector3(1, 0.5, 2));
+    // Top: BoxGeometry(1.5, 0.6, 2) at (0, 1.6, -0.3)
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, 1.6, -0.3), new THREE.Vector3(0.75, 0.3, 1));
+    // Wheels: CylinderGeometry(0.3, 0.3, 0.15) - rotated 90° on Z
+    const wheelRot = new THREE.Euler(0, 0, Math.PI / 2);
+    for (const [x, y, z] of wheelPositions) {
+      this.physics.addCylinderCollider(compoundBody, new THREE.Vector3(x, y, z), 0.075, 0.3, wheelRot);
+    }
     
     return group;
   }
@@ -610,12 +618,13 @@ export class LevelManager {
     const end = new THREE.Vector3(1, 0.55, 0).applyEuler(rot).add(pos);
     this.grindSystem.addRail(start, end, undefined, seat);
     
-    // Physics
-    this.physics.createStaticBox(
-      new THREE.Vector3(pos.x, pos.y + 0.5, pos.z),
-      new THREE.Vector3(1, 0.05, 0.25),
-      rot
-    );
+    // Compound collider matching seat and legs
+    const compoundBody = this.physics.createCompoundBody(pos, rot);
+    // Seat: BoxGeometry(2, 0.1, 0.5) at y=0.5
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(1, 0.05, 0.25));
+    // Legs: BoxGeometry(0.1, 0.5, 0.4) at sides
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(-0.8, 0.25, 0), new THREE.Vector3(0.05, 0.25, 0.2));
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0.8, 0.25, 0), new THREE.Vector3(0.05, 0.25, 0.2));
     
     return group;
   }
@@ -648,11 +657,12 @@ export class LevelManager {
     group.position.copy(pos);
     group.rotation.copy(rot);
     
-    // Physics (obstacle)
-    this.physics.createStaticBox(
-      new THREE.Vector3(pos.x, pos.y + 0.4, pos.z),
-      new THREE.Vector3(1, 0.4, 1)
-    );
+    // Compound collider matching each mesh
+    const compoundBody = this.physics.createCompoundBody(pos, rot);
+    // Planter box: BoxGeometry(2, 0.8, 2) at y=0.4
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, 0.4, 0), new THREE.Vector3(1, 0.4, 1));
+    // Trunk: CylinderGeometry(0.1, 0.15, 1) at y=1.3
+    this.physics.addCylinderCollider(compoundBody, new THREE.Vector3(0, 1.3, 0), 0.5, 0.125);
     
     return group;
   }
@@ -680,11 +690,12 @@ export class LevelManager {
     
     group.position.copy(pos);
     
-    // Physics
-    this.physics.createStaticBox(
-      new THREE.Vector3(pos.x, pos.y + 0.5, pos.z),
-      new THREE.Vector3(0.25, 0.5, 0.25)
-    );
+    // Compound collider: main body cylinder + jug cylinder
+    const compoundBody = this.physics.createCompoundBody(pos);
+    // Main body (average radius 0.225)
+    this.physics.addCylinderCollider(compoundBody, new THREE.Vector3(0, 0.5, 0), 0.5, 0.225);
+    // Water jug (average radius 0.165)
+    this.physics.addCylinderCollider(compoundBody, new THREE.Vector3(0, 1.2, 0), 0.2, 0.165);
     
     return group;
   }
@@ -697,9 +708,11 @@ export class LevelManager {
     mesh.position.y = 0.3;
     mesh.castShadow = true;
     
-    this.physics.createStaticBox(
+    // Cylinder collider matching the mesh (average radius)
+    this.physics.createStaticCylinder(
       new THREE.Vector3(pos.x, 0.3, pos.z),
-      new THREE.Vector3(0.25, 0.3, 0.25)
+      0.3,  // halfHeight
+      0.225 // radius (average of top 0.25 and bottom 0.2)
     );
     
     return mesh;
@@ -712,6 +725,13 @@ export class LevelManager {
     mesh.position.copy(pos);
     mesh.position.y = 0.25;
     mesh.castShadow = true;
+    
+    // Cone collider matching the mesh
+    this.physics.createStaticCone(
+      new THREE.Vector3(pos.x, 0.25, pos.z),
+      0.25, // halfHeight
+      0.2   // radius
+    );
     
     return mesh;
   }
@@ -739,11 +759,13 @@ export class LevelManager {
     group.position.copy(pos);
     group.rotation.copy(rot);
     
-    this.physics.createStaticBox(
-      new THREE.Vector3(pos.x, pos.y + 0.5, pos.z),
-      new THREE.Vector3(length / 2, 0.4, 0.05),
-      rot
-    );
+    // Compound collider matching barrier and legs
+    const compoundBody = this.physics.createCompoundBody(pos, rot);
+    // Main barrier: BoxGeometry(length, 0.8, 0.1) at y=0.5
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(length / 2, 0.4, 0.05));
+    // Legs: CylinderGeometry(0.05, 0.05, 0.8) at y=0.4
+    this.physics.addCylinderCollider(compoundBody, new THREE.Vector3(-(length / 2 - 0.1), 0.4, 0), 0.4, 0.05);
+    this.physics.addCylinderCollider(compoundBody, new THREE.Vector3((length / 2 - 0.1), 0.4, 0), 0.4, 0.05);
     
     return group;
   }
