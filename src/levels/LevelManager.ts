@@ -299,19 +299,36 @@ export class LevelManager {
     const group = new THREE.Group();
     const mat = this.materials.get('wood')!;
     
-    const rampGeom = new THREE.BoxGeometry(4, 0.15, 3);
+    // Create a proper wedge-shaped ramp mesh
+    const width = 4;
+    const height = 1.2;
+    const depth = 3;
+    
+    // Wedge geometry (triangular prism)
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0);
+    shape.lineTo(depth, 0);
+    shape.lineTo(depth, height);
+    shape.lineTo(0, 0);
+    
+    const extrudeSettings = {
+      steps: 1,
+      depth: width,
+      bevelEnabled: false
+    };
+    
+    const rampGeom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
     const ramp = new THREE.Mesh(rampGeom, mat);
-    ramp.position.set(0, 0.6, 0);
-    ramp.rotation.x = -Math.PI / 8;
+    ramp.position.set(-width / 2, 0, -depth / 2);
     ramp.castShadow = true;
     ramp.receiveShadow = true;
     group.add(ramp);
     
     // Side walls
-    const sideGeom = new THREE.BoxGeometry(0.1, 0.8, 3.2);
+    const sideGeom = new THREE.BoxGeometry(0.1, height * 0.8, depth);
     for (const side of [-1, 1]) {
       const wall = new THREE.Mesh(sideGeom, mat);
-      wall.position.set(side * 2, 0.4, 0);
+      wall.position.set(side * (width / 2), height * 0.4, 0);
       wall.castShadow = true;
       group.add(wall);
     }
@@ -319,11 +336,13 @@ export class LevelManager {
     group.position.copy(pos);
     group.rotation.copy(rot);
     
-    // Physics
-    this.physics.createStaticBox(
-      new THREE.Vector3(pos.x, pos.y + 0.6, pos.z),
-      new THREE.Vector3(2, 0.08, 1.5),
-      new THREE.Euler(-Math.PI / 8 + rot.x, rot.y, rot.z)
+    // Physics - use proper ramp collider (triangular wedge)
+    this.physics.createStaticRamp(
+      pos,
+      width,
+      height,
+      depth,
+      rot
     );
     
     return group;
@@ -335,6 +354,7 @@ export class LevelManager {
     // Curved surface using ExtrudeGeometry
     const shape = new THREE.Shape();
     const radius = 4;
+    const width = 10;
     const segments = 16;
     
     shape.moveTo(0, 0);
@@ -347,7 +367,7 @@ export class LevelManager {
     
     const geometry = new THREE.ExtrudeGeometry(shape, {
       steps: 1,
-      depth: 10,
+      depth: width,
       bevelEnabled: false
     });
     
@@ -356,6 +376,9 @@ export class LevelManager {
     mesh.rotation.copy(rot);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    
+    // Physics - curved quarter pipe collider
+    this.physics.createQuarterPipeCollider(pos, radius, width, segments, rot);
     
     return mesh;
   }
@@ -407,6 +430,23 @@ export class LevelManager {
     
     group.position.copy(pos);
     group.rotation.copy(rot);
+    
+    // Physics - left quarter pipe (rotated 90° on Y)
+    const leftRot = new THREE.Euler(rot.x, rot.y + Math.PI / 2, rot.z);
+    const leftPos = new THREE.Vector3(-width / 2, 0, -length / 2).applyEuler(rot).add(pos);
+    this.physics.createQuarterPipeCollider(leftPos, radius, length, segments, leftRot);
+    
+    // Physics - right quarter pipe (rotated -90° on Y)
+    const rightRot = new THREE.Euler(rot.x, rot.y - Math.PI / 2, rot.z);
+    const rightPos = new THREE.Vector3(width / 2, 0, length / 2).applyEuler(rot).add(pos);
+    this.physics.createQuarterPipeCollider(rightPos, radius, length, segments, rightRot);
+    
+    // Physics - flat bottom
+    this.physics.createStaticBox(
+      new THREE.Vector3(pos.x, pos.y + 0.05, pos.z),
+      new THREE.Vector3((width - 8) / 2, 0.05, length / 2),
+      rot
+    );
     
     return group;
   }
