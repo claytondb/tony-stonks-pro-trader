@@ -452,12 +452,17 @@ export class GameStateManager {
       this.contentContainer.innerHTML = '';
     }
     
-    // Show persistent background for menu states, hide for gameplay
+    // Show persistent background for menu states, hide for gameplay/editor
     const menuStates: GameState[] = ['title', 'menu', 'level_select', 'options'];
     const showBg = menuStates.includes(this.state);
     
     if (this.backgroundContainer) {
       this.backgroundContainer.style.display = showBg ? 'block' : 'none';
+    }
+    
+    // Hide content container for editor (editor manages its own UI)
+    if (this.contentContainer) {
+      this.contentContainer.style.display = this.state === 'editor' ? 'none' : 'block';
     }
     
     switch (this.state) {
