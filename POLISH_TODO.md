@@ -125,7 +125,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 - [ ] **Performance mode** - Reduced effects for mobile devices
 
 ### Progression System
-- [ ] **High score persistence** - Save best scores per level (localStorage)
+- [x] **High score persistence** - Save best scores per level (localStorage) ✅
 - [ ] **Unlockable content** - Unlock new levels, skins based on achievements
 - [ ] **Stat tracking** - Track total tricks, grinds, play time
 - [ ] **Achievement system** - Badges for milestones:
@@ -227,16 +227,19 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ### Progression (like THPS 1+2)
 - [x] Level goals
 - [x] Score system
-- [ ] High score saves
+- [x] High score saves ✅
 - [ ] Unlockables
 - [ ] Career mode structure
 
 ---
 
-*Last updated: 2026-03-03 (1:00 AM nightly run)*
+*Last updated: 2026-03-03 (5:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-03 (5:00 AM)
+- ✅ **High score persistence** - Scores now save to localStorage per level! Level select shows your best score and rank for each level. Results screen displays "NEW HIGH SCORE!" with celebratory animation when you beat your previous best, and shows your previous high score for comparison.
 
 ### 2026-03-03 (3:00 AM)
 - ✅ **Trick zoom** - Camera now zooms out slightly (15%) during air time for better trick visibility. Gradual zoom based on air time with smooth eased transitions.

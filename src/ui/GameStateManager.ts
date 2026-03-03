@@ -57,6 +57,65 @@ function getDefaultSettings(): GameSettings {
   };
 }
 
+// High score storage key
+const HIGH_SCORES_KEY = 'tony-stonks-highscores';
+
+export interface HighScoreEntry {
+  score: number;
+  rank: 'S' | 'A' | 'B' | 'C' | 'D';
+  date: string; // ISO date string
+}
+
+export interface HighScores {
+  [levelId: string]: HighScoreEntry;
+}
+
+// Load high scores from localStorage
+export function loadHighScores(): HighScores {
+  try {
+    const saved = localStorage.getItem(HIGH_SCORES_KEY);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (e) {
+    console.warn('Failed to load high scores:', e);
+  }
+  return {};
+}
+
+// Save high scores to localStorage
+export function saveHighScores(scores: HighScores): void {
+  try {
+    localStorage.setItem(HIGH_SCORES_KEY, JSON.stringify(scores));
+  } catch (e) {
+    console.warn('Failed to save high scores:', e);
+  }
+}
+
+// Get high score for a specific level
+export function getHighScore(levelId: string): HighScoreEntry | null {
+  const scores = loadHighScores();
+  return scores[levelId] || null;
+}
+
+// Update high score if the new score is higher
+// Returns true if it's a new high score
+export function updateHighScore(levelId: string, score: number, rank: 'S' | 'A' | 'B' | 'C' | 'D'): boolean {
+  const scores = loadHighScores();
+  const existing = scores[levelId];
+  
+  if (!existing || score > existing.score) {
+    scores[levelId] = {
+      score,
+      rank,
+      date: new Date().toISOString()
+    };
+    saveHighScores(scores);
+    return true;
+  }
+  return false;
+}
+
 /**
  * Mini preview renderer for player models
  */
@@ -229,6 +288,8 @@ interface LevelResult {
   goalsCompleted: number;
   totalGoals: number;
   rank: 'S' | 'A' | 'B' | 'C' | 'D';
+  isNewHighScore: boolean;
+  previousHighScore: number | null;
 }
 
 export class GameStateManager {
@@ -315,13 +376,19 @@ export class GameStateManager {
     else if (goalPercent >= 0.25) rank = 'C';
     else rank = 'D';
     
+    // Check for high score
+    const previousHighScore = getHighScore(this.currentLevelId);
+    const isNewHighScore = updateHighScore(this.currentLevelId, score, rank);
+    
     this.lastResult = {
       levelId: this.currentLevelId,
       score,
       time,
       goalsCompleted,
       totalGoals,
-      rank
+      rank,
+      isNewHighScore,
+      previousHighScore: previousHighScore?.score ?? null
     };
     
     this.setState('results');
@@ -713,6 +780,17 @@ export class GameStateManager {
       { id: 'ch2_downtown', name: 'Street Smart', chapter: 2, unlocked: true }
     ];
     
+    // Load high scores for display
+    const highScores = loadHighScores();
+    
+    const rankColors: Record<string, string> = {
+      'S': '#FFD700',
+      'A': '#00FF88',
+      'B': '#4488FF',
+      'C': '#FF8844',
+      'D': '#FF4444'
+    };
+    
     this.uiContainer.innerHTML = `
       <div style="
         position: absolute;
@@ -743,30 +821,74 @@ export class GameStateManager {
           max-width: 900px;
           width: 90%;
         ">
-          ${levels.map(level => `
-            <button class="level-btn" data-id="${level.id}" style="
-              padding: 25px;
-              background: ${level.unlocked ? '#2a2a4e' : '#1a1a2e'};
-              border: 3px solid ${level.unlocked ? '#4a4a7e' : '#333'};
-              border-radius: 8px;
-              cursor: ${level.unlocked ? 'pointer' : 'not-allowed'};
-              text-align: left;
-              transition: all 0.15s;
-              opacity: ${level.unlocked ? 1 : 0.5};
-            ">
-              <div style="
-                font-size: 12px;
-                color: #888;
-                margin-bottom: 5px;
-              ">CHAPTER ${level.chapter}</div>
-              <div style="
-                font-size: 18px;
-                font-weight: bold;
-                color: #fff;
-              ">${level.name}</div>
-              ${!level.unlocked ? '<div style="color: #ff6666; font-size: 12px; margin-top: 10px;">🔒 LOCKED</div>' : ''}
-            </button>
-          `).join('')}
+          ${levels.map(level => {
+            const hs = highScores[level.id];
+            const highScoreHTML = hs 
+              ? `<div style="
+                  display: flex;
+                  justify-content: space-between;
+                  align-items: center;
+                  margin-top: 12px;
+                  padding-top: 10px;
+                  border-top: 1px solid rgba(255,255,255,0.1);
+                ">
+                  <div style="
+                    font-size: 12px;
+                    color: #888;
+                  ">HIGH SCORE</div>
+                  <div style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                  ">
+                    <span style="
+                      font-size: 16px;
+                      color: #00FF88;
+                      font-weight: bold;
+                    ">${hs.score.toLocaleString()}</span>
+                    <span style="
+                      font-size: 14px;
+                      font-weight: bold;
+                      color: ${rankColors[hs.rank]};
+                      padding: 2px 6px;
+                      background: rgba(0,0,0,0.3);
+                      border-radius: 4px;
+                    ">${hs.rank}</span>
+                  </div>
+                </div>`
+              : `<div style="
+                  margin-top: 12px;
+                  padding-top: 10px;
+                  border-top: 1px solid rgba(255,255,255,0.1);
+                  font-size: 12px;
+                  color: #555;
+                ">No high score yet</div>`;
+            
+            return `
+              <button class="level-btn" data-id="${level.id}" style="
+                padding: 25px;
+                background: ${level.unlocked ? '#2a2a4e' : '#1a1a2e'};
+                border: 3px solid ${level.unlocked ? '#4a4a7e' : '#333'};
+                border-radius: 8px;
+                cursor: ${level.unlocked ? 'pointer' : 'not-allowed'};
+                text-align: left;
+                transition: all 0.15s;
+                opacity: ${level.unlocked ? 1 : 0.5};
+              ">
+                <div style="
+                  font-size: 12px;
+                  color: #888;
+                  margin-bottom: 5px;
+                ">CHAPTER ${level.chapter}</div>
+                <div style="
+                  font-size: 18px;
+                  font-weight: bold;
+                  color: #fff;
+                ">${level.name}</div>
+                ${!level.unlocked ? '<div style="color: #ff6666; font-size: 12px; margin-top: 10px;">🔒 LOCKED</div>' : highScoreHTML}
+              </button>
+            `;
+          }).join('')}
         </div>
         
         <button id="back-btn" style="
@@ -1223,7 +1345,37 @@ export class GameStateManager {
       'D': '#FF4444'
     };
     
+    // Build high score display HTML
+    const highScoreHTML = result.isNewHighScore 
+      ? `<div style="
+          font-size: 28px;
+          color: #FFD700;
+          margin-bottom: 20px;
+          animation: newHighScore 0.5s ease-out infinite alternate;
+          text-shadow: 0 0 10px #FFD700, 0 0 20px #FF6B00;
+        ">🏆 NEW HIGH SCORE! 🏆</div>
+        ${result.previousHighScore !== null ? `
+          <div style="
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 20px;
+          ">Previous best: ${result.previousHighScore.toLocaleString()}</div>
+        ` : ''}`
+      : (result.previousHighScore !== null ? `
+        <div style="
+          font-size: 16px;
+          color: #888;
+          margin-bottom: 20px;
+        ">High Score: ${result.previousHighScore.toLocaleString()}</div>
+      ` : '');
+    
     this.uiContainer.innerHTML = `
+      <style>
+        @keyframes newHighScore {
+          0% { transform: scale(1); }
+          100% { transform: scale(1.05); }
+        }
+      </style>
       <div style="
         position: absolute;
         top: 0;
@@ -1242,6 +1394,8 @@ export class GameStateManager {
           color: #fff;
           margin-bottom: 20px;
         ">LEVEL COMPLETE!</div>
+        
+        ${highScoreHTML}
         
         <div style="
           font-size: 120px;
@@ -1263,6 +1417,7 @@ export class GameStateManager {
             font-size: 20px;
             color: #fff;
             margin-bottom: 15px;
+            gap: 40px;
           ">
             <span>SCORE:</span>
             <span style="color: #00FF88;">${result.score.toLocaleString()}</span>
