@@ -150,27 +150,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       },
       
       onOpenEditor: () => {
-        // Create editor UI in the overlay container
-        editorUI = new EditorUI(uiOverlay, {
-          onExit: () => {
-            gameStateManager?.setState('menu');
-          },
-          
-          onPlayTest: (level: EditorLevelData) => {
-            // Store level for returning to editor
-            isPlayTesting = true;
-            playTestLevel = level;
-            gameStateManager?.setPlayTesting(true);
-            
-            // Convert to game level and play
-            const gameLevel = EditorStorage.toGameLevel(level);
-            
-            // Temporarily add to available levels
-            game?.loadCustomLevel(gameLevel);
-            game?.start();
-            gameStateManager?.setState('playing');
-          }
-        });
+        // Editor UI is created by the state change handler (to === 'editor')
+        // This callback is kept for any additional setup needed when opening editor from menu
       }
     });
     
