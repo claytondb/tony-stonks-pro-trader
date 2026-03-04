@@ -32,6 +32,7 @@ export class EditorUI {
     // Create main layout
     this.uiRoot = document.createElement('div');
     this.uiRoot.id = 'editor-ui';
+    this.uiRoot.style.cssText = 'position: relative; z-index: 10; width: 100%; height: 100%;';
     this.uiRoot.innerHTML = this.getLayoutHTML();
     container.appendChild(this.uiRoot);
     
