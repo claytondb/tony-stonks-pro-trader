@@ -228,17 +228,18 @@ export class Game {
     this.camera.lookAt(0, 0, 0);
     
     // Lighting - multi-source setup for rich, dynamic look
+    // Values here are defaults; updateLightingForSky() adjusts per level
     
-    // Ambient light - base illumination (slightly higher for visibility)
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    // Ambient light - base illumination
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     this.scene.add(this.ambientLight);
     
     // Hemisphere light - sky/ground color blend for natural outdoor feel
-    this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x444444, 0.6);
+    this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x666666, 0.8);
     this.scene.add(this.hemiLight);
     
     // Main sun/directional light
-    this.sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    this.sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
     this.sunLight.position.set(50, 100, 50);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.width = 2048;
@@ -252,7 +253,7 @@ export class Game {
     this.scene.add(this.sunLight);
     
     // Fill light - softer light from opposite side to reduce harsh shadows
-    this.fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+    this.fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
     this.fillLight.position.set(-30, 40, -30);
     this.scene.add(this.fillLight);
     
@@ -1156,6 +1157,7 @@ export class Game {
   
   /**
    * Update lighting to match the sky colors for a cohesive look
+   * Boosted values for better visibility
    */
   private updateLightingForSky(skyTop: string, skyBottom: string): void {
     const topColor = new THREE.Color(skyTop);
@@ -1167,9 +1169,9 @@ export class Game {
     const avgBrightness = (topLum + bottomLum) / 2;
     
     // Hemisphere light: sky color on top, darker ground bounce
-    this.hemiLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.3);
-    this.hemiLight.groundColor.copy(bottomColor).multiplyScalar(0.4);
-    this.hemiLight.intensity = 0.4 + avgBrightness * 0.4; // 0.4-0.8 based on brightness
+    this.hemiLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.5);
+    this.hemiLight.groundColor.copy(bottomColor).lerp(new THREE.Color(0x888888), 0.3);
+    this.hemiLight.intensity = 0.6 + avgBrightness * 0.5; // 0.6-1.1 based on brightness
     
     // Sun light: warmer for sunset/dawn, cooler for day, dimmer for night
     const topHSL = topColor.getHSL({ h: 0, s: 0, l: 0 });
@@ -1177,31 +1179,32 @@ export class Game {
     const isDark = avgBrightness < 0.2;
     
     if (isDark) {
-      // Night/midnight - dim bluish moonlight
-      this.sunLight.color.setHex(0x8899bb);
-      this.sunLight.intensity = 0.3;
-      this.fillLight.intensity = 0.1;
-      this.ambientLight.intensity = 0.3;
+      // Night/midnight - moonlight but still playable
+      this.sunLight.color.setHex(0xaabbdd);
+      this.sunLight.intensity = 0.6;
+      this.fillLight.color.setHex(0x8899bb);
+      this.fillLight.intensity = 0.4;
+      this.ambientLight.intensity = 0.5;
     } else if (isWarm) {
       // Sunset/dawn - warm golden light
-      this.sunLight.color.setHex(0xffaa66);
-      this.sunLight.intensity = 1.0;
+      this.sunLight.color.setHex(0xffcc88);
+      this.sunLight.intensity = 1.4;
       this.sunLight.position.set(80, 30, 50); // Lower sun angle
-      this.fillLight.color.setHex(0x6688aa);
-      this.fillLight.intensity = 0.2;
-      this.ambientLight.intensity = 0.4;
+      this.fillLight.color.setHex(0x88aacc);
+      this.fillLight.intensity = 0.5;
+      this.ambientLight.intensity = 0.6;
     } else {
-      // Day/cloudy - neutral to slightly warm
+      // Day/cloudy - bright and clear
       this.sunLight.color.setHex(0xffffff);
-      this.sunLight.intensity = 1.0 + avgBrightness * 0.3; // Brighter for clear day
+      this.sunLight.intensity = 1.4 + avgBrightness * 0.4; // 1.4-1.8
       this.sunLight.position.set(50, 100, 50); // High noon position
       this.fillLight.color.setHex(0xffffff);
-      this.fillLight.intensity = 0.3;
-      this.ambientLight.intensity = 0.4 + avgBrightness * 0.2;
+      this.fillLight.intensity = 0.5;
+      this.ambientLight.intensity = 0.6 + avgBrightness * 0.3; // 0.6-0.9
     }
     
-    // Ambient always gets some of the sky color mixed in
-    this.ambientLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.7);
+    // Ambient always gets some of the sky color mixed in (but mostly white)
+    this.ambientLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.8);
   }
   
   /**
@@ -1334,9 +1337,9 @@ export class Game {
         return { geometry: geo, material: mat };
       }
       case 'tree_small': {
-        // Simplified tree - just the foliage cone for instancing
+        // Tree foliage cone - no trunk visual (physics will match this)
         const leavesGeo = new THREE.ConeGeometry(1.5, 3, 8);
-        leavesGeo.translate(0, 3.5, 0);
+        leavesGeo.translate(0, 3.5, 0); // Foliage centered at y=3.5
         const mat = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.9 });
         return { geometry: leavesGeo, material: mat };
       }
@@ -1380,7 +1383,9 @@ export class Game {
         this.physics.createStaticBox(pos.clone().setY(0.75), new THREE.Vector3(0.6, 0.75, 0.6));
         break;
       case 'tree_small':
-        this.physics.createStaticBox(pos.clone().setY(2), new THREE.Vector3(0.2, 2, 0.2));
+        // Physics matches visible foliage cone (centered at y=3.5, height 3, radius ~1.5)
+        // Using a box that approximates the lower portion of the cone
+        this.physics.createStaticBox(pos.clone().setY(2.5), new THREE.Vector3(1.0, 0.5, 1.0));
         break;
       case 'cone':
         this.physics.createStaticBox(pos.clone().setY(0.25), new THREE.Vector3(0.15, 0.25, 0.15));
@@ -1661,10 +1666,10 @@ export class Game {
         
       case 'tree_small':
         mesh = this.createTreeMesh();
-        // Collision: tree trunk only (0.4x4x0.4)
+        // Collision: matches visible foliage cone (lower portion)
         this.physics.createStaticBox(
-          new THREE.Vector3(data.position[0], 2, data.position[2]),
-          new THREE.Vector3(0.2, 2, 0.2)
+          new THREE.Vector3(data.position[0], 2.5, data.position[2]),
+          new THREE.Vector3(1.0, 0.5, 1.0)
         );
         break;
       
