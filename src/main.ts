@@ -68,6 +68,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             editorUI = null;
           }
           canvas.style.display = 'block';
+          // Force game to resize in case canvas was hidden
+          window.dispatchEvent(new Event('resize'));
         }
         
         if (to === 'editor') {
