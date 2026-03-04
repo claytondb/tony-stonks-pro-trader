@@ -32,8 +32,8 @@ export class PhysicsWorld {
     // Only Y rotation allowed (chair stays upright)
     const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(position.x, 2.0, position.z)  // Start well above ground
-      .setLinearDamping(0.1)
-      .setAngularDamping(5.0)
+      .setLinearDamping(0.03)  // Lower = more momentum/roll (was 0.1)
+      .setAngularDamping(8.0)  // Higher = snappier turn stop (was 5.0)
       .enabledRotations(false, true, false);
     
     const body = this.world.createRigidBody(bodyDesc);
@@ -42,7 +42,7 @@ export class PhysicsWorld {
     // halfHeight=0.3 (middle section), radius=0.4 (end caps)
     const bodyCollider = RAPIER.ColliderDesc.capsule(0.3, 0.4)
       .setMass(50)
-      .setFriction(0.15)  // Low friction for smooth sliding
+      .setFriction(0.1)  // Lower friction for more sliding/momentum (was 0.15)
       .setRestitution(0.0);
     
     this.world.createCollider(bodyCollider, body);

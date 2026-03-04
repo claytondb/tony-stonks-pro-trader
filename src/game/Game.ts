@@ -50,6 +50,12 @@ export class Game {
   private renderer!: THREE.WebGLRenderer;
   private skyGradient!: SkyGradient;
   
+  // Lighting (stored for dynamic updates based on sky)
+  private ambientLight!: THREE.AmbientLight;
+  private sunLight!: THREE.DirectionalLight;
+  private hemiLight!: THREE.HemisphereLight;
+  private fillLight!: THREE.DirectionalLight;
+  
   // Systems
   private input!: InputManager;
   private physics!: PhysicsWorld;
@@ -221,22 +227,34 @@ export class Game {
     this.camera.position.set(0, 5, -10);
     this.camera.lookAt(0, 0, 0);
     
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-    this.scene.add(ambientLight);
+    // Lighting - multi-source setup for rich, dynamic look
     
-    const sunLight = new THREE.DirectionalLight(0xffffff, 1);
-    sunLight.position.set(50, 100, 50);
-    sunLight.castShadow = true;
-    sunLight.shadow.mapSize.width = 2048;
-    sunLight.shadow.mapSize.height = 2048;
-    sunLight.shadow.camera.near = 10;
-    sunLight.shadow.camera.far = 200;
-    sunLight.shadow.camera.left = -50;
-    sunLight.shadow.camera.right = 50;
-    sunLight.shadow.camera.top = 50;
-    sunLight.shadow.camera.bottom = -50;
-    this.scene.add(sunLight);
+    // Ambient light - base illumination (slightly higher for visibility)
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    this.scene.add(this.ambientLight);
+    
+    // Hemisphere light - sky/ground color blend for natural outdoor feel
+    this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x444444, 0.6);
+    this.scene.add(this.hemiLight);
+    
+    // Main sun/directional light
+    this.sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    this.sunLight.position.set(50, 100, 50);
+    this.sunLight.castShadow = true;
+    this.sunLight.shadow.mapSize.width = 2048;
+    this.sunLight.shadow.mapSize.height = 2048;
+    this.sunLight.shadow.camera.near = 10;
+    this.sunLight.shadow.camera.far = 200;
+    this.sunLight.shadow.camera.left = -50;
+    this.sunLight.shadow.camera.right = 50;
+    this.sunLight.shadow.camera.top = 50;
+    this.sunLight.shadow.camera.bottom = -50;
+    this.scene.add(this.sunLight);
+    
+    // Fill light - softer light from opposite side to reduce harsh shadows
+    this.fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+    this.fillLight.position.set(-30, 40, -30);
+    this.scene.add(this.fillLight);
     
     // Camera controller
     this.cameraController = new CameraController(this.camera);
@@ -1111,10 +1129,14 @@ export class Game {
     const skyTop = (level as any).skyColorTop || level.skyColor || '#1e90ff';
     const skyBottom = (level as any).skyColorBottom || level.skyColor || '#87ceeb';
     this.skyGradient.setColors(skyTop, skyBottom);
+    this.updateLightingForSky(skyTop, skyBottom);
     this.scene.background = null; // Use gradient, not solid color
     
     if (level.fogColor) {
       this.scene.fog = new THREE.Fog(level.fogColor, level.fogNear || 50, level.fogFar || 200);
+    } else {
+      // Clear fog if not specified
+      this.scene.fog = null;
     }
     
     // Load level objects
@@ -1130,6 +1152,56 @@ export class Game {
     
     // Reset HUD
     this.hud?.reset();
+  }
+  
+  /**
+   * Update lighting to match the sky colors for a cohesive look
+   */
+  private updateLightingForSky(skyTop: string, skyBottom: string): void {
+    const topColor = new THREE.Color(skyTop);
+    const bottomColor = new THREE.Color(skyBottom);
+    
+    // Calculate average brightness of sky (0-1)
+    const topLum = topColor.getHSL({ h: 0, s: 0, l: 0 }).l;
+    const bottomLum = bottomColor.getHSL({ h: 0, s: 0, l: 0 }).l;
+    const avgBrightness = (topLum + bottomLum) / 2;
+    
+    // Hemisphere light: sky color on top, darker ground bounce
+    this.hemiLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.3);
+    this.hemiLight.groundColor.copy(bottomColor).multiplyScalar(0.4);
+    this.hemiLight.intensity = 0.4 + avgBrightness * 0.4; // 0.4-0.8 based on brightness
+    
+    // Sun light: warmer for sunset/dawn, cooler for day, dimmer for night
+    const topHSL = topColor.getHSL({ h: 0, s: 0, l: 0 });
+    const isWarm = topHSL.h > 0.02 && topHSL.h < 0.15; // Orange/red hues
+    const isDark = avgBrightness < 0.2;
+    
+    if (isDark) {
+      // Night/midnight - dim bluish moonlight
+      this.sunLight.color.setHex(0x8899bb);
+      this.sunLight.intensity = 0.3;
+      this.fillLight.intensity = 0.1;
+      this.ambientLight.intensity = 0.3;
+    } else if (isWarm) {
+      // Sunset/dawn - warm golden light
+      this.sunLight.color.setHex(0xffaa66);
+      this.sunLight.intensity = 1.0;
+      this.sunLight.position.set(80, 30, 50); // Lower sun angle
+      this.fillLight.color.setHex(0x6688aa);
+      this.fillLight.intensity = 0.2;
+      this.ambientLight.intensity = 0.4;
+    } else {
+      // Day/cloudy - neutral to slightly warm
+      this.sunLight.color.setHex(0xffffff);
+      this.sunLight.intensity = 1.0 + avgBrightness * 0.3; // Brighter for clear day
+      this.sunLight.position.set(50, 100, 50); // High noon position
+      this.fillLight.color.setHex(0xffffff);
+      this.fillLight.intensity = 0.3;
+      this.ambientLight.intensity = 0.4 + avgBrightness * 0.2;
+    }
+    
+    // Ambient always gets some of the sky color mixed in
+    this.ambientLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.7);
   }
   
   /**
@@ -2665,8 +2737,9 @@ export class Game {
     }
     
     // TURNING (A/D) - Rotate left/right (direct angular velocity)
-    const turnSpeed = 2.5;  // Radians per second
-    const airTurnSpeed = 1.5;
+    // THPS-style: instant, responsive turning
+    const turnSpeed = 4.5;  // Radians per second - snappy! (was 2.5)
+    const airTurnSpeed = 2.5;  // Slightly slower in air (was 1.5)
     
     if (input.turnLeft) {
       const speed = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
@@ -2675,7 +2748,7 @@ export class Game {
       const speed = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
       this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, -speed, 0));
     } else {
-      // Stop rotation when not turning
+      // Stop rotation when not turning - instant stop for responsiveness
       this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
     }
     
