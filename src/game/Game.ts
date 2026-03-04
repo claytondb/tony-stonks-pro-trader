@@ -2206,6 +2206,12 @@ export class Game {
         proceduralSounds.playGrindStart();
         proceduralSounds.startGrindLoop();
         proceduralSounds.startBalanceWarning();  // Start balance warning system (initially silent)
+        
+        // Enable grind camera angle for better rail visibility
+        const grindState = this.grindSystem.getState();
+        if (grindState.rail) {
+          this.cameraController.setGrindCamera(true, grindState.rail.start, grindState.rail.end);
+        }
       }
     }
     
@@ -2225,6 +2231,8 @@ export class Game {
         proceduralSounds.playJump();
         // Apply jump impulse
         this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, 10, 0));
+        // Disable grind camera angle
+        this.cameraController.setGrindCamera(false);
       } else {
         // Update grind physics
         this.grindSystem.updateGrind(dt, balanceInput, this.physics, this.chairBody);
@@ -2259,6 +2267,8 @@ export class Game {
           this.playerState.isGrinding = false;
           proceduralSounds.stopGrindLoop();
           proceduralSounds.stopBalanceWarning();
+          // Disable grind camera angle
+          this.cameraController.setGrindCamera(false);
         }
       }
     } else {

@@ -149,6 +149,12 @@ export class CameraController {
     // Apply mouse orbit rotation
     desiredOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.orbitAngleX);
     
+    // Apply grind camera rotation (slight side angle to show rail better)
+    this.updateGrindCamera(dt);
+    if (Math.abs(this.grindCameraAngle) > 0.001) {
+      desiredOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.grindCameraAngle);
+    }
+    
     // Apply vertical orbit (pitch) - rotate around the horizontal axis perpendicular to offset
     const horizontalAxis = new THREE.Vector3(-desiredOffset.z, 0, desiredOffset.x).normalize();
     desiredOffset.applyAxisAngle(horizontalAxis, this.orbitAngleY);
@@ -281,6 +287,13 @@ export class CameraController {
   private impactZoomCurrent = 0;      // Current FOV reduction
   private impactZoomDecay = 8;        // How fast the pulse fades (higher = faster)
   
+  // Grind camera settings (slight rotation to better show the rail)
+  private grindCameraAngle = 0;           // Current grind camera rotation
+  private targetGrindAngle = 0;           // Target rotation
+  private grindAngleMax = Math.PI / 12;   // 15 degrees max rotation
+  private grindAngleSmoothSpeed = 4;      // How fast to transition
+  private grindRailDirection = new THREE.Vector3();  // Direction of current rail
+  
   /**
    * Trigger an impact zoom pulse on big landings
    * Briefly narrows FOV then returns to normal, creating a "punch" effect
@@ -308,6 +321,49 @@ export class CameraController {
       this.impactZoomCurrent -= this.impactZoomCurrent * this.impactZoomDecay * dt;
     } else {
       this.impactZoomCurrent = 0;
+    }
+  }
+  
+  /**
+   * Set grind camera state - rotates camera to better show the rail during grinds
+   * @param isGrinding - Whether player is currently grinding
+   * @param railStart - Start point of the rail (optional, for direction)
+   * @param railEnd - End point of the rail (optional, for direction)
+   */
+  setGrindCamera(isGrinding: boolean, railStart?: THREE.Vector3, railEnd?: THREE.Vector3): void {
+    if (isGrinding && railStart && railEnd) {
+      // Calculate rail direction
+      this.grindRailDirection.subVectors(railEnd, railStart).normalize();
+      
+      // Calculate angle to rotate camera based on rail direction relative to player forward
+      // We want to rotate the camera slightly to the side to show the rail better
+      if (this.target) {
+        const playerForward = new THREE.Vector3(0, 0, 1);
+        playerForward.applyQuaternion(this.target.quaternion);
+        
+        // Cross product to determine which side the rail is approaching from
+        const cross = new THREE.Vector3().crossVectors(playerForward, this.grindRailDirection);
+        
+        // Use the Y component of cross product to determine rotation direction
+        // Positive Y = rail is to the right, rotate camera left (positive angle)
+        // Negative Y = rail is to the left, rotate camera right (negative angle)
+        this.targetGrindAngle = cross.y > 0 ? this.grindAngleMax : -this.grindAngleMax;
+      }
+    } else {
+      this.targetGrindAngle = 0;
+    }
+  }
+  
+  /**
+   * Update grind camera angle (call in main update loop)
+   */
+  private updateGrindCamera(dt: number): void {
+    // Smoothly transition grind camera angle
+    this.grindCameraAngle += (this.targetGrindAngle - this.grindCameraAngle) * this.grindAngleSmoothSpeed * dt;
+    
+    // Snap to zero when very close (avoid floating point drift)
+    if (Math.abs(this.grindCameraAngle) < 0.001 && Math.abs(this.targetGrindAngle) < 0.001) {
+      this.grindCameraAngle = 0;
     }
   }
   

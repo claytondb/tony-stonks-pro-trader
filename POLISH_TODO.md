@@ -56,7 +56,7 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 ### Camera Improvements
 - [x] **Dynamic FOV** - Widen FOV slightly when moving fast, narrow when slow ✅
 - [x] **Trick zoom** - Subtle zoom out during air time for better trick visibility ✅
-- [ ] **Grind camera angle** - Rotate camera slightly to better show rail during grinds
+- [x] **Grind camera angle** - Rotate camera slightly to better show rail during grinds ✅
 - [x] **Impact zoom pulse** - Brief zoom on big landings (>5000 points) ✅
 
 ### Particle Effects
@@ -233,10 +233,13 @@ Live: https://claytondb.github.io/tony-stonks-pro-trader/
 
 ---
 
-*Last updated: 2026-03-03 (5:00 AM nightly run)*
+*Last updated: 2026-03-04 (12:00 AM nightly run)*
 *Priority: Start with Quick Wins for immediate feel improvement, then tackle Audio & Camera for biggest impact.*
 
 ## Recent Changes (Nightly Runs)
+
+### 2026-03-04 (12:00 AM)
+- ✅ **Grind camera angle** - Camera now rotates 15° sideways when grinding to better show the rail. Direction determined by rail orientation relative to player. Smooth transitions in/out of grinds. Completes all 4 camera improvements!
 
 ### 2026-03-03 (5:00 AM)
 - ✅ **High score persistence** - Scores now save to localStorage per level! Level select shows your best score and rank for each level. Results screen displays "NEW HIGH SCORE!" with celebratory animation when you beat your previous best, and shows your previous high score for comparison.
