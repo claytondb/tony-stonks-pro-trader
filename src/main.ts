@@ -5,7 +5,7 @@
 
 import { Game } from './game/Game';
 import { GameStateManager } from './ui/GameStateManager';
-import { EditorUI } from './editor/EditorUI';
+import { EditorUI, EditorUIOptions } from './editor/EditorUI';
 import { EditorStorage, EditorLevelData } from './editor/EditorStorage';
 
 // Wait for DOM
@@ -78,6 +78,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           
           // Recreate editor UI if returning from play test
           if (!editorUI) {
+            // Skip autosave prompt if returning from play test (we have the level already)
+            const editorOptions: EditorUIOptions = {
+              skipAutosaveCheck: !!playTestLevel
+            };
+            
             editorUI = new EditorUI(uiOverlay, {
               onExit: () => {
                 isPlayTesting = false;
@@ -94,7 +99,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 game?.start();
                 gameStateManager?.setState('playing');
               }
-            });
+            }, editorOptions);
             
             // Load the level we were editing
             if (playTestLevel) {

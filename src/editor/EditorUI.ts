@@ -12,6 +12,10 @@ export interface EditorUICallbacks {
   onPlayTest?: (level: EditorLevelData) => void;
 }
 
+export interface EditorUIOptions {
+  skipAutosaveCheck?: boolean;
+}
+
 // Maximum objects allowed per level (for performance)
 const MAX_OBJECTS = 500;
 
@@ -26,7 +30,7 @@ export class EditorUI {
   
   private selectedCategory: number = 0;
   
-  constructor(container: HTMLElement, callbacks: EditorUICallbacks = {}) {
+  constructor(container: HTMLElement, callbacks: EditorUICallbacks = {}, options: EditorUIOptions = {}) {
     this.callbacks = callbacks;
     
     // Create main layout
@@ -59,11 +63,13 @@ export class EditorUI {
     this.updatePropertiesPanel(null);
     this.updateLevelSettings();
     
-    // Check for autosave
-    const autosave = EditorStorage.loadAutosave();
-    if (autosave) {
-      if (confirm('Found an autosaved level. Would you like to restore it?')) {
-        this.editor.loadLevel(autosave);
+    // Check for autosave (skip if returning from play test)
+    if (!options.skipAutosaveCheck) {
+      const autosave = EditorStorage.loadAutosave();
+      if (autosave) {
+        if (confirm('Found an autosaved level. Would you like to restore it?')) {
+          this.editor.loadLevel(autosave);
+        }
       }
     }
   }
