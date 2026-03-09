@@ -151,6 +151,12 @@ export class EditorUI {
       <!-- File input (hidden) -->
       <input type="file" id="import-input" accept=".json" style="display: none;">
       
+      <!-- Toast notification -->
+      <div id="editor-toast" class="editor-toast">
+        <span class="toast-icon">✓</span>
+        <span class="toast-message">Level Saved!</span>
+      </div>
+      
       <!-- Object limit dialog (hidden) -->
       <div id="limit-dialog" class="dialog-overlay" style="display: none;">
         <div class="dialog-content" style="max-width: 400px;">
@@ -591,6 +597,40 @@ export class EditorUI {
         padding: 30px;
       }
       
+      /* Toast notifications */
+      .editor-toast {
+        position: fixed;
+        top: 80px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-20px);
+        padding: 12px 24px;
+        background: linear-gradient(135deg, #2d5a2d, #1a3a1a);
+        border: 2px solid #4a9a4a;
+        border-radius: 8px;
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        z-index: 3000;
+        opacity: 0;
+        transition: all 0.3s ease;
+        pointer-events: none;
+      }
+      
+      .editor-toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+      
+      .editor-toast.error {
+        background: linear-gradient(135deg, #5a2d2d, #3a1a1a);
+        border-color: #9a4a4a;
+      }
+      
+      .editor-toast .toast-icon {
+        margin-right: 8px;
+      }
+      
       /* Keyboard hints */
       .keyboard-hints {
         padding: 12px;
@@ -629,9 +669,11 @@ export class EditorUI {
     // Save
     this.toolbar.querySelector('#btn-save')?.addEventListener('click', () => {
       if (this.editor.save()) {
-        this.setStatus('Level saved!');
+        this.showToast('Level Saved!');
+        this.setStatus('Level saved');
       } else {
-        this.setStatus('Failed to save level');
+        this.showToast('Failed to save level', true);
+        this.setStatus('Save failed');
       }
     });
     
@@ -643,6 +685,7 @@ export class EditorUI {
     // Export
     this.toolbar.querySelector('#btn-export')?.addEventListener('click', () => {
       this.editor.exportLevel();
+      this.showToast('Level Exported!');
       this.setStatus('Level exported');
     });
     
@@ -657,9 +700,11 @@ export class EditorUI {
       if (file) {
         if (await this.editor.importLevel(file)) {
           this.updateLevelSettings();
-          this.setStatus('Level imported!');
+          this.showToast('Level Imported!');
+          this.setStatus('Level imported');
         } else {
-          this.setStatus('Failed to import level');
+          this.showToast('Failed to import level', true);
+          this.setStatus('Import failed');
         }
         importInput.value = '';
       }
@@ -1162,6 +1207,25 @@ export class EditorUI {
   private setStatus(text: string): void {
     const statusText = this.statusBar.querySelector('#status-text');
     if (statusText) statusText.textContent = text;
+  }
+  
+  private showToast(message: string, isError: boolean = false): void {
+    const toast = this.uiRoot.querySelector('#editor-toast') as HTMLElement;
+    if (!toast) return;
+    
+    const icon = toast.querySelector('.toast-icon') as HTMLElement;
+    const messageEl = toast.querySelector('.toast-message') as HTMLElement;
+    
+    if (icon) icon.textContent = isError ? '✗' : '✓';
+    if (messageEl) messageEl.textContent = message;
+    
+    toast.classList.toggle('error', isError);
+    toast.classList.add('show');
+    
+    // Hide after 2 seconds
+    setTimeout(() => {
+      toast.classList.remove('show');
+    }, 2000);
   }
   
   loadLevel(level: EditorLevelData): void {
