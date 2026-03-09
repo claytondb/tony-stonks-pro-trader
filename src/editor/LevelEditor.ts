@@ -85,6 +85,11 @@ export class LevelEditor {
   private paintMinDistance: number = 2;  // Min distance between painted objects
   private toolbarContainer: HTMLElement | null = null;
   
+  // Multi-object transform tracking
+  private transformStartPos: THREE.Vector3 = new THREE.Vector3();
+  private transformStartRot: THREE.Euler = new THREE.Euler();
+  private multiSelectOffsets: Map<string, { pos: THREE.Vector3; rot: THREE.Euler }> = new Map();
+  
   // Spawn placement mode
   private isPlacingSpawn: boolean = false;
   private onSpawnPlaced: ((x: number, z: number) => void) | null = null;
@@ -156,8 +161,26 @@ export class LevelEditor {
     this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
     this.transformControls.addEventListener('dragging-changed', (e) => {
       this.orbitControls.enabled = !e.value;
+      
+      if (e.value && this.selectedObject) {
+        // Drag started - store initial positions for multi-select
+        this.transformStartPos.copy(this.selectedObject.mesh.position);
+        this.transformStartRot.copy(this.selectedObject.mesh.rotation);
+        
+        // Store offsets for all other selected objects
+        this.multiSelectOffsets.clear();
+        this.selectedObjects.forEach(obj => {
+          if (obj !== this.selectedObject) {
+            this.multiSelectOffsets.set(obj.id, {
+              pos: obj.mesh.position.clone().sub(this.selectedObject!.mesh.position),
+              rot: obj.mesh.rotation.clone()
+            });
+          }
+        });
+      }
     });
     this.transformControls.addEventListener('objectChange', () => {
+      this.updateMultiSelectTransform();
       this.updateSelectedObjectData();
     });
     this.scene.add(this.transformControls);
@@ -714,6 +737,33 @@ export class LevelEditor {
   }
   
   duplicateSelectedObject(): void {
+    // Handle multi-selection duplicate
+    if (this.selectedObjects.length > 0) {
+      const newObjects: EditorObject[] = [];
+      this.selectedObjects.forEach(obj => {
+        const newData: LevelObject = JSON.parse(JSON.stringify(obj.data));
+        newData.position[0] += 2;
+        newData.position[2] += 2;
+        const newObj = this.addObject(newData);
+        newObjects.push(newObj);
+      });
+      
+      // Select the duplicated objects
+      this.deselectObject();
+      newObjects.forEach(obj => {
+        this.selectedObjects.push(obj);
+        this.highlightObject(obj);
+      });
+      if (newObjects.length > 0) {
+        this.selectedObject = newObjects[0];
+        this.transformControls.attach(this.selectedObject.mesh);
+        this.callbacks.onObjectSelected?.(this.selectedObject);
+      }
+      this.saveUndoState();
+      return;
+    }
+    
+    // Single selection duplicate
     if (!this.selectedObject) return;
     
     const original = this.selectedObject.data;
@@ -724,6 +774,54 @@ export class LevelEditor {
     newData.position[2] += 2;
     
     this.addObject(newData);
+    this.saveUndoState();
+  }
+  
+  /**
+   * Apply transform delta to all other selected objects (for multi-select move/rotate)
+   */
+  private updateMultiSelectTransform(): void {
+    if (!this.selectedObject || this.selectedObjects.length <= 1) return;
+    
+    const mode = this.transformControls.getMode();
+    
+    if (mode === 'translate') {
+      // Move all other selected objects by the same delta
+      this.selectedObjects.forEach(obj => {
+        if (obj !== this.selectedObject) {
+          const offset = this.multiSelectOffsets.get(obj.id);
+          if (offset) {
+            obj.mesh.position.copy(this.selectedObject!.mesh.position).add(offset.pos);
+          }
+        }
+      });
+    } else if (mode === 'rotate') {
+      // Rotate all other selected objects around the primary object's center
+      const rotationDelta = this.selectedObject.mesh.rotation.y - this.transformStartRot.y;
+      
+      this.selectedObjects.forEach(obj => {
+        if (obj !== this.selectedObject) {
+          const offset = this.multiSelectOffsets.get(obj.id);
+          if (offset) {
+            // Rotate position around primary object
+            const rotatedOffset = offset.pos.clone();
+            const cos = Math.cos(rotationDelta);
+            const sin = Math.sin(rotationDelta);
+            const newX = rotatedOffset.x * cos - rotatedOffset.z * sin;
+            const newZ = rotatedOffset.x * sin + rotatedOffset.z * cos;
+            
+            obj.mesh.position.set(
+              this.selectedObject!.mesh.position.x + newX,
+              this.selectedObject!.mesh.position.y + offset.pos.y,
+              this.selectedObject!.mesh.position.z + newZ
+            );
+            
+            // Also rotate the object itself
+            obj.mesh.rotation.y = offset.rot.y + rotationDelta;
+          }
+        }
+      });
+    }
   }
   
   private updateSelectedObjectData(): void {
@@ -745,6 +843,18 @@ export class LevelEditor {
       THREE.MathUtils.radToDeg(rot.y),
       THREE.MathUtils.radToDeg(rot.z)
     ];
+    
+    // Update all selected objects data (for multi-selection)
+    this.selectedObjects.forEach(obj => {
+      if (obj !== this.selectedObject) {
+        obj.data.position = [obj.mesh.position.x, obj.mesh.position.y, obj.mesh.position.z];
+        obj.data.rotation = [
+          THREE.MathUtils.radToDeg(obj.mesh.rotation.x),
+          THREE.MathUtils.radToDeg(obj.mesh.rotation.y),
+          THREE.MathUtils.radToDeg(obj.mesh.rotation.z)
+        ];
+      }
+    });
     
     this.callbacks.onObjectsChanged?.();
   }
@@ -1522,6 +1632,14 @@ export class LevelEditor {
   
   getSelectedObject(): EditorObject | null {
     return this.selectedObject;
+  }
+  
+  getSelectedObjects(): EditorObject[] {
+    return this.selectedObjects;
+  }
+  
+  getSelectionCount(): number {
+    return this.selectedObjects.length > 0 ? this.selectedObjects.length : (this.selectedObject ? 1 : 0);
   }
   
   setGridSnap(value: number): void {
