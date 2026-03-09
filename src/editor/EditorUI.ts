@@ -977,7 +977,9 @@ export class EditorUI {
     // Texture selector handler
     const textureSelect = container.querySelector('#prop-texture') as HTMLSelectElement;
     textureSelect?.addEventListener('change', () => {
-      const textureUrl = textureSelect.value;
+      const index = parseInt(textureSelect.value);
+      const history = textureGenerator.getHistory();
+      const textureUrl = index >= 0 && index < history.length ? history[index].url : '';
       this.applyTextureToObjectType(obj, textureUrl);
     });
   }
@@ -986,17 +988,23 @@ export class EditorUI {
     const history = textureGenerator.getHistory();
     const currentTexture = obj.data.params?.textureUrl || '';
     
+    // Find index of current texture in history
+    let currentIndex = -1;
+    history.forEach((tex, i) => {
+      if (tex.url === currentTexture) currentIndex = i;
+    });
+    
     let html = `
       <div class="prop-group">
         <div class="prop-label">Texture</div>
-        <select class="prop-input" id="prop-texture">
-          <option value="">Default (None)</option>
+        <select class="prop-input" id="prop-texture" data-texture-count="${history.length}">
+          <option value="-1" ${currentIndex === -1 ? 'selected' : ''}>Default (None)</option>
     `;
     
     history.forEach((tex, i) => {
-      const selected = tex.url === currentTexture ? 'selected' : '';
+      const selected = i === currentIndex ? 'selected' : '';
       const label = tex.prompt.length > 25 ? tex.prompt.substring(0, 25) + '...' : tex.prompt;
-      html += `<option value="${tex.url}" ${selected}>${i + 1}. ${label}</option>`;
+      html += `<option value="${i}" ${selected}>${i + 1}. ${label}</option>`;
     });
     
     html += `
