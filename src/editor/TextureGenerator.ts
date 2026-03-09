@@ -273,24 +273,50 @@ export class TextureGenerator {
   async downloadTexture(texture: GeneratedTexture, filename?: string): Promise<void> {
     const name = filename || `texture_${texture.timestamp}.png`;
     
-    // If it's a URL, fetch and convert to blob
-    const response = await fetch(texture.url);
-    const blob = await response.blob();
-    
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      let blobUrl: string;
+      
+      if (texture.url.startsWith('data:')) {
+        // Data URL - convert to blob directly
+        const response = await fetch(texture.url);
+        const blob = await response.blob();
+        blobUrl = URL.createObjectURL(blob);
+      } else {
+        // External URL - try to fetch, but may fail due to CORS
+        try {
+          const response = await fetch(texture.url);
+          const blob = await response.blob();
+          blobUrl = URL.createObjectURL(blob);
+        } catch {
+          // CORS blocked - open in new tab instead
+          window.open(texture.url, '_blank');
+          return;
+        }
+      }
+      
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      console.error('Download failed:', e);
+      // Fallback: open in new tab
+      window.open(texture.url, '_blank');
+    }
   }
 
   /**
    * Convert URL to data URL for storage/caching
    */
   async urlToDataUrl(url: string): Promise<string> {
+    // Already a data URL
+    if (url.startsWith('data:')) {
+      return url;
+    }
+    
     const response = await fetch(url);
     const blob = await response.blob();
     
@@ -300,6 +326,92 @@ export class TextureGenerator {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
+  }
+
+  /**
+   * Export all textures as a texture pack JSON file
+   */
+  exportTexturePack(name: string = 'texture-pack'): void {
+    const history = this.getHistory();
+    const pack = {
+      name,
+      version: 1,
+      exportedAt: Date.now(),
+      textures: history
+    };
+    
+    const json = JSON.stringify(pack, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name}.textures.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Import a texture pack from JSON file
+   */
+  async importTexturePack(file: File): Promise<number> {
+    const text = await file.text();
+    const pack = JSON.parse(text);
+    
+    if (!pack.textures || !Array.isArray(pack.textures)) {
+      throw new Error('Invalid texture pack format');
+    }
+    
+    // Merge with existing history (avoid duplicates by timestamp)
+    const existing = this.getHistory();
+    const existingTimestamps = new Set(existing.map(t => t.timestamp));
+    
+    let imported = 0;
+    for (const texture of pack.textures) {
+      if (!existingTimestamps.has(texture.timestamp)) {
+        existing.push(texture);
+        imported++;
+      }
+    }
+    
+    // Sort by timestamp (newest first) and save
+    existing.sort((a, b) => b.timestamp - a.timestamp);
+    localStorage.setItem(TEXTURE_STORAGE_KEY, JSON.stringify(existing.slice(0, 100)));
+    
+    return imported;
+  }
+
+  /**
+   * Get textures used in a level's objects
+   */
+  getLevelTextures(objects: Array<{ params?: { textureUrl?: string } }>): GeneratedTexture[] {
+    const textureUrls = new Set<string>();
+    const textures: GeneratedTexture[] = [];
+    
+    objects.forEach(obj => {
+      if (obj.params?.textureUrl && !textureUrls.has(obj.params.textureUrl)) {
+        textureUrls.add(obj.params.textureUrl);
+        // Try to find in history for metadata
+        const history = this.getHistory();
+        const found = history.find(t => t.url === obj.params!.textureUrl);
+        if (found) {
+          textures.push(found);
+        } else {
+          // Create a minimal texture entry
+          textures.push({
+            url: obj.params.textureUrl,
+            prompt: 'Unknown',
+            timestamp: Date.now(),
+            width: 512,
+            height: 512
+          });
+        }
+      }
+    });
+    
+    return textures;
   }
 }
 

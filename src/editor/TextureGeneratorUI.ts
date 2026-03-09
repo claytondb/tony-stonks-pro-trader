@@ -524,6 +524,17 @@ export class TextureGeneratorUI {
                   <span style="color: #666;">No textures generated yet</span>
                 </div>
               </div>
+              <div class="texture-gen-section">
+                <h3>Texture Packs</h3>
+                <p style="font-size: 12px; color: #888; margin-bottom: 10px;">
+                  Export all your textures as a pack to share or backup, or import packs from other projects.
+                </p>
+                <div style="display: flex; gap: 10px;">
+                  <button class="texture-gen-btn secondary" id="export-pack-btn">📤 Export Pack</button>
+                  <button class="texture-gen-btn secondary" id="import-pack-btn">📥 Import Pack</button>
+                </div>
+                <input type="file" id="pack-import-input" accept=".json" style="display: none;">
+              </div>
             </div>
 
             <!-- Settings Tab -->
@@ -587,6 +598,30 @@ export class TextureGeneratorUI {
 
     // Show config
     this.modal.querySelector('#show-config-btn')?.addEventListener('click', () => this.showConfigSection());
+
+    // Texture pack export/import
+    this.modal.querySelector('#export-pack-btn')?.addEventListener('click', () => {
+      textureGenerator.exportTexturePack('my-textures');
+    });
+
+    const packImportInput = this.modal.querySelector('#pack-import-input') as HTMLInputElement;
+    this.modal.querySelector('#import-pack-btn')?.addEventListener('click', () => {
+      packImportInput?.click();
+    });
+
+    packImportInput?.addEventListener('change', async () => {
+      const file = packImportInput.files?.[0];
+      if (file) {
+        try {
+          const count = await textureGenerator.importTexturePack(file);
+          this.updateHistoryDisplay();
+          alert(`Imported ${count} new textures!`);
+        } catch (e: any) {
+          alert('Failed to import: ' + e.message);
+        }
+        packImportInput.value = '';
+      }
+    });
   }
 
   private switchTab(tabName: string): void {

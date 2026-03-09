@@ -3,10 +3,12 @@
  * Full HTML/CSS interface for the level editor
  */
 
+import * as THREE from 'three';
 import { LevelEditor, EditorObject } from './LevelEditor';
 import { EditorStorage, EditorLevelData, OBJECT_CATEGORIES } from './EditorStorage';
 import { SKY_PRESETS } from '../utils/SkyGradient';
 import { TextureGeneratorUI } from './TextureGeneratorUI';
+import { textureGenerator } from './TextureGenerator';
 
 export interface EditorUICallbacks {
   onExit?: () => void;
@@ -29,6 +31,7 @@ export class EditorUI {
   private toolbar: HTMLElement;
   private statusBar: HTMLElement;
   private textureGeneratorUI: TextureGeneratorUI;
+  private textureLoader: THREE.TextureLoader;
   
   private selectedCategory: number = 0;
   
@@ -59,11 +62,12 @@ export class EditorUI {
       canAddObject: () => this.canAddObject()
     });
     
-    // Create texture generator UI
+    // Create texture loader and generator UI
+    this.textureLoader = new THREE.TextureLoader();
     this.textureGeneratorUI = new TextureGeneratorUI(this.uiRoot, {
       onTextureApplied: (obj, _textureUrl) => {
         this.updatePropertiesPanel(obj);
-        this.setStatus('Texture applied!');
+        this.showToast('Texture Applied!');
       }
     });
     
@@ -927,6 +931,8 @@ export class EditorUI {
         <input type="number" class="prop-input" id="prop-rot-y" value="${rot[1].toFixed(0)}" step="15">
       </div>
       
+      ${this.renderTextureSelector(obj)}
+      
       ${this.renderParamsInputs(obj)}
       
       <div class="prop-group" style="margin-top: 20px;">
@@ -966,6 +972,96 @@ export class EditorUI {
     
     container.querySelector('#btn-delete-object')?.addEventListener('click', () => {
       this.editor.deleteSelectedObject();
+    });
+    
+    // Texture selector handler
+    const textureSelect = container.querySelector('#prop-texture') as HTMLSelectElement;
+    textureSelect?.addEventListener('change', () => {
+      const textureUrl = textureSelect.value;
+      this.applyTextureToObjectType(obj, textureUrl);
+    });
+  }
+  
+  private renderTextureSelector(obj: EditorObject): string {
+    const history = textureGenerator.getHistory();
+    const currentTexture = obj.data.params?.textureUrl || '';
+    
+    let html = `
+      <div class="prop-group">
+        <div class="prop-label">Texture</div>
+        <select class="prop-input" id="prop-texture">
+          <option value="">Default (None)</option>
+    `;
+    
+    history.forEach((tex, i) => {
+      const selected = tex.url === currentTexture ? 'selected' : '';
+      const label = tex.prompt.length > 25 ? tex.prompt.substring(0, 25) + '...' : tex.prompt;
+      html += `<option value="${tex.url}" ${selected}>${i + 1}. ${label}</option>`;
+    });
+    
+    html += `
+        </select>
+        <div style="font-size: 10px; color: #666; margin-top: 4px;">
+          Applies to all ${obj.data.type} objects
+        </div>
+      </div>
+    `;
+    
+    return html;
+  }
+  
+  private applyTextureToObjectType(obj: EditorObject, textureUrl: string): void {
+    const objectType = obj.data.type;
+    const level = this.editor.getLevel();
+    
+    // Apply to all objects of this type
+    level.objects.forEach(levelObj => {
+      if (levelObj.type === objectType) {
+        if (!levelObj.params) levelObj.params = {};
+        levelObj.params.textureUrl = textureUrl || undefined;
+      }
+    });
+    
+    // Update the 3D meshes
+    const allEditorObjects = (this.editor as any).objects as EditorObject[];
+    allEditorObjects.forEach(editorObj => {
+      if (editorObj.data.type === objectType) {
+        this.applyTextureToMesh(editorObj.mesh, textureUrl);
+      }
+    });
+    
+    this.showToast(`Texture applied to all ${objectType} objects!`);
+  }
+  
+  private applyTextureToMesh(mesh: THREE.Object3D, textureUrl: string): void {
+    if (!textureUrl) {
+      // Remove texture, restore default material
+      mesh.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          const mat = child.material as THREE.MeshStandardMaterial;
+          if (mat.map) {
+            mat.map.dispose();
+            mat.map = null;
+            mat.needsUpdate = true;
+          }
+        }
+      });
+      return;
+    }
+    
+    // Load and apply texture
+    const texture = this.textureLoader.load(textureUrl);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(2, 2);
+    
+    mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const mat = child.material as THREE.MeshStandardMaterial;
+        if (mat.map) mat.map.dispose();
+        mat.map = texture;
+        mat.needsUpdate = true;
+      }
     });
   }
   
