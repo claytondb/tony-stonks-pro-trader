@@ -43,6 +43,7 @@ export class LevelEditor {
   private isDragSelecting: boolean = false;
   private dragStartPoint: { x: number; y: number } | null = null;
   private selectionBox: HTMLElement | null = null;
+  private justFinishedDragSelect: boolean = false;  // Prevent click after drag
   
   private callbacks: EditorCallbacks;
   private raycaster: THREE.Raycaster;
@@ -299,6 +300,11 @@ export class LevelEditor {
   private setupEventListeners(container: HTMLElement): void {
     // Click to select or place
     container.addEventListener('click', (e) => {
+      // Skip click if we just finished drag selection
+      if (this.justFinishedDragSelect) {
+        this.justFinishedDragSelect = false;
+        return;
+      }
       this.handleClick(e, false);
     });
     
@@ -616,6 +622,9 @@ export class LevelEditor {
     const dragDistance = Math.hypot(endX - this.dragStartPoint.x, endY - this.dragStartPoint.y);
     
     if (dragDistance > 5) {
+      // Prevent the click event from firing after drag
+      this.justFinishedDragSelect = true;
+      
       // Find objects within selection box
       this.deselectObject();
       
