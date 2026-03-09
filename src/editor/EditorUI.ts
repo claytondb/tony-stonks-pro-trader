@@ -6,6 +6,7 @@
 import { LevelEditor, EditorObject } from './LevelEditor';
 import { EditorStorage, EditorLevelData, OBJECT_CATEGORIES } from './EditorStorage';
 import { SKY_PRESETS } from '../utils/SkyGradient';
+import { TextureGeneratorUI } from './TextureGeneratorUI';
 
 export interface EditorUICallbacks {
   onExit?: () => void;
@@ -27,6 +28,7 @@ export class EditorUI {
   private palettePanel: HTMLElement;
   private toolbar: HTMLElement;
   private statusBar: HTMLElement;
+  private textureGeneratorUI: TextureGeneratorUI;
   
   private selectedCategory: number = 0;
   
@@ -55,6 +57,14 @@ export class EditorUI {
       onObjectsChanged: () => this.onObjectsChanged(),
       onLevelChanged: () => this.onLevelChanged(),
       canAddObject: () => this.canAddObject()
+    });
+    
+    // Create texture generator UI
+    this.textureGeneratorUI = new TextureGeneratorUI(this.uiRoot, {
+      onTextureApplied: (obj, _textureUrl) => {
+        this.updatePropertiesPanel(obj);
+        this.setStatus('Texture applied!');
+      }
     });
     
     // Setup UI interactions
@@ -88,6 +98,10 @@ export class EditorUI {
           <div class="toolbar-group">
             <button id="btn-export" title="Export to File">📤 Export</button>
             <button id="btn-import" title="Import from File">📥 Import</button>
+          </div>
+          <div class="toolbar-divider"></div>
+          <div class="toolbar-group">
+            <button id="btn-texture-gen" title="AI Texture Generator">🎨 AI Textures</button>
           </div>
           <div class="toolbar-divider"></div>
           <div class="toolbar-group">
@@ -651,6 +665,12 @@ export class EditorUI {
       }
     });
     
+    // AI Texture Generator
+    this.toolbar.querySelector('#btn-texture-gen')?.addEventListener('click', () => {
+      const selectedObj = this.editor.getSelectedObject();
+      this.textureGeneratorUI.show(selectedObj);
+    });
+    
     // Play test
     this.toolbar.querySelector('#btn-play')?.addEventListener('click', () => {
       this.callbacks.onPlayTest?.(this.editor.getLevel());
@@ -769,6 +789,9 @@ export class EditorUI {
     // Clear palette selection when selecting placed object
     this.uiRoot.querySelectorAll('.object-item').forEach(i => i.classList.remove('selected'));
     this.updatePropertiesPanel(obj);
+    
+    // Update texture generator with selected object
+    this.textureGeneratorUI.setSelectedObject(obj);
   }
   
   private onObjectsChanged(): void {
