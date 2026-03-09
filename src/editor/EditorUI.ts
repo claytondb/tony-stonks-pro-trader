@@ -1042,8 +1042,6 @@ export class EditorUI {
   }
   
   private applyTextureToMesh(mesh: THREE.Object3D, textureUrl: string): void {
-    console.log('applyTextureToMesh called, url length:', textureUrl?.length || 0);
-    
     if (!textureUrl) {
       // Remove texture, restore default material color
       mesh.traverse((child) => {
@@ -1062,36 +1060,27 @@ export class EditorUI {
     }
     
     // Load and apply texture
-    console.log('Loading texture...');
     this.textureLoader.load(
       textureUrl,
       // onLoad
       (loadedTexture) => {
-        console.log('Texture loaded successfully!', loadedTexture);
         loadedTexture.wrapS = THREE.RepeatWrapping;
         loadedTexture.wrapT = THREE.RepeatWrapping;
         loadedTexture.repeat.set(2, 2);
         loadedTexture.colorSpace = THREE.SRGBColorSpace;
         
-        let meshCount = 0;
         mesh.traverse((child) => {
           if (child instanceof THREE.Mesh) {
-            meshCount++;
             const mat = child.material as THREE.MeshStandardMaterial;
             if (mat.map) mat.map.dispose();
             mat.map = loadedTexture.clone();
             // Set color to white so texture shows at full brightness
             mat.color.setHex(0xffffff);
             mat.needsUpdate = true;
-            console.log('Applied texture to mesh child', meshCount);
           }
         });
-        console.log('Applied to', meshCount, 'mesh children');
       },
-      // onProgress
-      (progress) => {
-        console.log('Texture loading progress:', progress);
-      },
+      undefined,
       // onError
       (err) => {
         console.error('Failed to load texture:', err);

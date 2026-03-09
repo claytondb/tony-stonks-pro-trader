@@ -110,8 +110,19 @@ export class TextureGenerator {
         throw new Error(`Unknown provider: ${this.config.provider}`);
     }
 
+    // Convert to data URL if it's not already (to avoid CORS issues later)
+    let finalUrl = imageUrl;
+    if (!imageUrl.startsWith('data:')) {
+      try {
+        finalUrl = await this.urlToDataUrl(imageUrl);
+      } catch (e) {
+        console.warn('Could not convert to data URL, using original:', e);
+        // Keep original URL as fallback
+      }
+    }
+
     const texture: GeneratedTexture = {
-      url: imageUrl,
+      url: finalUrl,
       prompt: options.prompt,
       timestamp: Date.now(),
       width,
@@ -201,6 +212,7 @@ export class TextureGenerator {
         n: 1,
         size,
         quality: 'standard',
+        response_format: 'b64_json',  // Get base64 directly to avoid CORS
       })
     });
 
@@ -210,7 +222,8 @@ export class TextureGenerator {
     }
 
     const result = await response.json();
-    return result.data[0].url;
+    // Return as data URL
+    return `data:image/png;base64,${result.data[0].b64_json}`;
   }
 
   private async generateWithStability(prompt: string, width: number, height: number): Promise<string> {
