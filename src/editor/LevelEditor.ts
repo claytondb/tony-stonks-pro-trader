@@ -683,10 +683,11 @@ export class LevelEditor {
         if (!child.userData.originalMaterial) {
           child.userData.originalMaterial = child.material;
         }
-        // Apply highlight
+        // Apply bright green highlight for visibility
         const highlightMat = (child.material as THREE.MeshStandardMaterial).clone();
-        highlightMat.emissive = new THREE.Color(0x004400);
-        highlightMat.emissiveIntensity = 0.5;
+        highlightMat.emissive = new THREE.Color(0x00ff88);
+        highlightMat.emissiveIntensity = 0.4;
+        highlightMat.color = new THREE.Color(0x88ffaa);  // Also tint the base color
         child.material = highlightMat;
       }
     });
