@@ -752,32 +752,46 @@ export class TextureGeneratorUI {
       const dataUrl = await textureGenerator.urlToDataUrl(this.currentTexture.url);
       
       // Load texture with Three.js
-      const texture = this.textureLoader.load(dataUrl);
-      texture.wrapS = THREE.RepeatWrapping;
-      texture.wrapT = THREE.RepeatWrapping;
-      texture.repeat.set(2, 2); // Tile the texture
-      
-      // Apply to object
-      this.selectedObject.mesh.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          const material = child.material as THREE.MeshStandardMaterial;
-          if (material.map) {
-            material.map.dispose();
+      this.textureLoader.load(
+        dataUrl,
+        // onLoad
+        (texture) => {
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.repeat.set(2, 2);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          
+          // Apply to object
+          this.selectedObject!.mesh.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              const material = child.material as THREE.MeshStandardMaterial;
+              if (material.map) {
+                material.map.dispose();
+              }
+              material.map = texture;
+              // Set color to white so texture shows at full brightness
+              material.color.setHex(0xffffff);
+              material.needsUpdate = true;
+            }
+          });
+
+          // Store texture URL in object data for persistence
+          if (!this.selectedObject!.data.params) {
+            this.selectedObject!.data.params = {};
           }
-          material.map = texture;
-          material.needsUpdate = true;
+          this.selectedObject!.data.params.textureUrl = dataUrl;
+
+          this.callbacks.onTextureApplied?.(this.selectedObject!, dataUrl);
+          
+          this.hide();
+        },
+        undefined,
+        // onError
+        (err) => {
+          console.error('Texture load error:', err);
+          this.showError('Failed to load texture');
         }
-      });
-
-      // Store texture URL in object data for persistence
-      if (!this.selectedObject.data.params) {
-        this.selectedObject.data.params = {};
-      }
-      this.selectedObject.data.params.textureUrl = dataUrl;
-
-      this.callbacks.onTextureApplied?.(this.selectedObject, dataUrl);
-      
-      this.hide();
+      );
     } catch (error: any) {
       this.showError('Failed to apply texture: ' + error.message);
     }

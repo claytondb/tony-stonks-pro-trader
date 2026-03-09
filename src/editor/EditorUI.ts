@@ -1035,34 +1035,50 @@ export class EditorUI {
   
   private applyTextureToMesh(mesh: THREE.Object3D, textureUrl: string): void {
     if (!textureUrl) {
-      // Remove texture, restore default material
+      // Remove texture, restore default material color
       mesh.traverse((child) => {
         if (child instanceof THREE.Mesh) {
           const mat = child.material as THREE.MeshStandardMaterial;
           if (mat.map) {
             mat.map.dispose();
             mat.map = null;
-            mat.needsUpdate = true;
           }
+          // Restore a neutral color
+          mat.color.setHex(0x888888);
+          mat.needsUpdate = true;
         }
       });
       return;
     }
     
     // Load and apply texture
-    const texture = this.textureLoader.load(textureUrl);
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(2, 2);
-    
-    mesh.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        const mat = child.material as THREE.MeshStandardMaterial;
-        if (mat.map) mat.map.dispose();
-        mat.map = texture;
-        mat.needsUpdate = true;
+    this.textureLoader.load(
+      textureUrl,
+      // onLoad
+      (loadedTexture) => {
+        loadedTexture.wrapS = THREE.RepeatWrapping;
+        loadedTexture.wrapT = THREE.RepeatWrapping;
+        loadedTexture.repeat.set(2, 2);
+        loadedTexture.colorSpace = THREE.SRGBColorSpace;
+        
+        mesh.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            const mat = child.material as THREE.MeshStandardMaterial;
+            if (mat.map) mat.map.dispose();
+            mat.map = loadedTexture;
+            // Set color to white so texture shows at full brightness
+            mat.color.setHex(0xffffff);
+            mat.needsUpdate = true;
+          }
+        });
+      },
+      // onProgress
+      undefined,
+      // onError
+      (err) => {
+        console.error('Failed to load texture:', err);
       }
-    });
+    );
   }
   
   private renderParamsInputs(obj: EditorObject): string {
