@@ -759,6 +759,9 @@ export class LevelEditor {
     this.placementMode = true;
     this.placementItem = item;
     
+    // Auto-switch to pencil tool for placement
+    this.setTool('pencil');
+    
     // Create preview mesh
     this.placementPreview = this.createObjectMesh(item.type, item.defaultParams);
     this.placementPreview.traverse((child) => {
@@ -772,7 +775,7 @@ export class LevelEditor {
     this.orbitControls.enablePan = false;
   }
   
-  cancelPlacement(): void {
+  cancelPlacement(switchToSelect: boolean = true): void {
     if (this.placementPreview) {
       this.scene.remove(this.placementPreview);
       this.placementPreview = null;
@@ -780,6 +783,11 @@ export class LevelEditor {
     this.placementMode = false;
     this.placementItem = null;
     this.orbitControls.enablePan = true;
+    
+    // Switch back to select tool when cancelling placement (unless called from setTool)
+    if (switchToSelect && this.currentTool !== 'select') {
+      this.setTool('select');
+    }
   }
   
   private updatePlacementPreview(): void {
@@ -1720,6 +1728,13 @@ export class LevelEditor {
   
   setTool(tool: typeof this.currentTool): void {
     this.currentTool = tool;
+    
+    // Cancel placement mode when switching to non-placement tools
+    if (tool === 'select' || tool === 'move' || tool === 'rotate') {
+      if (this.placementMode) {
+        this.cancelPlacement(false); // false = don't recursively call setTool
+      }
+    }
     
     // Update button styles
     this.toolbarContainer?.querySelectorAll('.tool-btn').forEach(btn => {
