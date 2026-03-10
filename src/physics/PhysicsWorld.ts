@@ -499,19 +499,20 @@ export class PhysicsWorld {
   
   /**
    * Check for penetration/stuck state and push player out
-   * Returns the push direction if stuck, null otherwise
+   * Returns push info if stuck: { direction, severity (0-1), betweenObjects }
    */
   checkAndResolvePenetration(
     body: RAPIER.RigidBody,
     radius: number = 0.5
-  ): THREE.Vector3 | null {
+  ): { direction: THREE.Vector3; severity: number; betweenObjects: boolean } | null {
     if (!this.initialized) return null;
     
     const pos = body.translation();
     const pushDirection = new THREE.Vector3();
     let penetrationCount = 0;
+    let totalPenetration = 0;
     
-    // Cast rays in 8 horizontal directions to detect nearby obstacles
+    // Cast rays in 8 horizontal directions at multiple heights
     const directions = [
       { x: 1, z: 0 },
       { x: -1, z: 0 },
@@ -523,26 +524,50 @@ export class PhysicsWorld {
       { x: -0.707, z: -0.707 },
     ];
     
-    for (const dir of directions) {
-      const ray = new RAPIER.Ray(
-        { x: pos.x, y: pos.y + 0.5, z: pos.z },
-        { x: dir.x, y: 0, z: dir.z }
-      );
-      
-      const hit = this.world.castRay(ray, radius * 1.5, true);
-      
-      if (hit && hit.toi < radius * 0.8) {
-        // We're too close to this obstacle, push away
-        const pushStrength = (radius * 0.8 - hit.toi) / radius;
-        pushDirection.x -= dir.x * pushStrength;
-        pushDirection.z -= dir.z * pushStrength;
-        penetrationCount++;
+    const heights = [0.3, 0.6, 0.9]; // Check at multiple heights
+    const hitDirections: number[] = [];
+    
+    for (let hi = 0; hi < heights.length; hi++) {
+      for (let di = 0; di < directions.length; di++) {
+        const dir = directions[di];
+        const ray = new RAPIER.Ray(
+          { x: pos.x, y: pos.y + heights[hi], z: pos.z },
+          { x: dir.x, y: 0, z: dir.z }
+        );
+        
+        const hit = this.world.castRay(ray, radius * 2, true);
+        
+        if (hit && hit.toi < radius) {
+          // We're too close to this obstacle, push away
+          const penetrationDepth = radius - hit.toi;
+          const pushStrength = penetrationDepth / radius;
+          pushDirection.x -= dir.x * pushStrength;
+          pushDirection.z -= dir.z * pushStrength;
+          penetrationCount++;
+          totalPenetration += penetrationDepth;
+          hitDirections.push(di);
+        }
       }
     }
     
+    // Check if we're stuck between objects (hits on opposite sides)
+    const betweenObjects = 
+      (hitDirections.includes(0) && hitDirections.includes(1)) || // +X and -X
+      (hitDirections.includes(2) && hitDirections.includes(3)) || // +Z and -Z
+      (hitDirections.includes(4) && hitDirections.includes(7)) || // diagonals
+      (hitDirections.includes(5) && hitDirections.includes(6));
+    
     if (penetrationCount > 0) {
-      pushDirection.normalize();
-      return pushDirection;
+      const severity = Math.min(1, totalPenetration / (radius * 2));
+      
+      // If stuck between objects and push direction is too weak, push upward
+      if (betweenObjects && pushDirection.length() < 0.3) {
+        pushDirection.set(0, 1, 0); // Push up to escape
+      } else {
+        pushDirection.normalize();
+      }
+      
+      return { direction: pushDirection, severity, betweenObjects };
     }
     
     return null;
@@ -553,12 +578,33 @@ export class PhysicsWorld {
    */
   applySeparation(body: RAPIER.RigidBody, direction: THREE.Vector3, strength: number = 5): void {
     const currentVel = body.linvel();
-    const pushVel = new THREE.Vector3(
-      currentVel.x + direction.x * strength,
-      currentVel.y,
-      currentVel.z + direction.z * strength
-    );
-    body.setLinvel({ x: pushVel.x, y: pushVel.y, z: pushVel.z }, true);
+    
+    // If pushing up, also reduce horizontal velocity to help escape
+    if (direction.y > 0.5) {
+      const pushVel = new THREE.Vector3(
+        currentVel.x * 0.5,
+        Math.max(currentVel.y, strength),
+        currentVel.z * 0.5
+      );
+      body.setLinvel({ x: pushVel.x, y: pushVel.y, z: pushVel.z }, true);
+    } else {
+      const pushVel = new THREE.Vector3(
+        currentVel.x + direction.x * strength,
+        currentVel.y,
+        currentVel.z + direction.z * strength
+      );
+      body.setLinvel({ x: pushVel.x, y: pushVel.y, z: pushVel.z }, true);
+    }
+  }
+  
+  /**
+   * Emergency teleport when severely stuck
+   */
+  emergencyUnstuck(body: RAPIER.RigidBody): void {
+    const pos = body.translation();
+    // Move up and slightly forward
+    body.setTranslation({ x: pos.x, y: pos.y + 1.5, z: pos.z }, true);
+    body.setLinvel({ x: 0, y: 2, z: 0 }, true);
   }
   
   /**

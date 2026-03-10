@@ -104,6 +104,7 @@ export class Game {
   private airStartRotation = 0;  // Chair Y rotation when leaving ground
   private lastGroundedTime = 0;  // Coyote time tracking
   private lastPushSoundTime = 0;  // Cooldown for push sound
+  private stuckTime = 0;  // Track how long player is stuck between objects
   
   // THPS-style surface tracking
   private surfaceNormal = new THREE.Vector3(0, 1, 0);  // Current surface we're on
@@ -2287,9 +2288,22 @@ export class Game {
       this.physics.step(dt);
       
       // Check for penetration/stuck state and push player out
-      const pushDir = this.physics.checkAndResolvePenetration(this.chairBody, 0.5);
-      if (pushDir) {
-        this.physics.applySeparation(this.chairBody, pushDir, 8);
+      const stuckInfo = this.physics.checkAndResolvePenetration(this.chairBody, 0.5);
+      if (stuckInfo) {
+        // Scale push strength based on severity
+        const pushStrength = 8 + stuckInfo.severity * 12; // 8-20 based on how stuck
+        this.physics.applySeparation(this.chairBody, stuckInfo.direction, pushStrength);
+        
+        // Track stuck time for emergency escape
+        this.stuckTime = (this.stuckTime || 0) + dt;
+        
+        // If stuck between objects for too long, emergency teleport up
+        if (stuckInfo.betweenObjects && this.stuckTime > 0.5) {
+          this.physics.emergencyUnstuck(this.chairBody);
+          this.stuckTime = 0;
+        }
+      } else {
+        this.stuckTime = 0;
       }
     }
     
