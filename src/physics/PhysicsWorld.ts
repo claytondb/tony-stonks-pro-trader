@@ -499,6 +499,7 @@ export class PhysicsWorld {
   
   /**
    * Check for penetration/stuck state and push player out
+   * Only triggers when actually inside/overlapping objects, not just near them
    * Returns push info if stuck: { direction, severity (0-1), betweenObjects }
    */
   checkAndResolvePenetration(
@@ -508,11 +509,17 @@ export class PhysicsWorld {
     if (!this.initialized) return null;
     
     const pos = body.translation();
+    const vel = body.linvel();
+    const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+    
+    // Only check when moving slowly (stuck) or player velocity is being blocked
+    if (speed > 3) return null;
+    
     const pushDirection = new THREE.Vector3();
     let penetrationCount = 0;
     let totalPenetration = 0;
     
-    // Cast rays in 8 horizontal directions at multiple heights
+    // Cast rays in 8 horizontal directions
     const directions = [
       { x: 1, z: 0 },
       { x: -1, z: 0 },
@@ -524,29 +531,27 @@ export class PhysicsWorld {
       { x: -0.707, z: -0.707 },
     ];
     
-    const heights = [0.3, 0.6, 0.9]; // Check at multiple heights
     const hitDirections: number[] = [];
+    const penetrationThreshold = radius * 0.3; // Only trigger if actually penetrating
     
-    for (let hi = 0; hi < heights.length; hi++) {
-      for (let di = 0; di < directions.length; di++) {
-        const dir = directions[di];
-        const ray = new RAPIER.Ray(
-          { x: pos.x, y: pos.y + heights[hi], z: pos.z },
-          { x: dir.x, y: 0, z: dir.z }
-        );
-        
-        const hit = this.world.castRay(ray, radius * 2, true);
-        
-        if (hit && hit.toi < radius) {
-          // We're too close to this obstacle, push away
-          const penetrationDepth = radius - hit.toi;
-          const pushStrength = penetrationDepth / radius;
-          pushDirection.x -= dir.x * pushStrength;
-          pushDirection.z -= dir.z * pushStrength;
-          penetrationCount++;
-          totalPenetration += penetrationDepth;
-          hitDirections.push(di);
-        }
+    for (let di = 0; di < directions.length; di++) {
+      const dir = directions[di];
+      const ray = new RAPIER.Ray(
+        { x: pos.x, y: pos.y + 0.5, z: pos.z },
+        { x: dir.x, y: 0, z: dir.z }
+      );
+      
+      const hit = this.world.castRay(ray, radius, true);
+      
+      if (hit && hit.toi < penetrationThreshold) {
+        // We're actually penetrating this obstacle
+        const penetrationDepth = penetrationThreshold - hit.toi;
+        const pushStrength = penetrationDepth / penetrationThreshold;
+        pushDirection.x -= dir.x * pushStrength;
+        pushDirection.z -= dir.z * pushStrength;
+        penetrationCount++;
+        totalPenetration += penetrationDepth;
+        hitDirections.push(di);
       }
     }
     
@@ -557,12 +562,13 @@ export class PhysicsWorld {
       (hitDirections.includes(4) && hitDirections.includes(7)) || // diagonals
       (hitDirections.includes(5) && hitDirections.includes(6));
     
-    if (penetrationCount > 0) {
-      const severity = Math.min(1, totalPenetration / (radius * 2));
+    // Only return if actually penetrating (not just near)
+    if (penetrationCount >= 2 && betweenObjects) {
+      const severity = Math.min(1, totalPenetration / penetrationThreshold);
       
-      // If stuck between objects and push direction is too weak, push upward
-      if (betweenObjects && pushDirection.length() < 0.3) {
-        pushDirection.set(0, 1, 0); // Push up to escape
+      // If push direction is too weak, push upward
+      if (pushDirection.length() < 0.3) {
+        pushDirection.set(0, 1, 0);
       } else {
         pushDirection.normalize();
       }
