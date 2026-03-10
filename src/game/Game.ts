@@ -2285,6 +2285,12 @@ export class Game {
     // Step physics (but not during grinding - grind system controls position)
     if (!this.grindSystem.isGrinding()) {
       this.physics.step(dt);
+      
+      // Check for penetration/stuck state and push player out
+      const pushDir = this.physics.checkAndResolvePenetration(this.chairBody, 0.5);
+      if (pushDir) {
+        this.physics.applySeparation(this.chairBody, pushDir, 8);
+      }
     }
     
     // Sync visual to physics (or grind position)

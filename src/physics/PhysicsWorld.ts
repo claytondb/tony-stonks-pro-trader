@@ -34,16 +34,18 @@ export class PhysicsWorld {
       .setTranslation(position.x, 2.0, position.z)  // Start well above ground
       .setLinearDamping(0.03)  // Lower = more momentum/roll (was 0.1)
       .setAngularDamping(8.0)  // Higher = snappier turn stop (was 5.0)
+      .setCcdEnabled(true)  // Enable continuous collision detection to prevent tunneling
       .enabledRotations(false, true, false);
     
     const body = this.world.createRigidBody(bodyDesc);
     
     // Capsule collider - slides better on ramps than cylinder
-    // halfHeight=0.3 (middle section), radius=0.4 (end caps)
-    const bodyCollider = RAPIER.ColliderDesc.capsule(0.3, 0.4)
+    // halfHeight=0.25 (middle section), radius=0.35 (end caps) - slightly smaller for less clipping
+    const bodyCollider = RAPIER.ColliderDesc.capsule(0.25, 0.35)
       .setMass(50)
       .setFriction(0.1)  // Lower friction for more sliding/momentum (was 0.15)
-      .setRestitution(0.0);
+      .setRestitution(0.2)  // Small bounce to push away from objects
+      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     
     this.world.createCollider(bodyCollider, body);
     
@@ -109,7 +111,8 @@ export class PhysicsWorld {
       halfExtents.x, 
       halfExtents.y, 
       halfExtents.z
-    ).setFriction(0.2);  // Low friction for smooth sliding
+    ).setFriction(0.2)  // Low friction for smooth sliding
+     .setRestitution(0.3);  // Bounce player away to prevent getting stuck
     
     this.world.createCollider(colliderDesc, body);
     this.staticBodies.push(body);
@@ -137,7 +140,8 @@ export class PhysicsWorld {
     const body = this.world.createRigidBody(bodyDesc);
     
     const colliderDesc = RAPIER.ColliderDesc.cylinder(halfHeight, radius)
-      .setFriction(0.2);
+      .setFriction(0.2)
+      .setRestitution(0.3);  // Bounce player away
     
     this.world.createCollider(colliderDesc, body);
     this.staticBodies.push(body);
@@ -159,7 +163,8 @@ export class PhysicsWorld {
     const body = this.world.createRigidBody(bodyDesc);
     
     const colliderDesc = RAPIER.ColliderDesc.cone(halfHeight, radius)
-      .setFriction(0.2);
+      .setFriction(0.2)
+      .setRestitution(0.3);  // Bounce player away
     
     this.world.createCollider(colliderDesc, body);
     this.staticBodies.push(body);
@@ -490,6 +495,70 @@ export class PhysicsWorld {
     }
     
     return null;
+  }
+  
+  /**
+   * Check for penetration/stuck state and push player out
+   * Returns the push direction if stuck, null otherwise
+   */
+  checkAndResolvePenetration(
+    body: RAPIER.RigidBody,
+    radius: number = 0.5
+  ): THREE.Vector3 | null {
+    if (!this.initialized) return null;
+    
+    const pos = body.translation();
+    const pushDirection = new THREE.Vector3();
+    let penetrationCount = 0;
+    
+    // Cast rays in 8 horizontal directions to detect nearby obstacles
+    const directions = [
+      { x: 1, z: 0 },
+      { x: -1, z: 0 },
+      { x: 0, z: 1 },
+      { x: 0, z: -1 },
+      { x: 0.707, z: 0.707 },
+      { x: 0.707, z: -0.707 },
+      { x: -0.707, z: 0.707 },
+      { x: -0.707, z: -0.707 },
+    ];
+    
+    for (const dir of directions) {
+      const ray = new RAPIER.Ray(
+        { x: pos.x, y: pos.y + 0.5, z: pos.z },
+        { x: dir.x, y: 0, z: dir.z }
+      );
+      
+      const hit = this.world.castRay(ray, radius * 1.5, true);
+      
+      if (hit && hit.toi < radius * 0.8) {
+        // We're too close to this obstacle, push away
+        const pushStrength = (radius * 0.8 - hit.toi) / radius;
+        pushDirection.x -= dir.x * pushStrength;
+        pushDirection.z -= dir.z * pushStrength;
+        penetrationCount++;
+      }
+    }
+    
+    if (penetrationCount > 0) {
+      pushDirection.normalize();
+      return pushDirection;
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Apply separation impulse to push player away from obstacles
+   */
+  applySeparation(body: RAPIER.RigidBody, direction: THREE.Vector3, strength: number = 5): void {
+    const currentVel = body.linvel();
+    const pushVel = new THREE.Vector3(
+      currentVel.x + direction.x * strength,
+      currentVel.y,
+      currentVel.z + direction.z * strength
+    );
+    body.setLinvel({ x: pushVel.x, y: pushVel.y, z: pushVel.z }, true);
   }
   
   /**
