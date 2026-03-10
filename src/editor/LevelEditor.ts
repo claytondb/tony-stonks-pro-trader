@@ -1665,6 +1665,74 @@ export class LevelEditor {
     this.gridHelper.visible = show;
   }
   
+  /**
+   * Set a custom skybox texture (equirectangular image)
+   */
+  setSkyboxTexture(textureUrl: string): void {
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.load(textureUrl, (texture) => {
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      this.scene.background = texture;
+      
+      // Store in level data for persistence
+      this.level.skyboxUrl = textureUrl;
+      this.callbacks.onLevelChanged?.();
+    });
+  }
+  
+  /**
+   * Remove custom skybox and restore default sky gradient
+   */
+  removeSkybox(): void {
+    this.scene.background = new THREE.Color(this.level.skyColor || 0x87CEEB);
+    this.level.skyboxUrl = undefined;
+    this.callbacks.onLevelChanged?.();
+  }
+  
+  /**
+   * Set a custom ground texture
+   */
+  setGroundTexture(textureUrl: string): void {
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.load(textureUrl, (texture) => {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(20, 20);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      
+      const groundMaterial = this.groundPlane.material as THREE.MeshStandardMaterial;
+      if (groundMaterial.map) {
+        groundMaterial.map.dispose();
+      }
+      groundMaterial.map = texture;
+      groundMaterial.color.setHex(0xffffff); // White so texture shows fully
+      groundMaterial.needsUpdate = true;
+      
+      // Store in level data for persistence
+      this.level.groundTextureUrl = textureUrl;
+      this.callbacks.onLevelChanged?.();
+    });
+  }
+  
+  /**
+   * Remove ground texture and restore solid color
+   */
+  removeGroundTexture(): void {
+    const groundMaterial = this.groundPlane.material as THREE.MeshStandardMaterial;
+    if (groundMaterial.map) {
+      groundMaterial.map.dispose();
+      groundMaterial.map = null;
+    }
+    // groundColor is a hex string like "#228B22"
+    const colorValue = this.level.groundColor ? parseInt(this.level.groundColor.replace('#', ''), 16) : 0x228B22;
+    groundMaterial.color.setHex(colorValue);
+    groundMaterial.needsUpdate = true;
+    
+    this.level.groundTextureUrl = undefined;
+    this.callbacks.onLevelChanged?.();
+  }
+  
   private startAutosave(): void {
     this.autosaveTimer = window.setInterval(() => {
       EditorStorage.autosave(this.level);

@@ -288,6 +288,17 @@ export class TextureGenerator {
   }
 
   /**
+   * Delete a single texture from history by index
+   */
+  deleteFromHistory(index: number): void {
+    const history = this.getHistory();
+    if (index >= 0 && index < history.length) {
+      history.splice(index, 1);
+      localStorage.setItem(TEXTURE_STORAGE_KEY, JSON.stringify(history));
+    }
+  }
+
+  /**
    * Download texture as image file
    */
   async downloadTexture(texture: GeneratedTexture, filename?: string): Promise<void> {

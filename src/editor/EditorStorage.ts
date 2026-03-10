@@ -24,6 +24,10 @@ export interface EditorLevelData {
   // Ground
   groundSize: number;
   groundColor: string;
+  groundTextureUrl?: string;  // Optional custom ground texture
+  
+  // Custom Skybox
+  skyboxUrl?: string;  // Optional equirectangular skybox image
   
   // Spawn
   spawnPoint: {

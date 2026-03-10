@@ -68,6 +68,18 @@ export class EditorUI {
       onTextureApplied: (obj, _textureUrl) => {
         this.updatePropertiesPanel(obj);
         this.showToast('Texture Applied!');
+      },
+      onSkyboxApplied: (skyboxUrl) => {
+        this.editor.setSkyboxTexture(skyboxUrl);
+        this.showToast('Skybox Applied!');
+      },
+      onSkyboxRemoved: () => {
+        this.editor.removeSkybox();
+        this.showToast('Skybox Removed');
+      },
+      onGroundTextureApplied: (textureUrl) => {
+        this.editor.setGroundTexture(textureUrl);
+        this.showToast('Ground Texture Applied!');
       }
     });
     
@@ -1184,6 +1196,16 @@ export class EditorUI {
       </div>
       
       <div class="prop-group">
+        <div class="prop-label">Ground Texture</div>
+        <div style="display: flex; gap: 5px;">
+          <button id="set-ground-texture-btn" class="prop-btn" style="flex: 1;">
+            ${level.groundTextureUrl ? '🎨 Change Texture' : '🎨 Add Texture'}
+          </button>
+          ${level.groundTextureUrl ? '<button id="remove-ground-texture-btn" class="prop-btn" title="Remove texture">✕</button>' : ''}
+        </div>
+      </div>
+      
+      <div class="prop-group">
         <div class="prop-label">Spawn Point</div>
         <div class="prop-row" style="align-items: center;">
           <div class="prop-group" style="flex: 1;">
@@ -1276,6 +1298,18 @@ export class EditorUI {
         groundColor.value = groundPreset.value;
         this.editor.setLevelProperty('groundColor', groundPreset.value);
       }
+    });
+    
+    // Ground texture buttons
+    container.querySelector('#set-ground-texture-btn')?.addEventListener('click', () => {
+      // Open texture generator and switch to a mode that applies to ground
+      this.textureGeneratorUI.show(null);
+      this.textureGeneratorUI.setGroundMode(true);
+    });
+    
+    container.querySelector('#remove-ground-texture-btn')?.addEventListener('click', () => {
+      this.editor.removeGroundTexture();
+      this.updateLevelSettings();
     });
   }
   

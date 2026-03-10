@@ -9,6 +9,9 @@ import { EditorObject } from './LevelEditor';
 
 export interface TextureGeneratorUICallbacks {
   onTextureApplied?: (object: EditorObject, textureUrl: string) => void;
+  onSkyboxApplied?: (skyboxUrl: string) => void;
+  onSkyboxRemoved?: () => void;
+  onGroundTextureApplied?: (textureUrl: string) => void;
 }
 
 export class TextureGeneratorUI {
@@ -18,6 +21,7 @@ export class TextureGeneratorUI {
   private selectedObject: EditorObject | null = null;
   private textureLoader: THREE.TextureLoader;
   private isGenerating: boolean = false;
+  private groundMode: boolean = false;
 
   constructor(container: HTMLElement, callbacks: TextureGeneratorUICallbacks = {}) {
     this.container = container;
@@ -246,6 +250,32 @@ export class TextureGeneratorUI {
         object-fit: cover;
       }
       
+      .texture-gen-history-item .delete-btn {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        width: 20px;
+        height: 20px;
+        background: rgba(200, 50, 50, 0.9);
+        border: none;
+        border-radius: 50%;
+        color: white;
+        font-size: 12px;
+        cursor: pointer;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        line-height: 1;
+      }
+      
+      .texture-gen-history-item:hover .delete-btn {
+        display: flex;
+      }
+      
+      .texture-gen-history-item {
+        position: relative;
+      }
+      
       .texture-gen-loading {
         display: flex;
         align-items: center;
@@ -360,6 +390,7 @@ export class TextureGeneratorUI {
 
   show(selectedObject: EditorObject | null = null): void {
     this.selectedObject = selectedObject;
+    this.groundMode = false; // Reset ground mode
     
     if (this.modal) {
       this.modal.remove();
@@ -376,6 +407,20 @@ export class TextureGeneratorUI {
     // Check if configured
     if (!textureGenerator.isConfigured()) {
       this.showConfigSection();
+    }
+  }
+  
+  /**
+   * Set ground mode - changes apply button to apply texture to ground
+   */
+  setGroundMode(enabled: boolean): void {
+    this.groundMode = enabled;
+    if (this.modal) {
+      const applyBtn = this.modal.querySelector('#apply-btn') as HTMLButtonElement;
+      if (applyBtn) {
+        applyBtn.disabled = false;
+        applyBtn.textContent = enabled ? '✓ Apply to Ground' : (this.selectedObject ? '✓ Apply to Selected Object' : '⚠️ No Object Selected');
+      }
     }
   }
 
@@ -431,6 +476,7 @@ export class TextureGeneratorUI {
             <!-- Tabs -->
             <div class="texture-gen-tabs">
               <button class="texture-gen-tab active" data-tab="generate">Generate New</button>
+              <button class="texture-gen-tab" data-tab="skybox">🌅 Skybox</button>
               <button class="texture-gen-tab" data-tab="history">History</button>
               <button class="texture-gen-tab" data-tab="settings">Settings</button>
             </div>
@@ -512,6 +558,61 @@ export class TextureGeneratorUI {
                     <button class="texture-gen-btn secondary" id="download-btn">⬇️ Download</button>
                     <button class="texture-gen-btn secondary" id="regenerate-btn">🔄 Regenerate</button>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skybox Tab -->
+            <div class="texture-gen-tab-content" id="tab-skybox">
+              <div class="texture-gen-section">
+                <h3>🌅 Generate Skybox</h3>
+                <p style="font-size: 12px; color: #888; margin-bottom: 15px;">
+                  Generate a panoramic sky image to use as the scene background.
+                </p>
+                <textarea class="texture-gen-input" id="skybox-prompt" rows="2" 
+                  placeholder="e.g., sunset over city skyline, night sky with stars, cloudy daytime sky..."></textarea>
+                
+                <div class="texture-gen-presets" style="margin-top: 10px;">
+                  <span style="color: #666; font-size: 12px; margin-right: 5px;">Quick:</span>
+                  <button class="texture-gen-preset skybox-preset" data-prompt="blue sky with fluffy white clouds, sunny day">Sunny Day</button>
+                  <button class="texture-gen-preset skybox-preset" data-prompt="dramatic sunset with orange and purple clouds over city">Sunset</button>
+                  <button class="texture-gen-preset skybox-preset" data-prompt="night sky with stars and moon, dark blue">Night</button>
+                  <button class="texture-gen-preset skybox-preset" data-prompt="overcast gray cloudy sky, moody">Overcast</button>
+                  <button class="texture-gen-preset skybox-preset" data-prompt="golden hour warm light, dramatic clouds">Golden Hour</button>
+                  <button class="texture-gen-preset skybox-preset" data-prompt="pink and purple vaporwave sunset, aesthetic">Vaporwave</button>
+                </div>
+              </div>
+              
+              <div class="texture-gen-section">
+                <button class="texture-gen-btn" id="generate-skybox-btn" style="width: 100%;">
+                  ✨ Generate Skybox
+                </button>
+                
+                <div id="skybox-loading" style="display: none;" class="texture-gen-loading">
+                  <div class="texture-gen-spinner"></div>
+                  <span>Generating skybox...</span>
+                </div>
+                
+                <div id="skybox-error" class="texture-gen-error" style="display: none;"></div>
+              </div>
+              
+              <div class="texture-gen-section" id="skybox-preview-section" style="display: none;">
+                <h3>Preview</h3>
+                <div class="texture-gen-preview">
+                  <div class="texture-gen-preview-box" id="skybox-preview-box" style="width: 300px;">
+                    <span>No skybox generated</span>
+                  </div>
+                  <div class="texture-gen-preview-actions">
+                    <button class="texture-gen-btn" id="apply-skybox-btn">✓ Apply to Scene</button>
+                    <button class="texture-gen-btn secondary" id="download-skybox-btn">⬇️ Download</button>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="texture-gen-section">
+                <h3>Current Skybox</h3>
+                <div style="display: flex; gap: 10px;">
+                  <button class="texture-gen-btn secondary" id="remove-skybox-btn">🗑️ Remove Skybox</button>
                 </div>
               </div>
             </div>
@@ -622,6 +723,30 @@ export class TextureGeneratorUI {
         packImportInput.value = '';
       }
     });
+
+    // Skybox preset buttons
+    this.modal.querySelectorAll('.skybox-preset').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const prompt = btn.getAttribute('data-prompt')!;
+        const input = this.modal!.querySelector('#skybox-prompt') as HTMLTextAreaElement;
+        input.value = prompt;
+      });
+    });
+
+    // Skybox generate button
+    this.modal.querySelector('#generate-skybox-btn')?.addEventListener('click', () => this.generateSkybox());
+
+    // Skybox apply button
+    this.modal.querySelector('#apply-skybox-btn')?.addEventListener('click', () => this.applySkybox());
+
+    // Skybox download button
+    this.modal.querySelector('#download-skybox-btn')?.addEventListener('click', () => this.downloadCurrentSkybox());
+
+    // Skybox remove button
+    this.modal.querySelector('#remove-skybox-btn')?.addEventListener('click', () => {
+      this.callbacks.onSkyboxRemoved?.();
+      this.hide();
+    });
   }
 
   private switchTab(tabName: string): void {
@@ -670,6 +795,7 @@ export class TextureGeneratorUI {
   }
 
   private currentTexture: GeneratedTexture | null = null;
+  private currentSkybox: GeneratedTexture | null = null;
 
   private async generate(): Promise<void> {
     if (!this.modal || this.isGenerating) return;
@@ -745,7 +871,22 @@ export class TextureGeneratorUI {
   }
 
   private async applyTexture(): Promise<void> {
-    if (!this.currentTexture || !this.selectedObject) return;
+    if (!this.currentTexture) return;
+    
+    // Handle ground mode
+    if (this.groundMode) {
+      try {
+        const dataUrl = await textureGenerator.urlToDataUrl(this.currentTexture.url);
+        this.callbacks.onGroundTextureApplied?.(dataUrl);
+        this.hide();
+      } catch (error: any) {
+        this.showError('Failed to apply ground texture: ' + error.message);
+      }
+      return;
+    }
+    
+    // Normal object mode
+    if (!this.selectedObject) return;
 
     try {
       // Convert URL to data URL for persistence
@@ -816,17 +957,31 @@ export class TextureGeneratorUI {
     historyGrid.innerHTML = history.map((tex, i) => `
       <div class="texture-gen-history-item" data-index="${i}" title="${tex.prompt}">
         <img src="${tex.url}" alt="${tex.prompt}">
+        <button class="delete-btn" data-delete-index="${i}" title="Delete">×</button>
       </div>
     `).join('');
 
     // Click handlers for history items
     historyGrid.querySelectorAll('.texture-gen-history-item').forEach(item => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        // Ignore if clicking delete button
+        if ((e.target as HTMLElement).classList.contains('delete-btn')) return;
+        
         const index = parseInt(item.getAttribute('data-index')!);
         const texture = history[index];
         this.currentTexture = texture;
         this.showPreview(texture);
         this.switchTab('generate');
+      });
+    });
+    
+    // Delete button handlers
+    historyGrid.querySelectorAll('.delete-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const index = parseInt(btn.getAttribute('data-delete-index')!);
+        textureGenerator.deleteFromHistory(index);
+        this.updateHistoryDisplay();
       });
     });
   }
@@ -841,5 +996,93 @@ export class TextureGeneratorUI {
         applyBtn.textContent = obj ? '✓ Apply to Selected Object' : '⚠️ No Object Selected';
       }
     }
+  }
+
+  private async generateSkybox(): Promise<void> {
+    if (!this.modal || this.isGenerating) return;
+
+    const prompt = (this.modal.querySelector('#skybox-prompt') as HTMLTextAreaElement).value.trim();
+    if (!prompt) {
+      this.showSkyboxError('Please enter a skybox description');
+      return;
+    }
+
+    this.isGenerating = true;
+    this.showSkyboxLoading(true);
+    this.hideSkyboxError();
+
+    try {
+      // Generate a panoramic/equirectangular style image for skybox
+      const skyboxPrompt = `${prompt}, panoramic sky background, equirectangular projection, 360 degree view, seamless horizon`;
+      
+      const texture = await textureGenerator.generate({
+        prompt: skyboxPrompt,
+        width: 1024,
+        height: 512, // 2:1 aspect for equirectangular
+        seamless: true,
+        style: 'realistic'
+      });
+
+      this.currentSkybox = texture;
+      this.showSkyboxPreview(texture);
+    } catch (error: any) {
+      this.showSkyboxError(error.message || 'Failed to generate skybox');
+    } finally {
+      this.isGenerating = false;
+      this.showSkyboxLoading(false);
+    }
+  }
+
+  private showSkyboxLoading(show: boolean): void {
+    if (!this.modal) return;
+    const indicator = this.modal.querySelector('#skybox-loading') as HTMLElement;
+    const generateBtn = this.modal.querySelector('#generate-skybox-btn') as HTMLButtonElement;
+    
+    if (indicator) indicator.style.display = show ? 'flex' : 'none';
+    if (generateBtn) generateBtn.disabled = show;
+  }
+
+  private showSkyboxError(message: string): void {
+    if (!this.modal) return;
+    const errorDisplay = this.modal.querySelector('#skybox-error') as HTMLElement;
+    if (errorDisplay) {
+      errorDisplay.textContent = message;
+      errorDisplay.style.display = 'block';
+    }
+  }
+
+  private hideSkyboxError(): void {
+    if (!this.modal) return;
+    const errorDisplay = this.modal.querySelector('#skybox-error') as HTMLElement;
+    if (errorDisplay) errorDisplay.style.display = 'none';
+  }
+
+  private showSkyboxPreview(texture: GeneratedTexture): void {
+    if (!this.modal) return;
+    
+    const previewSection = this.modal.querySelector('#skybox-preview-section') as HTMLElement;
+    const previewBox = this.modal.querySelector('#skybox-preview-box') as HTMLElement;
+    
+    if (previewSection) previewSection.style.display = 'block';
+    if (previewBox) {
+      previewBox.innerHTML = `<img src="${texture.url}" alt="Generated skybox" style="object-fit: contain;">`;
+    }
+  }
+
+  private async applySkybox(): Promise<void> {
+    if (!this.currentSkybox) return;
+
+    try {
+      const dataUrl = await textureGenerator.urlToDataUrl(this.currentSkybox.url);
+      this.callbacks.onSkyboxApplied?.(dataUrl);
+      this.hide();
+    } catch (error: any) {
+      this.showSkyboxError('Failed to apply skybox: ' + error.message);
+    }
+  }
+
+  private async downloadCurrentSkybox(): Promise<void> {
+    if (!this.currentSkybox) return;
+    await textureGenerator.downloadTexture(this.currentSkybox, 'skybox.png');
   }
 }
