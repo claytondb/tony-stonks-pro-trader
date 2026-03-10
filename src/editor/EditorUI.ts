@@ -945,6 +945,8 @@ export class EditorUI {
       
       ${this.renderTextureSelector(obj)}
       
+      ${this.renderMaterialPartsEditor(obj)}
+      
       ${this.renderParamsInputs(obj)}
       
       <div class="prop-group" style="margin-top: 20px;">
@@ -1003,6 +1005,9 @@ export class EditorUI {
         this.updatePropertiesPanel(obj);
       }
     });
+    
+    // Per-part material controls
+    this.setupPartMaterialListeners(obj, container as HTMLElement);
   }
   
   private renderTextureSelector(obj: EditorObject): string {
@@ -1038,6 +1043,236 @@ export class EditorUI {
     `;
     
     return html;
+  }
+  
+  /**
+   * Get unique named parts from an object's mesh
+   */
+  private getObjectParts(mesh: THREE.Object3D): { name: string; meshes: THREE.Mesh[] }[] {
+    const partsMap = new Map<string, THREE.Mesh[]>();
+    
+    mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.name) {
+        const existing = partsMap.get(child.name) || [];
+        existing.push(child);
+        partsMap.set(child.name, existing);
+      }
+    });
+    
+    // Also add unnamed meshes as "Main"
+    mesh.traverse((child) => {
+      if (child instanceof THREE.Mesh && !child.name) {
+        const existing = partsMap.get('Main') || [];
+        existing.push(child);
+        partsMap.set('Main', existing);
+      }
+    });
+    
+    return Array.from(partsMap.entries()).map(([name, meshes]) => ({ name, meshes }));
+  }
+  
+  /**
+   * Render the per-part material editor
+   */
+  private renderMaterialPartsEditor(obj: EditorObject): string {
+    const parts = this.getObjectParts(obj.mesh);
+    
+    // Only show if there are multiple named parts
+    if (parts.length <= 1) {
+      return '';
+    }
+    
+    const history = textureGenerator.getHistory();
+    const partMaterials = obj.data.params?.partMaterials as Record<string, { color?: string; textureIndex?: number; textureOpacity?: number }> || {};
+    
+    let html = `
+      <div class="prop-group" style="border-top: 1px solid #3a3a6e; padding-top: 15px; margin-top: 15px;">
+        <div class="prop-label" style="font-size: 13px; color: #888;">🎨 Per-Part Materials</div>
+        <div style="font-size: 10px; color: #666; margin-bottom: 10px;">
+          Edit colors and textures for each part of this object.
+        </div>
+    `;
+    
+    parts.forEach((part) => {
+      const partData = partMaterials[part.name] || {};
+      const firstMesh = part.meshes[0];
+      const mat = firstMesh.material as THREE.MeshStandardMaterial;
+      const currentColor = partData.color || '#' + mat.color.getHexString();
+      const currentTextureIndex = partData.textureIndex ?? -1;
+      const currentOpacity = partData.textureOpacity ?? 1;
+      
+      html += `
+        <div class="part-material-row" style="background: #22223a; border-radius: 6px; padding: 10px; margin-bottom: 8px;">
+          <div style="font-weight: 600; color: #fff; margin-bottom: 8px;">${part.name}</div>
+          
+          <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 11px; color: #888; width: 50px;">Color</label>
+            <input type="color" class="part-color" data-part="${part.name}" value="${currentColor}" 
+              style="width: 40px; height: 24px; border: none; cursor: pointer;">
+          </div>
+          
+          <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 6px;">
+            <label style="font-size: 11px; color: #888; width: 50px;">Texture</label>
+            <select class="part-texture" data-part="${part.name}" style="flex: 1; padding: 4px; font-size: 11px; background: #1a1a2e; border: 1px solid #3a3a6e; color: #fff; border-radius: 3px;">
+              <option value="-1" ${currentTextureIndex === -1 ? 'selected' : ''}>None</option>
+              ${history.map((tex, i) => `
+                <option value="${i}" ${i === currentTextureIndex ? 'selected' : ''}>
+                  ${tex.prompt.length > 20 ? tex.prompt.substring(0, 20) + '...' : tex.prompt}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+          
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <label style="font-size: 11px; color: #888; width: 50px;">Opacity</label>
+            <input type="range" class="part-opacity" data-part="${part.name}" min="0" max="1" step="0.1" value="${currentOpacity}"
+              style="flex: 1;">
+            <span class="part-opacity-value" style="font-size: 10px; color: #888; width: 30px;">${Math.round(currentOpacity * 100)}%</span>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += `</div>`;
+    
+    return html;
+  }
+  
+  /**
+   * Setup event listeners for per-part material controls
+   */
+  private setupPartMaterialListeners(obj: EditorObject, container: HTMLElement): void {
+    const parts = this.getObjectParts(obj.mesh);
+    const history = textureGenerator.getHistory();
+    
+    // Initialize partMaterials if needed
+    if (!obj.data.params) obj.data.params = {};
+    if (!obj.data.params.partMaterials) obj.data.params.partMaterials = {};
+    const partMaterials = obj.data.params.partMaterials as Record<string, { color?: string; textureIndex?: number; textureOpacity?: number }>;
+    
+    // Color change handlers
+    container.querySelectorAll('.part-color').forEach((input) => {
+      const colorInput = input as HTMLInputElement;
+      const partName = colorInput.dataset.part!;
+      
+      colorInput.addEventListener('input', () => {
+        const part = parts.find(p => p.name === partName);
+        if (!part) return;
+        
+        if (!partMaterials[partName]) partMaterials[partName] = {};
+        partMaterials[partName].color = colorInput.value;
+        
+        // Apply to all meshes of this part
+        part.meshes.forEach(mesh => {
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          mat.color.setStyle(colorInput.value);
+          mat.needsUpdate = true;
+        });
+      });
+    });
+    
+    // Texture change handlers
+    container.querySelectorAll('.part-texture').forEach((select) => {
+      const textureSelect = select as HTMLSelectElement;
+      const partName = textureSelect.dataset.part!;
+      
+      textureSelect.addEventListener('change', () => {
+        const part = parts.find(p => p.name === partName);
+        if (!part) return;
+        
+        const index = parseInt(textureSelect.value);
+        if (!partMaterials[partName]) partMaterials[partName] = {};
+        partMaterials[partName].textureIndex = index;
+        
+        const textureUrl = index >= 0 && index < history.length ? history[index].url : '';
+        
+        // Apply texture to all meshes of this part
+        part.meshes.forEach(mesh => {
+          this.applyTextureToSingleMesh(mesh, textureUrl, partMaterials[partName].textureOpacity ?? 1);
+        });
+      });
+    });
+    
+    // Opacity change handlers
+    container.querySelectorAll('.part-opacity').forEach((input) => {
+      const opacityInput = input as HTMLInputElement;
+      const partName = opacityInput.dataset.part!;
+      const valueSpan = container.querySelector(`.part-opacity-value[data-part="${partName}"]`) || 
+                        opacityInput.nextElementSibling as HTMLElement;
+      
+      opacityInput.addEventListener('input', () => {
+        const part = parts.find(p => p.name === partName);
+        if (!part) return;
+        
+        const opacity = parseFloat(opacityInput.value);
+        if (!partMaterials[partName]) partMaterials[partName] = {};
+        partMaterials[partName].textureOpacity = opacity;
+        
+        if (valueSpan) {
+          valueSpan.textContent = Math.round(opacity * 100) + '%';
+        }
+        
+        // Apply opacity - this blends texture with base color
+        part.meshes.forEach(mesh => {
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          if (mat.map) {
+            // Adjust how much the base color shows through
+            // At opacity 1: texture fully visible, color white
+            // At opacity 0: no texture visible, color is base color
+            const baseColor = partMaterials[partName].color || '#' + mat.color.getHexString();
+            const blendedColor = this.blendColorWithWhite(baseColor, opacity);
+            mat.color.setStyle(blendedColor);
+            mat.needsUpdate = true;
+          }
+        });
+      });
+    });
+  }
+  
+  /**
+   * Blend a color with white based on opacity (1 = fully white, 0 = original color)
+   */
+  private blendColorWithWhite(hexColor: string, t: number): string {
+    const r = parseInt(hexColor.slice(1, 3), 16);
+    const g = parseInt(hexColor.slice(3, 5), 16);
+    const b = parseInt(hexColor.slice(5, 7), 16);
+    
+    const blendR = Math.round(r + (255 - r) * t);
+    const blendG = Math.round(g + (255 - g) * t);
+    const blendB = Math.round(b + (255 - b) * t);
+    
+    return `#${blendR.toString(16).padStart(2, '0')}${blendG.toString(16).padStart(2, '0')}${blendB.toString(16).padStart(2, '0')}`;
+  }
+  
+  /**
+   * Apply texture to a single mesh with opacity support
+   */
+  private applyTextureToSingleMesh(mesh: THREE.Mesh, textureUrl: string, opacity: number = 1): void {
+    const mat = mesh.material as THREE.MeshStandardMaterial;
+    
+    if (!textureUrl) {
+      // Remove texture
+      if (mat.map) {
+        mat.map.dispose();
+        mat.map = null;
+      }
+      mat.needsUpdate = true;
+      return;
+    }
+    
+    this.textureLoader.load(textureUrl, (texture) => {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(2, 2);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      
+      if (mat.map) mat.map.dispose();
+      mat.map = texture;
+      
+      // Blend color based on opacity
+      mat.color.setStyle(this.blendColorWithWhite('#888888', opacity));
+      mat.needsUpdate = true;
+    });
   }
   
   private applyTextureToObjectType(obj: EditorObject, textureUrl: string): void {

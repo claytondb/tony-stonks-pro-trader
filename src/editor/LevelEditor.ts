@@ -1070,6 +1070,7 @@ export class LevelEditor {
     });
     const bodyGeom = new THREE.BoxGeometry(width, height, depth);
     const body = new THREE.Mesh(bodyGeom, buildingMat);
+    body.name = 'Body';
     body.position.y = height / 2;
     body.castShadow = true;
     body.receiveShadow = true;
@@ -1089,6 +1090,7 @@ export class LevelEditor {
       for (let col = 0; col < windowCols; col++) {
         const windowGeom = new THREE.BoxGeometry(1.5, 2, 0.1);
         const window = new THREE.Mesh(windowGeom, windowMat);
+        window.name = 'Windows';
         window.position.set(
           -width / 2 + 1.5 + col * 3,
           2 + row * 3,
@@ -1098,6 +1100,7 @@ export class LevelEditor {
         
         // Back side
         const windowBack = window.clone();
+        windowBack.name = 'Windows';
         windowBack.position.z = -depth / 2 - 0.05;
         group.add(windowBack);
       }
@@ -1139,6 +1142,7 @@ export class LevelEditor {
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.9 });
     const trunkGeom = new THREE.CylinderGeometry(0.15, 0.2, 2, 8);
     const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.name = 'Trunk';
     trunk.position.y = 1;
     trunk.castShadow = true;
     group.add(trunk);
@@ -1147,6 +1151,7 @@ export class LevelEditor {
     const leafMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.8 });
     const foliageGeom = new THREE.ConeGeometry(1.5, 3, 8);
     const foliage = new THREE.Mesh(foliageGeom, leafMat);
+    foliage.name = 'Foliage';
     foliage.position.y = 3.5;
     foliage.castShadow = true;
     group.add(foliage);
@@ -1347,12 +1352,14 @@ export class LevelEditor {
     
     const bodyGeom = new THREE.BoxGeometry(2, 1, 4);
     const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.name = 'Body';
     body.position.y = 0.8;
     body.castShadow = true;
     group.add(body);
     
     const topGeom = new THREE.BoxGeometry(1.5, 0.6, 2);
     const top = new THREE.Mesh(topGeom, bodyMat);
+    top.name = 'Body';
     top.position.set(0, 1.6, -0.3);
     group.add(top);
     
@@ -1364,6 +1371,7 @@ export class LevelEditor {
     
     for (const [x, y, z] of positions) {
       const wheel = new THREE.Mesh(wheelGeom, wheelMat);
+      wheel.name = 'Wheels';
       wheel.position.set(x, y, z);
       wheel.rotation.z = Math.PI / 2;
       group.add(wheel);
@@ -1396,20 +1404,23 @@ export class LevelEditor {
     const group = new THREE.Group();
     
     const boxGeom = new THREE.BoxGeometry(2, 0.8, 2);
-    const boxMat = this.materials.get('concrete')!;
+    const boxMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
     const box = new THREE.Mesh(boxGeom, boxMat);
+    box.name = 'Pot';
     box.position.y = 0.4;
     group.add(box);
     
     const trunkGeom = new THREE.CylinderGeometry(0.1, 0.15, 1);
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3020 });
     const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.name = 'Trunk';
     trunk.position.y = 1.3;
     group.add(trunk);
     
     const foliageGeom = new THREE.SphereGeometry(0.6, 8, 8);
     const foliageMat = new THREE.MeshStandardMaterial({ color: 0x228b22 });
     const foliage = new THREE.Mesh(foliageGeom, foliageMat);
+    foliage.name = 'Foliage';
     foliage.position.y = 2;
     group.add(foliage);
     
@@ -1422,12 +1433,14 @@ export class LevelEditor {
     const bodyGeom = new THREE.CylinderGeometry(0.2, 0.25, 1, 12);
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x6688aa });
     const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.name = 'Body';
     body.position.y = 0.5;
     group.add(body);
     
     const jugGeom = new THREE.CylinderGeometry(0.15, 0.18, 0.4, 12);
     const jugMat = new THREE.MeshStandardMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 });
     const jug = new THREE.Mesh(jugGeom, jugMat);
+    jug.name = 'Jug';
     jug.position.y = 1.2;
     group.add(jug);
     
