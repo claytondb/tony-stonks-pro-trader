@@ -260,9 +260,33 @@ export class TextureGenerator {
     try {
       const history = this.getHistory();
       history.unshift(texture);
-      // Keep last 50 textures
-      const trimmed = history.slice(0, 50);
-      localStorage.setItem(TEXTURE_STORAGE_KEY, JSON.stringify(trimmed));
+      // Keep only last 15 textures (base64 images are large!)
+      const trimmed = history.slice(0, 15);
+      
+      try {
+        localStorage.setItem(TEXTURE_STORAGE_KEY, JSON.stringify(trimmed));
+      } catch (quotaError) {
+        // If quota exceeded, remove old textures until it fits
+        console.warn('localStorage quota exceeded, trimming texture history...');
+        for (let maxItems = 10; maxItems >= 1; maxItems--) {
+          try {
+            const reduced = trimmed.slice(0, maxItems);
+            localStorage.setItem(TEXTURE_STORAGE_KEY, JSON.stringify(reduced));
+            console.log(`Texture history reduced to ${maxItems} items`);
+            return;
+          } catch {
+            continue;
+          }
+        }
+        // If even 1 item doesn't fit, clear and try just the new one
+        console.warn('Clearing old textures to make room');
+        localStorage.removeItem(TEXTURE_STORAGE_KEY);
+        try {
+          localStorage.setItem(TEXTURE_STORAGE_KEY, JSON.stringify([texture]));
+        } catch {
+          console.error('Cannot save texture - localStorage completely full');
+        }
+      }
     } catch (e) {
       console.warn('Failed to save texture to history:', e);
     }

@@ -624,6 +624,10 @@ export class TextureGeneratorUI {
                 <div class="texture-gen-history" id="history-grid">
                   <span style="color: #666;">No textures generated yet</span>
                 </div>
+                <div style="margin-top: 10px;">
+                  <button class="texture-gen-btn secondary" id="clear-all-textures-btn" style="background: #5a3a3a;">🗑️ Clear All Textures</button>
+                  <span style="font-size: 11px; color: #888; margin-left: 10px;">Free up storage space</span>
+                </div>
               </div>
               <div class="texture-gen-section">
                 <h3>Texture Packs</h3>
@@ -721,6 +725,14 @@ export class TextureGeneratorUI {
           alert('Failed to import: ' + e.message);
         }
         packImportInput.value = '';
+      }
+    });
+
+    // Clear all textures button
+    this.modal.querySelector('#clear-all-textures-btn')?.addEventListener('click', () => {
+      if (confirm('Clear all textures from history? This will free up storage space.')) {
+        textureGenerator.clearHistory();
+        this.updateHistoryDisplay();
       }
     });
 
