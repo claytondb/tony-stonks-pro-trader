@@ -50,6 +50,10 @@ export class InputManager {
   
   private initKeyboard(): void {
     window.addEventListener('keydown', (e) => {
+      // Don't capture keys when typing in input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      
       // Prevent default for game keys
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ControlLeft', 'ControlRight'].includes(e.code)) {
         e.preventDefault();
@@ -66,6 +70,10 @@ export class InputManager {
     });
     
     window.addEventListener('keyup', (e) => {
+      // Don't capture keys when typing in input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      
       this.keys.delete(e.code);
     });
     

@@ -415,8 +415,9 @@ export class LevelEditor {
   }
   
   private handleKeyDown(e: KeyboardEvent): void {
-    // Don't handle if typing in input
-    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+    // Don't handle if typing in input/textarea
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return;
     
     switch (e.code) {
       case 'Delete':
