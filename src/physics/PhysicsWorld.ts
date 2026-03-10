@@ -34,18 +34,16 @@ export class PhysicsWorld {
       .setTranslation(position.x, 2.0, position.z)  // Start well above ground
       .setLinearDamping(0.03)  // Lower = more momentum/roll (was 0.1)
       .setAngularDamping(8.0)  // Higher = snappier turn stop (was 5.0)
-      .setCcdEnabled(true)  // Enable continuous collision detection to prevent tunneling
       .enabledRotations(false, true, false);
     
     const body = this.world.createRigidBody(bodyDesc);
     
     // Capsule collider - slides better on ramps than cylinder
-    // halfHeight=0.25 (middle section), radius=0.35 (end caps) - slightly smaller for less clipping
-    const bodyCollider = RAPIER.ColliderDesc.capsule(0.25, 0.35)
+    // halfHeight=0.3 (middle section), radius=0.4 (end caps)
+    const bodyCollider = RAPIER.ColliderDesc.capsule(0.3, 0.4)
       .setMass(50)
       .setFriction(0.1)  // Lower friction for more sliding/momentum (was 0.15)
-      .setRestitution(0.2)  // Small bounce to push away from objects
-      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+      .setRestitution(0.0);
     
     this.world.createCollider(bodyCollider, body);
     
@@ -111,8 +109,7 @@ export class PhysicsWorld {
       halfExtents.x, 
       halfExtents.y, 
       halfExtents.z
-    ).setFriction(0.2)  // Low friction for smooth sliding
-     .setRestitution(0.3);  // Bounce player away to prevent getting stuck
+    ).setFriction(0.2);  // Low friction for smooth sliding
     
     this.world.createCollider(colliderDesc, body);
     this.staticBodies.push(body);
@@ -140,8 +137,7 @@ export class PhysicsWorld {
     const body = this.world.createRigidBody(bodyDesc);
     
     const colliderDesc = RAPIER.ColliderDesc.cylinder(halfHeight, radius)
-      .setFriction(0.2)
-      .setRestitution(0.3);  // Bounce player away
+      .setFriction(0.2);
     
     this.world.createCollider(colliderDesc, body);
     this.staticBodies.push(body);
@@ -163,8 +159,7 @@ export class PhysicsWorld {
     const body = this.world.createRigidBody(bodyDesc);
     
     const colliderDesc = RAPIER.ColliderDesc.cone(halfHeight, radius)
-      .setFriction(0.2)
-      .setRestitution(0.3);  // Bounce player away
+      .setFriction(0.2);
     
     this.world.createCollider(colliderDesc, body);
     this.staticBodies.push(body);
