@@ -1059,11 +1059,17 @@ export class EditorUI {
       return;
     }
     
+    // Debug: log the URL being loaded
+    console.log('Loading texture, URL type:', textureUrl.substring(0, 50) + '...');
+    console.log('URL length:', textureUrl.length);
+    console.log('Starts with data:', textureUrl.startsWith('data:'));
+    
     // Load and apply texture
     this.textureLoader.load(
       textureUrl,
       // onLoad
       (loadedTexture) => {
+        console.log('Texture loaded successfully!');
         loadedTexture.wrapS = THREE.RepeatWrapping;
         loadedTexture.wrapT = THREE.RepeatWrapping;
         loadedTexture.repeat.set(2, 2);
@@ -1084,6 +1090,7 @@ export class EditorUI {
       // onError
       (err) => {
         console.error('Failed to load texture:', err);
+        console.error('URL was:', textureUrl.substring(0, 100) + '...');
       }
     );
   }
