@@ -982,6 +982,15 @@ export class EditorUI {
       const textureUrl = index >= 0 && index < history.length ? history[index].url : '';
       this.applyTextureToObjectType(obj, textureUrl);
     });
+    
+    // Clear texture history button
+    container.querySelector('#clear-texture-history')?.addEventListener('click', () => {
+      if (confirm('Clear all generated textures from history?')) {
+        textureGenerator.clearHistory();
+        // Refresh the properties panel
+        this.updatePropertiesPanel(obj);
+      }
+    });
   }
   
   private renderTextureSelector(obj: EditorObject): string {
@@ -1012,6 +1021,7 @@ export class EditorUI {
         <div style="font-size: 10px; color: #666; margin-top: 4px;">
           Applies to all ${obj.data.type} objects
         </div>
+        ${history.length > 0 ? `<button id="clear-texture-history" style="margin-top: 6px; padding: 4px 8px; font-size: 10px; cursor: pointer;">Clear History</button>` : ''}
       </div>
     `;
     

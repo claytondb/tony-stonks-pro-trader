@@ -281,6 +281,13 @@ export class TextureGenerator {
   }
 
   /**
+   * Clear all texture history
+   */
+  clearHistory(): void {
+    localStorage.removeItem(TEXTURE_STORAGE_KEY);
+  }
+
+  /**
    * Download texture as image file
    */
   async downloadTexture(texture: GeneratedTexture, filename?: string): Promise<void> {
