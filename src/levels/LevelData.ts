@@ -40,7 +40,14 @@ export type ObjectType =
   | 'tree_small'
   | 'kicker'
   | 'manual_pad'
-  | 'pool';
+  | 'pool'
+  // Indoor office objects
+  | 'wall_indoor'
+  | 'ceiling_slab'
+  | 'ceiling_panel'
+  | 'filing_cabinet'
+  | 'printer'
+  | 'exit_sign';
 
 export interface LevelObject {
   type: ObjectType;
@@ -363,12 +370,28 @@ export const LEVELS: LevelData[] = [
   }
 ];
 
-// Get level by ID
+// Import story levels
+import { STORY_LEVELS, StoryLevelData } from '../story/StoryLevels';
+
+// Combined level getter (checks both free skate and story levels)
 export function getLevelById(id: string): LevelData | undefined {
-  return LEVELS.find(level => level.id === id);
+  // Check free skate levels first
+  const freeSkateLevel = LEVELS.find(level => level.id === id);
+  if (freeSkateLevel) return freeSkateLevel;
+  
+  // Check story levels
+  const storyLevel = STORY_LEVELS.find(level => level.id === id);
+  if (storyLevel) return storyLevel as LevelData;
+  
+  return undefined;
 }
 
-// Get levels by chapter
+// Get story level with extra properties
+export function getStoryLevel(id: string): StoryLevelData | undefined {
+  return STORY_LEVELS.find(level => level.id === id);
+}
+
+// Get levels by chapter (free skate only)
 export function getLevelsByChapter(chapter: number): LevelData[] {
   return LEVELS.filter(level => level.chapter === chapter);
 }
@@ -377,3 +400,16 @@ export function getLevelsByChapter(chapter: number): LevelData[] {
 export function getChapters(): number[] {
   return [...new Set(LEVELS.map(level => level.chapter))].sort();
 }
+
+// Get all free skate levels
+export function getFreeSkakeLevels(): LevelData[] {
+  return LEVELS;
+}
+
+// Get all story levels
+export function getAllStoryLevels(): StoryLevelData[] {
+  return STORY_LEVELS;
+}
+
+// Re-export story types
+export type { StoryLevelData, StoryCheckpoint } from '../story/StoryLevels';

@@ -248,6 +248,13 @@ export class SpeedLines {
   }
   
   /**
+   * Manually set intensity (for speed boost effects)
+   */
+  setIntensity(intensity: number): void {
+    this.currentIntensity = Math.max(0, Math.min(1, intensity));
+  }
+  
+  /**
    * Clean up resources
    */
   dispose(): void {

@@ -21,6 +21,10 @@ import { LandingParticles } from '../effects/LandingParticles';
 import { SpeedLines } from '../effects/SpeedLines';
 import { LevelData, LevelObject, getLevelById } from '../levels/LevelData';
 import { SkyGradient } from '../utils/SkyGradient';
+import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } from '../story';
+import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
+import { ChaseHUD } from '../ui/ChaseHUD';
+import { DialogueBox } from '../ui/DialogueBox';
 
 export class Game {
   // Core
@@ -38,6 +42,27 @@ export class Game {
   
   // Callbacks
   onLevelComplete?: (score: number, time: number, goalsCompleted: number, totalGoals: number) => void;
+  onDialogueStart?: () => void;
+  onDialogueEnd?: () => void;
+  onCheckpointReached?: (checkpointIndex: number, checkpointName: string) => void;
+  onChaseStateChange?: (state: ChaseState) => void;
+  
+  // Story systems
+  private chaseMechanic!: ChaseMechanic;
+  private chaseHUD: ChaseHUD | null = null;
+  private dialogueBox: DialogueBox | null = null;
+  private currentStoryLevel: StoryLevelData | null = null;
+  private checkpoints: StoryCheckpoint[] = [];
+  private lastCheckpointIndex = -1;
+  private checkpointPosition: THREE.Vector3 | null = null;
+  private checkpointRotation = 0;
+  
+  // Upgrade effect multipliers (from StoryProgress)
+  private speedMultiplier = 1.0;
+  private jumpMultiplier = 1.0;
+  private spinMultiplier = 1.0;
+  private grindBalanceDrift = 0.5;  // Lower = easier
+  private manualBalanceDrift = 0.5;
   
   // Constants
   private readonly PHYSICS_TIMESTEP = 1 / 60;
@@ -292,13 +317,196 @@ export class Game {
           proceduralSounds.playComboLanded(state.multiplier);
           // Impact zoom pulse on big landings (>5000 points)
           this.cameraController.impactZoomPulse(event.totalScore);
+          
+          // Give speed boost during chase levels when landing tricks
+          if (this.chaseMechanic?.isChaseActive()) {
+            const boost = Math.min(5, event.totalScore / 2000); // Up to 5 boost from big tricks
+            this.chaseMechanic.addSpeedBoost(boost);
+          }
         } else if (event.type === 'combo_failed') {
           proceduralSounds.playBail();
           // Shake camera on bail
           this.cameraController.shake(0.8, 0.4);
         }
       });
+      
+      // Initialize story systems
+      this.initStorySystems(overlay);
     }
+  }
+  
+  /**
+   * Initialize story-specific UI systems (dialogue, chase HUD)
+   */
+  private initStorySystems(overlay: HTMLElement): void {
+    // Create dialogue box
+    this.dialogueBox = new DialogueBox(overlay, {
+      onComplete: () => {
+        this.onDialogueEnd?.();
+        this.isPaused = false;
+      },
+      onSkip: () => {
+        this.onDialogueEnd?.();
+        this.isPaused = false;
+      }
+    });
+    
+    // Create chase HUD
+    this.chaseHUD = new ChaseHUD(overlay);
+    
+    // Create chase mechanic
+    this.chaseMechanic = new ChaseMechanic({
+      onCaught: () => {
+        // Player caught - fail level
+        console.log('Player caught by agents!');
+        this.cameraController.shake(1.5, 0.6);
+        // Restore from checkpoint if available
+        if (this.lastCheckpointIndex >= 0 && this.checkpointPosition) {
+          this.restoreCheckpoint();
+        } else {
+          // Fail the level
+          this.endLevel(false);
+        }
+      },
+      onWarningChange: (_level) => {
+        this.onChaseStateChange?.(this.chaseMechanic.getState());
+      },
+      onSpeedBoost: (amount) => {
+        // Visual feedback for speed boost
+        this.speedLines.setIntensity(Math.min(1, amount / 10));
+      }
+    });
+  }
+  
+  /**
+   * Load upgrade effects from StoryProgress
+   */
+  private loadUpgradeEffects(): void {
+    // Only apply upgrades for story levels
+    if (this.currentStoryLevel || this.currentLevelId.startsWith('story_')) {
+      this.speedMultiplier = storyProgress.getUpgradeEffect('speed');
+      this.jumpMultiplier = storyProgress.getUpgradeEffect('jumpHeight');
+      this.spinMultiplier = storyProgress.getUpgradeEffect('spinSpeed');
+      this.grindBalanceDrift = storyProgress.getUpgradeEffect('grindBalance');
+      this.manualBalanceDrift = storyProgress.getUpgradeEffect('manualBalance');
+      
+      console.log('Upgrade effects loaded:', {
+        speed: this.speedMultiplier,
+        jump: this.jumpMultiplier,
+        spin: this.spinMultiplier,
+        grindBalance: this.grindBalanceDrift,
+        manualBalance: this.manualBalanceDrift
+      });
+    } else {
+      // Reset to defaults for non-story levels
+      this.speedMultiplier = 1.0;
+      this.jumpMultiplier = 1.0;
+      this.spinMultiplier = 1.0;
+      this.grindBalanceDrift = 0.5;
+      this.manualBalanceDrift = 0.5;
+    }
+  }
+  
+  /**
+   * Show intro dialogue for story level
+   */
+  showIntroDialogue(lines: string[]): void {
+    if (this.dialogueBox && lines.length > 0) {
+      this.isPaused = true;
+      this.onDialogueStart?.();
+      this.dialogueBox.show(lines);
+    }
+  }
+  
+  /**
+   * Show outro dialogue for story level
+   */
+  showOutroDialogue(lines: string[]): void {
+    if (this.dialogueBox && lines.length > 0) {
+      this.isPaused = true;
+      this.onDialogueStart?.();
+      this.dialogueBox.show(lines);
+    }
+  }
+  
+  /**
+   * Check if player reached a checkpoint
+   */
+  private updateCheckpoints(): void {
+    if (!this.currentStoryLevel || this.checkpoints.length === 0) return;
+    
+    const playerPos = this.chair.position;
+    
+    for (let i = this.lastCheckpointIndex + 1; i < this.checkpoints.length; i++) {
+      const checkpoint = this.checkpoints[i];
+      const cpPos = new THREE.Vector3(checkpoint.position[0], checkpoint.position[1], checkpoint.position[2]);
+      const distance = playerPos.distanceTo(cpPos);
+      
+      // Trigger checkpoint when within 5 units
+      if (distance < 5) {
+        this.triggerCheckpoint(i, checkpoint);
+        break;
+      }
+    }
+  }
+  
+  /**
+   * Trigger a checkpoint
+   */
+  private triggerCheckpoint(index: number, checkpoint: StoryCheckpoint): void {
+    this.lastCheckpointIndex = index;
+    this.checkpointPosition = this.chair.position.clone();
+    this.checkpointRotation = this.chair.rotation.y;
+    
+    // Save to story progress
+    storyProgress.setCheckpoint(this.currentLevelId, index);
+    
+    // Show checkpoint dialogue if present
+    if (checkpoint.dialogue && checkpoint.dialogue.length > 0) {
+      this.showOutroDialogue(checkpoint.dialogue);
+    }
+    
+    // Notify callback
+    this.onCheckpointReached?.(index, checkpoint.name);
+    
+    console.log(`Checkpoint reached: ${checkpoint.name}`);
+  }
+  
+  /**
+   * Restore player to last checkpoint
+   */
+  restoreCheckpoint(): void {
+    if (this.checkpointPosition && this.chairBody) {
+      this.physics.setPosition(this.chairBody, this.checkpointPosition);
+      this.physics.setRotationY(this.chairBody, this.checkpointRotation);
+      this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+      
+      // Reset player state
+      this.playerState.isGrounded = true;
+      this.playerState.isAirborne = false;
+      this.comboSystem.reset();
+      
+      // Restart chase if active
+      if (this.currentStoryLevel?.hasChaseMechanic) {
+        this.chaseMechanic.start(this.currentStoryLevel.chaseSpeed || 8, 50);
+      }
+    }
+  }
+  
+  /**
+   * End the current level
+   */
+  endLevel(success: boolean): void {
+    if (success && this.currentStoryLevel?.outroDialogue) {
+      this.showOutroDialogue(this.currentStoryLevel.outroDialogue);
+    }
+    
+    // Stop chase
+    this.chaseMechanic?.stop();
+    this.chaseHUD?.hide();
+    
+    // Calculate final score
+    this.onLevelComplete?.(this.totalStonks, this.levelTime, 0, 0);
   }
   
   private async initPlayer(): Promise<void> {
@@ -1075,6 +1283,13 @@ export class Game {
   loadLevel(levelId: string): void {
     console.log(`Loading level: ${levelId}`);
     
+    // Check if it's a story level first
+    const storyLevel = getStoryLevelById(levelId);
+    if (storyLevel) {
+      this.loadStoryLevel(storyLevel);
+      return;
+    }
+    
     // Get level data from built-in levels
     const levelData = getLevelById(levelId);
     if (!levelData) {
@@ -1084,6 +1299,60 @@ export class Game {
     
     // Use the full level loading logic
     this.loadCustomLevel(levelData);
+  }
+  
+  /**
+   * Load a story level with all story features
+   */
+  loadStoryLevel(level: StoryLevelData): void {
+    console.log(`Loading story level: ${level.name}`);
+    
+    // Store story level reference
+    this.currentStoryLevel = level;
+    this.checkpoints = level.checkpoints || [];
+    this.lastCheckpointIndex = -1;
+    this.checkpointPosition = null;
+    
+    // Check for saved checkpoint progress
+    const savedCheckpoint = storyProgress.getCheckpoint(level.id);
+    if (savedCheckpoint >= 0 && savedCheckpoint < this.checkpoints.length) {
+      const cp = this.checkpoints[savedCheckpoint];
+      this.lastCheckpointIndex = savedCheckpoint;
+      this.checkpointPosition = new THREE.Vector3(cp.position[0], cp.position[1], cp.position[2]);
+      this.checkpointRotation = cp.rotation * Math.PI / 180;
+    }
+    
+    // Load upgrade effects from story progress
+    this.loadUpgradeEffects();
+    
+    // Load the level geometry
+    this.loadCustomLevel(level);
+    
+    // If we have a saved checkpoint, spawn there instead
+    if (this.checkpointPosition && this.chairBody) {
+      this.physics.setPosition(this.chairBody, this.checkpointPosition);
+      this.physics.setRotationY(this.chairBody, this.checkpointRotation);
+    }
+    
+    // Initialize chase mechanic for chase levels
+    if (level.hasChaseMechanic && this.chaseMechanic) {
+      this.chaseMechanic.start(level.chaseSpeed || 8, 50);
+      this.chaseMechanic.createVisuals(this.scene);
+      this.chaseHUD?.show();
+    } else {
+      this.chaseMechanic?.stop();
+      this.chaseHUD?.hide();
+    }
+    
+    // Show intro dialogue after a short delay
+    if (level.introDialogue && level.introDialogue.length > 0) {
+      setTimeout(() => {
+        this.showIntroDialogue(level.introDialogue || []);
+      }, 500);
+    }
+    
+    // Set current level in story progress
+    storyProgress.setCurrentLevel(level.id);
   }
   
   getCurrentLevelId(): string {
@@ -1130,7 +1399,11 @@ export class Game {
     const skyTop = (level as any).skyColorTop || level.skyColor || '#1e90ff';
     const skyBottom = (level as any).skyColorBottom || level.skyColor || '#87ceeb';
     this.skyGradient.setColors(skyTop, skyBottom);
-    this.updateLightingForSky(skyTop, skyBottom);
+    
+    // Apply level-specific lighting if present
+    const levelAmbient = (level as any).ambientLight;
+    const levelSunIntensity = (level as any).sunIntensity;
+    this.updateLightingForSky(skyTop, skyBottom, levelAmbient, levelSunIntensity);
     this.scene.background = null; // Use gradient, not solid color
     
     if (level.fogColor) {
@@ -1158,8 +1431,10 @@ export class Game {
   /**
    * Update lighting to match the sky colors for a cohesive look
    * Boosted values for better visibility
+   * @param levelAmbient - Optional level-specific ambient light intensity
+   * @param levelSunIntensity - Optional level-specific sun intensity
    */
-  private updateLightingForSky(skyTop: string, skyBottom: string): void {
+  private updateLightingForSky(skyTop: string, skyBottom: string, levelAmbient?: number, levelSunIntensity?: number): void {
     const topColor = new THREE.Color(skyTop);
     const bottomColor = new THREE.Color(skyBottom);
     
@@ -1205,6 +1480,14 @@ export class Game {
     
     // Ambient always gets some of the sky color mixed in (but mostly white)
     this.ambientLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.8);
+    
+    // Apply level-specific overrides if provided
+    if (levelAmbient !== undefined) {
+      this.ambientLight.intensity = levelAmbient;
+    }
+    if (levelSunIntensity !== undefined) {
+      this.sunLight.intensity = levelSunIntensity;
+    }
   }
   
   /**
@@ -1529,22 +1812,21 @@ export class Game {
       }
       
       case 'cubicle': {
+        const cubWidth = (data.params?.width as number) || 3;
+        const cubDepth = (data.params?.depth as number) || 3;
+        const cubHeight = (data.params?.height as number) || 1.5;
         // Try to use GLB model
         const cubCached = this.modelCache.get('cubicle');
         if (cubCached) {
           mesh = cubCached.clone();
         } else {
           // Fallback to procedural mesh
-          const width = (data.params?.width as number) || 3;
-          const depth = (data.params?.depth as number) || 3;
-          mesh = this.createCubicleMesh(officeMaterial, woodMaterial, width, depth);
+          mesh = this.createCubicleMesh(officeMaterial, woodMaterial, cubWidth, cubDepth, cubHeight);
         }
-        // Collision: cubicle walls
-        const cubWidth = (data.params?.width as number) || 3;
-        const cubDepth = (data.params?.depth as number) || 3;
+        // Collision: cubicle walls — height matches the walls
         this.physics.createStaticBox(
-          new THREE.Vector3(data.position[0], 0.6, data.position[2]),
-          new THREE.Vector3(cubWidth / 2, 0.6, cubDepth / 2)
+          new THREE.Vector3(data.position[0], cubHeight / 2, data.position[2]),
+          new THREE.Vector3(cubWidth / 2, cubHeight / 2, cubDepth / 2)
         );
         break;
       }
@@ -1672,7 +1954,83 @@ export class Game {
           new THREE.Vector3(1.0, 0.5, 1.0)
         );
         break;
-      
+
+      // =============================================
+      // INDOOR OFFICE OBJECTS
+      // =============================================
+
+      case 'wall_indoor': {
+        const wWidth = (data.params?.width as number) || 10;
+        const wHeight = (data.params?.height as number) || 8;
+        const wDepth = (data.params?.depth as number) || 1;
+        mesh = this.createIndoorWallMesh(wWidth, wHeight, wDepth);
+        // Physics: solid wall box centered at the given position
+        const wallRot = data.rotation
+          ? new THREE.Euler(
+              data.rotation[0] * Math.PI / 180,
+              data.rotation[1] * Math.PI / 180,
+              data.rotation[2] * Math.PI / 180
+            )
+          : new THREE.Euler(0, 0, 0);
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], data.position[1], data.position[2]),
+          new THREE.Vector3(wWidth / 2, wHeight / 2, wDepth / 2),
+          wallRot
+        );
+        break;
+      }
+
+      case 'ceiling_slab': {
+        const csWidth = (data.params?.width as number) || 80;
+        const csDepth = (data.params?.depth as number) || 80;
+        mesh = this.createCeilingSlabMesh(csWidth, csDepth);
+        // Physics: ceiling acts as a blocker
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], data.position[1], data.position[2]),
+          new THREE.Vector3(csWidth / 2, 0.5, csDepth / 2)
+        );
+        break;
+      }
+
+      case 'ceiling_panel': {
+        const cpWidth = (data.params?.width as number) || 6;
+        const cpDepth = (data.params?.depth as number) || 0.8;
+        mesh = this.createCeilingPanelMesh(cpWidth, cpDepth);
+        // Ceiling panels don't need physics (they're at the ceiling, player can't reach)
+        // But add a point light for illumination
+        const panelLight = new THREE.PointLight(0xffeedd, 1.8, 22);
+        panelLight.position.set(data.position[0], data.position[1] - 2, data.position[2]);
+        this.scene.add(panelLight);
+        this.levelObjects.push(panelLight);
+        break;
+      }
+
+      case 'filing_cabinet': {
+        mesh = this.createFilingCabinetMesh();
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.9, data.position[2]),
+          new THREE.Vector3(0.4, 0.9, 0.3)
+        );
+        break;
+      }
+
+      case 'printer': {
+        mesh = this.createPrinterMesh();
+        this.physics.createStaticBox(
+          new THREE.Vector3(data.position[0], 0.35, data.position[2]),
+          new THREE.Vector3(0.35, 0.35, 0.3)
+        );
+        break;
+      }
+
+      case 'exit_sign': {
+        const esWidth = (data.params?.width as number) || 3;
+        const esHeight = (data.params?.height as number) || 0.8;
+        mesh = this.createExitSignMesh(esWidth, esHeight);
+        // Signs don't block player (mounted high on wall)
+        break;
+      }
+
       default:
         // Unknown type - create placeholder cube
         const geom = new THREE.BoxGeometry(1, 1, 1);
@@ -1839,27 +2197,69 @@ export class Game {
     return group;
   }
   
-  private createCubicleMesh(wallMat: THREE.Material, deskMat: THREE.Material, width: number, depth: number): THREE.Group {
-    const height = 1.5;
+  private createCubicleMesh(_wallMat: THREE.Material, deskMat: THREE.Material, width: number, depth: number, height: number = 1.5): THREE.Group {
     const group = new THREE.Group();
-    
-    const wallGeom = new THREE.BoxGeometry(width, height, 0.05);
-    const backWall = new THREE.Mesh(wallGeom, wallMat);
+
+    // Cubicle wall color — fabric-covered panels (charcoal blue-gray)
+    const fabricMat = new THREE.MeshStandardMaterial({
+      color: 0x3a3f50,
+      roughness: 0.95,
+      metalness: 0.0
+    });
+
+    // Back wall panel
+    const wallGeom = new THREE.BoxGeometry(width, height, 0.08);
+    const backWall = new THREE.Mesh(wallGeom, fabricMat);
     backWall.position.set(0, height / 2, depth / 2);
+    backWall.castShadow = true;
+    backWall.receiveShadow = true;
     group.add(backWall);
-    
-    const sideWallGeom = new THREE.BoxGeometry(0.05, height, depth);
+
+    // Side wall panels
+    const sideWallGeom = new THREE.BoxGeometry(0.08, height, depth);
     for (const side of [-1, 1]) {
-      const sideWall = new THREE.Mesh(sideWallGeom, wallMat);
+      const sideWall = new THREE.Mesh(sideWallGeom, fabricMat);
       sideWall.position.set(side * width / 2, height / 2, 0);
+      sideWall.castShadow = true;
+      sideWall.receiveShadow = true;
       group.add(sideWall);
     }
-    
-    const deskGeom = new THREE.BoxGeometry(width * 0.8, 0.05, depth * 0.4);
+
+    // Desk surface (laminate wood color)
+    const deskGeom = new THREE.BoxGeometry(width * 0.85, 0.06, depth * 0.42);
     const desk = new THREE.Mesh(deskGeom, deskMat);
-    desk.position.set(0, 0.75, depth * 0.2);
+    desk.position.set(0, 0.76, depth * 0.2);
+    desk.castShadow = true;
+    desk.receiveShadow = true;
     group.add(desk);
-    
+
+    // Desk legs (metal)
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x666666, metalness: 0.7, roughness: 0.4 });
+    const legGeom = new THREE.BoxGeometry(0.06, 0.76, 0.06);
+    for (const lx of [-1, 1]) {
+      for (const lz of [-1, 1]) {
+        const leg = new THREE.Mesh(legGeom, legMat);
+        leg.position.set(lx * (width * 0.38), 0.38, depth * 0.2 + lz * (depth * 0.18));
+        group.add(leg);
+      }
+    }
+
+    // Monitor (dark screen)
+    const monitorBaseMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6 });
+    const monitorScreenMat = new THREE.MeshStandardMaterial({
+      color: 0x112233,
+      emissive: 0x0a1a2a,
+      emissiveIntensity: 0.4
+    });
+    const monitorGeom = new THREE.BoxGeometry(0.5, 0.35, 0.04);
+    const monitor = new THREE.Mesh(monitorGeom, monitorScreenMat);
+    monitor.position.set(0, 1.1, depth * 0.35);
+    group.add(monitor);
+    const monitorBaseGeom = new THREE.BoxGeometry(0.15, 0.22, 0.08);
+    const monitorBase = new THREE.Mesh(monitorBaseGeom, monitorBaseMat);
+    monitorBase.position.set(0, 0.87, depth * 0.35);
+    group.add(monitorBase);
+
     return group;
   }
   
@@ -2096,6 +2496,173 @@ export class Game {
     return group;
   }
   
+  // =============================================
+  // INDOOR OFFICE MESH CREATORS
+  // =============================================
+
+  private createIndoorWallMesh(width: number, height: number, depth: number): THREE.Mesh {
+    const geom = new THREE.BoxGeometry(width, height, depth);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xd4cfc8,   // Off-white / cream office wall
+      roughness: 0.85,
+      metalness: 0.0
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    // Mesh is positioned by caller at the wall center
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  private createCeilingSlabMesh(width: number, depth: number): THREE.Mesh {
+    const geom = new THREE.BoxGeometry(width, 1.0, depth);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xd8d8d0,   // Light gray drop ceiling tiles
+      roughness: 0.9,
+      metalness: 0.0
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  private createCeilingPanelMesh(width: number, depth: number): THREE.Group {
+    const group = new THREE.Group();
+
+    // Light panel housing (aluminum frame)
+    const housingMat = new THREE.MeshStandardMaterial({
+      color: 0xcccccc,
+      roughness: 0.4,
+      metalness: 0.5
+    });
+    const housingGeom = new THREE.BoxGeometry(width + 0.1, 0.08, depth + 0.1);
+    const housing = new THREE.Mesh(housingGeom, housingMat);
+    housing.position.y = 0;
+    group.add(housing);
+
+    // Glowing fluorescent tube (emissive white)
+    const tubeMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xffeedd,
+      emissiveIntensity: 1.8,
+      roughness: 0.1
+    });
+    const tubeGeom = new THREE.BoxGeometry(width - 0.15, 0.06, depth - 0.05);
+    const tube = new THREE.Mesh(tubeGeom, tubeMat);
+    tube.position.y = -0.02;
+    group.add(tube);
+
+    return group;
+  }
+
+  private createFilingCabinetMesh(): THREE.Group {
+    const group = new THREE.Group();
+
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x808080,  // Medium gray metal
+      roughness: 0.6,
+      metalness: 0.5
+    });
+    const handleMat = new THREE.MeshStandardMaterial({
+      color: 0x999999,
+      roughness: 0.3,
+      metalness: 0.8
+    });
+
+    // Cabinet body (tall, narrow)
+    const bodyGeom = new THREE.BoxGeometry(0.8, 1.8, 0.6);
+    const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.position.y = 0.9;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+
+    // Drawer handles (3 drawers)
+    const handleGeom = new THREE.BoxGeometry(0.3, 0.04, 0.05);
+    for (let i = 0; i < 3; i++) {
+      const handle = new THREE.Mesh(handleGeom, handleMat);
+      handle.position.set(0, 0.4 + i * 0.5, 0.33);
+      group.add(handle);
+    }
+
+    // Drawer divider lines
+    const lineGeom = new THREE.BoxGeometry(0.78, 0.01, 0.59);
+    const lineMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    for (let i = 0; i < 3; i++) {
+      const line = new THREE.Mesh(lineGeom, lineMat);
+      line.position.set(0, 0.15 + i * 0.5, 0);
+      group.add(line);
+    }
+
+    return group;
+  }
+
+  private createPrinterMesh(): THREE.Group {
+    const group = new THREE.Group();
+
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a2a,  // Dark gray plastic
+      roughness: 0.7,
+      metalness: 0.1
+    });
+    const accentMat = new THREE.MeshStandardMaterial({
+      color: 0x555555,
+      roughness: 0.6
+    });
+    const screenMat = new THREE.MeshStandardMaterial({
+      color: 0x112233,
+      emissive: 0x001122,
+      emissiveIntensity: 0.5
+    });
+
+    // Main body
+    const bodyGeom = new THREE.BoxGeometry(0.7, 0.5, 0.6);
+    const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.position.y = 0.4;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+
+    // Paper tray (protruding bottom)
+    const trayGeom = new THREE.BoxGeometry(0.65, 0.06, 0.35);
+    const tray = new THREE.Mesh(trayGeom, accentMat);
+    tray.position.set(0, 0.18, 0.15);
+    group.add(tray);
+
+    // Small control panel / screen
+    const screenGeom = new THREE.BoxGeometry(0.2, 0.12, 0.02);
+    const screen = new THREE.Mesh(screenGeom, screenMat);
+    screen.position.set(-0.2, 0.62, 0.3);
+    group.add(screen);
+
+    return group;
+  }
+
+  private createExitSignMesh(width: number, height: number): THREE.Group {
+    const group = new THREE.Group();
+
+    // Sign backing (dark border)
+    const borderMat = new THREE.MeshStandardMaterial({ color: 0x002200 });
+    const borderGeom = new THREE.BoxGeometry(width, height, 0.05);
+    const border = new THREE.Mesh(borderGeom, borderMat);
+    border.position.y = 0;
+    group.add(border);
+
+    // Glowing green face
+    const signMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff44,
+      emissive: 0x00cc33,
+      emissiveIntensity: 2.0,
+      roughness: 0.2
+    });
+    const signGeom = new THREE.BoxGeometry(width - 0.1, height - 0.08, 0.04);
+    const sign = new THREE.Mesh(signGeom, signMat);
+    sign.position.z = 0.03;
+    group.add(sign);
+
+    return group;
+  }
+
   stop(): void {
     this.isRunning = false;
     // Stop wheel roll sound
@@ -2234,8 +2801,8 @@ export class Game {
         // Disable grind camera angle
         this.cameraController.setGrindCamera(false);
       } else {
-        // Update grind physics
-        this.grindSystem.updateGrind(dt, balanceInput, this.physics, this.chairBody);
+        // Update grind physics with upgrade-modified balance drift
+        this.grindSystem.updateGrind(dt, balanceInput, this.physics, this.chairBody, this.grindBalanceDrift * 2);
         
         // Update balance display
         const grindState = this.grindSystem.getState();
@@ -2350,8 +2917,36 @@ export class Game {
       this.updatePlayerAnimation(input);
     }
     
+    // Update story-specific systems
+    this.updateStorySystems(dt);
+    
     // Clear just-pressed keys after processing
     this.input.clearJustPressed();
+  }
+  
+  /**
+   * Update story-specific systems (checkpoints, chase, etc.)
+   */
+  private updateStorySystems(dt: number): void {
+    // Update level time
+    this.levelTime += dt;
+    
+    // Check for checkpoint triggers
+    this.updateCheckpoints();
+    
+    // Update chase mechanic if active
+    if (this.chaseMechanic?.isChaseActive()) {
+      const vel = this.physics.getVelocity(this.chairBody);
+      const playerSpeed = new THREE.Vector3(vel.x, 0, vel.z).length();
+      
+      this.chaseMechanic.update(dt, playerSpeed, this.chair.position);
+      this.chaseMechanic.updateVisuals(this.chair.position, this.chair.rotation.y);
+      
+      // Update chase HUD
+      if (this.chaseHUD) {
+        this.chaseHUD.update(this.chaseMechanic.getState());
+      }
+    }
   }
   
   // Animation state tracking
@@ -2695,10 +3290,11 @@ export class Game {
     }
     
     // THPS-style physics - snappy and responsive
-    const accelSpeed = 0.4;      // W/S - velocity boost per frame
-    const jumpImpulse = 8;       // Space - ollie
-    const spinTorque = 6;        // Q/E - spin in air
-    const maxSpeed = 18;         // Cap forward speed
+    // Apply upgrade multipliers from story mode
+    const accelSpeed = 0.4 * this.speedMultiplier;      // W/S - velocity boost per frame
+    const jumpImpulse = 8 * this.jumpMultiplier;        // Space - ollie
+    const spinTorque = 6 * this.spinMultiplier;         // Q/E - spin in air
+    const maxSpeed = 18 * this.speedMultiplier;         // Cap forward speed
     
     // Get chair orientation and velocity
     // +Z is forward (away from camera), matching CameraController expectations
@@ -2754,7 +3350,7 @@ export class Game {
     // TURNING (A/D) - Rotate left/right (direct angular velocity)
     // THPS-style: instant, responsive turning
     const turnSpeed = 4.5;  // Radians per second - snappy! (was 2.5)
-    const airTurnSpeed = 2.5;  // Slightly slower in air (was 1.5)
+    const airTurnSpeed = 3.5;  // Tightened air control (was 2.5) - more responsive tricks
     
     if (input.turnLeft) {
       const speed = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;

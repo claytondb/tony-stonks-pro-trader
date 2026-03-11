@@ -146,6 +146,27 @@ export class PhysicsWorld {
   }
   
   /**
+   * Create a static sphere collider
+   */
+  createStaticSphere(
+    position: THREE.Vector3,
+    radius: number
+  ): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(position.x, position.y, position.z);
+    
+    const body = this.world.createRigidBody(bodyDesc);
+    
+    const colliderDesc = RAPIER.ColliderDesc.ball(radius)
+      .setFriction(0.2);
+    
+    this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
+    
+    return body;
+  }
+  
+  /**
    * Create a static cone collider
    */
   createStaticCone(

@@ -151,12 +151,14 @@ export class GrindSystem {
   
   /**
    * Update grinding physics
+   * @param balanceDriftMultiplier - Multiplier for balance drift (lower = easier)
    */
   updateGrind(
     dt: number,
     balanceInput: number,  // -1 to 1 from player input (A/D keys)
     physics: PhysicsWorld,
-    chairBody: RAPIER.RigidBody
+    chairBody: RAPIER.RigidBody,
+    balanceDriftMultiplier: number = 1.0
   ): { position: THREE.Vector3; velocity: THREE.Vector3 } | null {
     if (!this.grindState.isGrinding || !this.grindState.rail) {
       return null;
@@ -180,8 +182,8 @@ export class GrindSystem {
     }
     
     // Update balance
-    // Random drift
-    const drift = (Math.random() - 0.5) * this.BALANCE_DRIFT * dt;
+    // Random drift - multiplied by upgrade effect (lower = easier)
+    const drift = (Math.random() - 0.5) * this.BALANCE_DRIFT * dt * balanceDriftMultiplier;
     this.grindState.balance += drift;
     
     // Player correction

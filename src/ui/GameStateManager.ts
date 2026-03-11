@@ -5,12 +5,14 @@
 
 import * as THREE from 'three';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { storyProgress, STORY_LEVELS } from '../story';
 
 export type GameState = 
   | 'loading'
   | 'title'
   | 'menu'
   | 'level_select'
+  | 'story_select'
   | 'options'
   | 'playing'
   | 'paused'
@@ -454,7 +456,7 @@ export class GameStateManager {
     }
     
     // Show persistent background for menu states, hide for gameplay/editor
-    const menuStates: GameState[] = ['title', 'menu', 'level_select', 'options'];
+    const menuStates: GameState[] = ['title', 'menu', 'level_select', 'story_select', 'options'];
     const showBg = menuStates.includes(this.state);
     
     if (this.backgroundContainer) {
@@ -478,6 +480,9 @@ export class GameStateManager {
         break;
       case 'level_select':
         this.renderLevelSelect();
+        break;
+      case 'story_select':
+        this.renderStorySelect();
         break;
       case 'options':
         this.renderOptions();
@@ -749,11 +754,11 @@ export class GameStateManager {
   
   private renderMenu(): void {
     const menuItems = [
-      { label: 'CAREER MODE', action: 'career' },
-      { label: 'FREE SKATE', action: 'level_select' },
-      { label: 'LEVEL EDITOR', action: 'editor' },
-      { label: 'OPTIONS', action: 'options' },
-      { label: 'CREDITS', action: 'credits' }
+      { label: '📖 STORY MODE', action: 'story_select', primary: true },
+      { label: '🛹 FREE SKATE', action: 'level_select', primary: false },
+      { label: '🛠️ LEVEL EDITOR', action: 'editor', primary: false },
+      { label: '⚙️ OPTIONS', action: 'options', primary: false },
+      { label: '📜 CREDITS', action: 'credits', primary: false }
     ];
     
     this.contentContainer!.innerHTML = `
@@ -799,7 +804,9 @@ export class GameStateManager {
     this.contentContainer!.querySelectorAll('.menu-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const action = btn.getAttribute('data-action');
-        if (action === 'level_select' || action === 'career') {
+        if (action === 'story_select') {
+          this.renderStorySelect();
+        } else if (action === 'level_select') {
           this.setState('level_select');
         } else if (action === 'editor') {
           this.setState('editor');
@@ -973,6 +980,197 @@ export class GameStateManager {
       });
     });
     
+    this.contentContainer!.querySelector('#back-btn')?.addEventListener('click', () => {
+      this.setState('menu');
+    });
+  }
+  
+  private renderStorySelect(): void {
+    const progress = storyProgress.getState();
+    
+    // Group levels by chapter
+    const chapters: Record<number, typeof STORY_LEVELS> = {};
+    for (const level of STORY_LEVELS) {
+      if (!chapters[level.chapter]) chapters[level.chapter] = [];
+      chapters[level.chapter].push(level);
+    }
+    
+    const chapterNames: Record<number, string> = {
+      1: 'The Escape',
+      2: 'On The Run',
+      3: 'The Finale'
+    };
+    
+    let chaptersHTML = '';
+    for (const [chapterNum, levels] of Object.entries(chapters)) {
+      const chapterName = chapterNames[parseInt(chapterNum)] || `Chapter ${chapterNum}`;
+      
+      const levelsHTML = levels.map((level) => {
+        const levelProgress = progress.levelProgress[level.id];
+        const isUnlocked = levelProgress?.unlocked ?? (level.storyOrder === 1);
+        const isCompleted = levelProgress?.completed ?? false;
+        const bestScore = levelProgress?.bestScore ?? 0;
+        
+        // Determine status icon
+        let statusIcon = '🔒';
+        if (isUnlocked && !isCompleted) statusIcon = '▶️';
+        if (isCompleted) statusIcon = '✅';
+        
+        return `
+          <div class="story-level ${isUnlocked ? 'unlocked' : 'locked'} ${isCompleted ? 'completed' : ''}"
+               data-level-id="${level.id}"
+               style="
+                 display: flex;
+                 align-items: center;
+                 padding: 15px 20px;
+                 background: ${isUnlocked ? 'rgba(0, 100, 50, 0.3)' : 'rgba(50, 50, 50, 0.3)'};
+                 border: 2px solid ${isUnlocked ? (isCompleted ? '#00FF88' : '#88AA88') : '#444'};
+                 border-radius: 8px;
+                 margin-bottom: 10px;
+                 cursor: ${isUnlocked ? 'pointer' : 'not-allowed'};
+                 opacity: ${isUnlocked ? '1' : '0.5'};
+                 transition: all 0.2s;
+               ">
+            <span style="font-size: 24px; margin-right: 15px;">${statusIcon}</span>
+            <div style="flex: 1;">
+              <div style="font-size: 18px; font-weight: bold; color: #fff;">
+                ${level.storyOrder}. ${level.name}
+              </div>
+              <div style="font-size: 12px; color: #888;">
+                ${level.subtitle || level.description}
+              </div>
+            </div>
+            ${isCompleted ? `
+              <div style="text-align: right;">
+                <div style="font-size: 14px; color: #00FF88;">
+                  ${bestScore.toLocaleString()} 📈
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('');
+      
+      chaptersHTML += `
+        <div style="margin-bottom: 30px;">
+          <div style="
+            font-size: 20px;
+            font-weight: bold;
+            color: #FFD700;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #333;
+          ">
+            Chapter ${chapterNum}: ${chapterName}
+          </div>
+          ${levelsHTML}
+        </div>
+      `;
+    }
+    
+    this.contentContainer!.innerHTML = `
+      <div style="
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        align-items: center;
+        padding-top: 40px;
+        background: rgba(0, 0, 0, 0.8);
+        pointer-events: auto;
+        overflow-y: auto;
+      ">
+        <div style="
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          width: 90%;
+          max-width: 800px;
+          margin-bottom: 30px;
+        ">
+          <div style="
+            font-size: 36px;
+            font-weight: bold;
+            color: #00FF88;
+            font-family: 'Kanit', sans-serif;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+          ">📖 STORY MODE</div>
+          <div style="
+            font-size: 20px;
+            color: #FFD700;
+            font-family: 'Kanit', sans-serif;
+          ">💰 ${progress.totalStonks.toLocaleString()} Stonks</div>
+        </div>
+        
+        <div style="
+          width: 90%;
+          max-width: 800px;
+          margin-bottom: 30px;
+        ">
+          ${chaptersHTML}
+        </div>
+        
+        <div style="
+          display: flex;
+          gap: 20px;
+          margin-bottom: 40px;
+        ">
+          <button id="shop-btn" style="
+            padding: 12px 30px;
+            font-size: 16px;
+            background: #FFD700;
+            border: 2px solid #FFAA00;
+            color: #000;
+            cursor: pointer;
+            font-family: 'Kanit', sans-serif;
+            font-weight: bold;
+          ">🛒 SHOP</button>
+          
+          <button id="back-btn" style="
+            padding: 12px 30px;
+            font-size: 16px;
+            background: #333;
+            border: 2px solid #555;
+            color: #fff;
+            cursor: pointer;
+            font-family: 'Kanit', sans-serif;
+          ">← BACK</button>
+        </div>
+      </div>
+    `;
+    
+    // Level click handlers
+    this.contentContainer!.querySelectorAll('.story-level.unlocked').forEach(el => {
+      el.addEventListener('click', () => {
+        const levelId = el.getAttribute('data-level-id');
+        if (levelId) {
+          this.startLevel(levelId);
+        }
+      });
+      
+      el.addEventListener('mouseenter', () => {
+        (el as HTMLElement).style.borderColor = '#00FF88';
+        (el as HTMLElement).style.background = 'rgba(0, 150, 75, 0.4)';
+      });
+      
+      el.addEventListener('mouseleave', () => {
+        const isCompleted = el.classList.contains('completed');
+        (el as HTMLElement).style.borderColor = isCompleted ? '#00FF88' : '#88AA88';
+        (el as HTMLElement).style.background = 'rgba(0, 100, 50, 0.3)';
+      });
+    });
+    
+    // Shop button - TODO: Open upgrade shop
+    this.contentContainer!.querySelector('#shop-btn')?.addEventListener('click', () => {
+      // TODO: Show upgrade shop overlay
+      console.log('Shop clicked - TODO: implement');
+    });
+    
+    // Back button
     this.contentContainer!.querySelector('#back-btn')?.addEventListener('click', () => {
       this.setState('menu');
     });

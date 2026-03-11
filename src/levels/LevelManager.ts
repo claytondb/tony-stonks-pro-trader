@@ -244,6 +244,33 @@ export class LevelManager {
       case 'barrier':
         mesh = this.createBarrier(pos, rot, obj.params?.length as number || 5);
         break;
+      case 'building_small':
+        mesh = this.createBuilding(pos, rot, obj.params?.width as number || 10, obj.params?.depth as number || 8, obj.params?.height as number || 6);
+        break;
+      case 'building_medium':
+        mesh = this.createBuilding(pos, rot, obj.params?.width as number || 15, obj.params?.depth as number || 12, obj.params?.height as number || 10);
+        break;
+      case 'building_wide':
+        mesh = this.createBuilding(pos, rot, obj.params?.width as number || 20, obj.params?.depth as number || 15, obj.params?.height as number || 8);
+        break;
+      case 'shrub_small':
+        mesh = this.createShrub(pos, 0.5);
+        break;
+      case 'shrub_medium':
+        mesh = this.createShrub(pos, 1.0);
+        break;
+      case 'shrub_large':
+        mesh = this.createShrub(pos, 1.5);
+        break;
+      case 'tree_small':
+        mesh = this.createTree(pos, 3);
+        break;
+      case 'quarter_pipe_small':
+        mesh = this.createQuarterPipeSmall(pos, rot);
+        break;
+      case 'quarter_pipe_med':
+        mesh = this.createQuarterPipeMedium(pos, rot);
+        break;
     }
     
     if (mesh) {
@@ -843,6 +870,215 @@ export class LevelManager {
     const G = Math.min(255, ((num >> 8) & 0x00ff) + amt);
     const B = Math.min(255, (num & 0x0000ff) + amt);
     return `#${(1 << 24 | R << 16 | G << 8 | B).toString(16).slice(1)}`;
+  }
+  
+  // =============================================
+  // STORY LEVEL OBJECTS
+  // =============================================
+  
+  private createBuilding(pos: THREE.Vector3, rot: THREE.Euler, width: number, depth: number, height: number): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Main building body
+    const buildingMat = new THREE.MeshStandardMaterial({
+      color: 0x666677,
+      roughness: 0.8
+    });
+    const bodyGeom = new THREE.BoxGeometry(width, height, depth);
+    const body = new THREE.Mesh(bodyGeom, buildingMat);
+    body.position.y = height / 2;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+    
+    // Windows (decorative)
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: 0x88aacc,
+      emissive: 0x334455,
+      emissiveIntensity: 0.3
+    });
+    const windowSize = 0.8;
+    const windowSpacingX = 3;
+    const windowSpacingY = 2.5;
+    
+    for (let y = 2; y < height - 1; y += windowSpacingY) {
+      for (let x = -width/2 + 2; x < width/2 - 1; x += windowSpacingX) {
+        const windowGeom = new THREE.BoxGeometry(windowSize, windowSize, 0.1);
+        const window = new THREE.Mesh(windowGeom, windowMat);
+        window.position.set(x, y, -depth/2 - 0.05);
+        group.add(window);
+        
+        // Back side too
+        const backWindow = new THREE.Mesh(windowGeom, windowMat);
+        backWindow.position.set(x, y, depth/2 + 0.05);
+        group.add(backWindow);
+      }
+    }
+    
+    group.position.copy(pos);
+    group.rotation.copy(rot);
+    
+    // Physics collider
+    this.physics.createStaticBox(
+      new THREE.Vector3(pos.x, pos.y + height/2, pos.z),
+      new THREE.Vector3(width/2, height/2, depth/2),
+      rot
+    );
+    
+    return group;
+  }
+  
+  private createShrub(pos: THREE.Vector3, size: number): THREE.Object3D {
+    const group = new THREE.Group();
+    
+    const leafMat = new THREE.MeshStandardMaterial({
+      color: 0x228822,
+      roughness: 0.9
+    });
+    
+    // Multiple spheres for bushy look
+    const mainGeom = new THREE.SphereGeometry(size * 0.4, 8, 6);
+    const main = new THREE.Mesh(mainGeom, leafMat);
+    main.position.y = size * 0.4;
+    main.castShadow = true;
+    group.add(main);
+    
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2;
+      const smallGeom = new THREE.SphereGeometry(size * 0.25, 6, 4);
+      const small = new THREE.Mesh(smallGeom, leafMat);
+      small.position.set(
+        Math.cos(angle) * size * 0.25,
+        size * 0.3,
+        Math.sin(angle) * size * 0.25
+      );
+      small.castShadow = true;
+      group.add(small);
+    }
+    
+    group.position.copy(pos);
+    
+    // Simple sphere collider
+    this.physics.createStaticSphere(
+      new THREE.Vector3(pos.x, pos.y + size * 0.4, pos.z),
+      size * 0.4
+    );
+    
+    return group;
+  }
+  
+  private createTree(pos: THREE.Vector3, height: number): THREE.Object3D {
+    const group = new THREE.Group();
+    
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x4a3020,
+      roughness: 0.9
+    });
+    const leafMat = new THREE.MeshStandardMaterial({
+      color: 0x228b22,
+      roughness: 0.8
+    });
+    
+    // Trunk
+    const trunkRadius = height * 0.05;
+    const trunkHeight = height * 0.4;
+    const trunkGeom = new THREE.CylinderGeometry(trunkRadius * 0.7, trunkRadius, trunkHeight, 8);
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = trunkHeight / 2;
+    trunk.castShadow = true;
+    group.add(trunk);
+    
+    // Foliage (cone shape)
+    const foliageRadius = height * 0.3;
+    const foliageHeight = height * 0.7;
+    const foliageGeom = new THREE.ConeGeometry(foliageRadius, foliageHeight, 8);
+    const foliage = new THREE.Mesh(foliageGeom, leafMat);
+    foliage.position.y = trunkHeight + foliageHeight / 2 - 0.5;
+    foliage.castShadow = true;
+    group.add(foliage);
+    
+    group.position.copy(pos);
+    
+    // Trunk collider
+    this.physics.createStaticCylinder(
+      new THREE.Vector3(pos.x, pos.y + trunkHeight / 2, pos.z),
+      trunkHeight / 2,
+      trunkRadius
+    );
+    
+    return group;
+  }
+  
+  private createQuarterPipeSmall(pos: THREE.Vector3, rot: THREE.Euler): THREE.Object3D {
+    const mat = this.materials.get('concrete')!;
+    
+    // Smaller quarter pipe
+    const shape = new THREE.Shape();
+    const radius = 2;
+    const width = 6;
+    const segments = 12;
+    
+    shape.moveTo(0, 0);
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI / 2;
+      shape.lineTo(radius - Math.cos(angle) * radius, Math.sin(angle) * radius);
+    }
+    shape.lineTo(radius, 0);
+    shape.lineTo(0, 0);
+    
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      steps: 1,
+      depth: width,
+      bevelEnabled: false
+    });
+    
+    const mesh = new THREE.Mesh(geometry, mat);
+    mesh.position.copy(pos);
+    mesh.position.x -= width / 2;
+    mesh.rotation.copy(rot);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    
+    // Physics
+    this.physics.createQuarterPipeCollider(pos, radius, width, segments, rot);
+    
+    return mesh;
+  }
+  
+  private createQuarterPipeMedium(pos: THREE.Vector3, rot: THREE.Euler): THREE.Object3D {
+    const mat = this.materials.get('concrete')!;
+    
+    // Medium quarter pipe
+    const shape = new THREE.Shape();
+    const radius = 3;
+    const width = 8;
+    const segments = 14;
+    
+    shape.moveTo(0, 0);
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI / 2;
+      shape.lineTo(radius - Math.cos(angle) * radius, Math.sin(angle) * radius);
+    }
+    shape.lineTo(radius, 0);
+    shape.lineTo(0, 0);
+    
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      steps: 1,
+      depth: width,
+      bevelEnabled: false
+    });
+    
+    const mesh = new THREE.Mesh(geometry, mat);
+    mesh.position.copy(pos);
+    mesh.position.x -= width / 2;
+    mesh.rotation.copy(rot);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    
+    // Physics
+    this.physics.createQuarterPipeCollider(pos, radius, width, segments, rot);
+    
+    return mesh;
   }
   
   // =============================================
