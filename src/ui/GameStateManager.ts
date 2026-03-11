@@ -626,25 +626,65 @@ export class GameStateManager {
             />
           </div>
           
-          <!-- Press to start - black text with white outline -->
+          <!-- Funny subtitle -->
           <div style="
-            margin-top: 4vh;
-            font-size: clamp(16px, 3.5vw, 24px);
-            font-weight: 600;
-            color: #000000;
+            margin-top: 1vh;
+            font-size: clamp(13px, 2.5vw, 18px);
+            font-weight: 500;
+            color: #FFD700;
+            font-family: 'Kanit', sans-serif;
+            letter-spacing: 2px;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+            opacity: 0.95;
+          ">Escape the SEC on an office chair 🪑💨</div>
+
+          <!-- STORY MODE + FREE SKATE buttons -->
+          <div style="
+            margin-top: 3vh;
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            justify-content: center;
+          ">
+            <button id="title-story-btn" style="
+              padding: 14px 32px;
+              font-size: clamp(15px, 2.5vw, 20px);
+              font-weight: bold;
+              font-family: 'Kanit', sans-serif;
+              color: #000;
+              background: #00FF88;
+              border: 3px solid #00cc66;
+              border-radius: 8px;
+              cursor: pointer;
+              letter-spacing: 2px;
+              box-shadow: 0 4px 16px rgba(0,255,136,0.4);
+              transition: all 0.15s;
+            ">📖 STORY MODE</button>
+            <button id="title-freeskate-btn" style="
+              padding: 14px 32px;
+              font-size: clamp(15px, 2.5vw, 20px);
+              font-weight: bold;
+              font-family: 'Kanit', sans-serif;
+              color: #fff;
+              background: rgba(60,60,90,0.9);
+              border: 3px solid #6666aa;
+              border-radius: 8px;
+              cursor: pointer;
+              letter-spacing: 2px;
+              transition: all 0.15s;
+            ">🛹 FREE SKATE</button>
+          </div>
+
+          <!-- Press to start - smaller, below buttons -->
+          <div style="
+            margin-top: 2.5vh;
+            font-size: clamp(12px, 2vw, 16px);
+            font-weight: 500;
+            color: rgba(255,255,255,0.55);
             animation: blink 1.2s infinite;
             font-family: 'Kanit', sans-serif;
-            letter-spacing: 3px;
-            text-shadow: 
-              -2px -2px 0 #fff,
-              2px -2px 0 #fff,
-              -2px 2px 0 #fff,
-              2px 2px 0 #fff,
-              0 -2px 0 #fff,
-              0 2px 0 #fff,
-              -2px 0 0 #fff,
-              2px 0 0 #fff;
-          ">PRESS SPACE TO START</div>
+            letter-spacing: 2px;
+          ">— or press SPACE to start —</div>
           
           <!-- Copyright -->
           <div style="
@@ -692,6 +732,40 @@ export class GameStateManager {
     
     // Set up random glitch effect for the logotype
     this.setupLogoGlitch();
+
+    // Wire up title-screen buttons
+    const storyBtn = document.getElementById('title-story-btn');
+    const freeskateBtn = document.getElementById('title-freeskate-btn');
+
+    if (storyBtn) {
+      storyBtn.addEventListener('mouseenter', () => {
+        storyBtn.style.background = '#00FF88';
+        storyBtn.style.transform = 'scale(1.05)';
+        storyBtn.style.boxShadow = '0 6px 24px rgba(0,255,136,0.6)';
+      });
+      storyBtn.addEventListener('mouseleave', () => {
+        storyBtn.style.background = '#00FF88';
+        storyBtn.style.transform = 'scale(1)';
+        storyBtn.style.boxShadow = '0 4px 16px rgba(0,255,136,0.4)';
+      });
+      storyBtn.addEventListener('click', () => {
+        this.setState('story_select');
+      });
+    }
+
+    if (freeskateBtn) {
+      freeskateBtn.addEventListener('mouseenter', () => {
+        freeskateBtn.style.background = 'rgba(100,100,150,0.9)';
+        freeskateBtn.style.transform = 'scale(1.05)';
+      });
+      freeskateBtn.addEventListener('mouseleave', () => {
+        freeskateBtn.style.background = 'rgba(60,60,90,0.9)';
+        freeskateBtn.style.transform = 'scale(1)';
+      });
+      freeskateBtn.addEventListener('click', () => {
+        this.setState('level_select');
+      });
+    }
   }
   
   private setupLogoGlitch(): void {

@@ -257,6 +257,62 @@ export class ProceduralSounds {
   }
   
   /**
+   * Play cha-ching sound - cash register hit on trick land
+   * The satisfying reward sound for banking stonks!
+   */
+  playChaChing(score: number = 1000): void {
+    if (!this.audioContext || !this.masterGain) return;
+
+    // Scale pitch and intensity with score (bigger combo = richer sound)
+    const normalizedScore = Math.max(0, Math.min(1, score / 20000));
+    const pitchBase = 900 + normalizedScore * 400; // 900–1300 Hz
+
+    // "Ching" — bright metallic ping
+    const ching = this.audioContext.createOscillator();
+    const chingGain = this.audioContext.createGain();
+    ching.type = 'triangle';
+    ching.frequency.setValueAtTime(pitchBase * 1.5, this.audioContext.currentTime);
+    ching.frequency.exponentialRampToValueAtTime(pitchBase * 2.2, this.audioContext.currentTime + 0.04);
+    ching.frequency.exponentialRampToValueAtTime(pitchBase * 0.9, this.audioContext.currentTime + 0.25);
+    chingGain.gain.setValueAtTime(0, this.audioContext.currentTime);
+    chingGain.gain.linearRampToValueAtTime(0.22, this.audioContext.currentTime + 0.02);
+    chingGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.45);
+    ching.connect(chingGain);
+    chingGain.connect(this.masterGain);
+    ching.start();
+    ching.stop(this.audioContext.currentTime + 0.45);
+
+    // "Cha" — low register thunk
+    const cha = this.audioContext.createOscillator();
+    const chaGain = this.audioContext.createGain();
+    cha.type = 'sine';
+    cha.frequency.setValueAtTime(200, this.audioContext.currentTime);
+    cha.frequency.exponentialRampToValueAtTime(80, this.audioContext.currentTime + 0.08);
+    chaGain.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+    chaGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.15);
+    cha.connect(chaGain);
+    chaGain.connect(this.masterGain);
+    cha.start();
+    cha.stop(this.audioContext.currentTime + 0.15);
+
+    // Extra sparkle for big scores (>5000)
+    if (score > 5000) {
+      const sparkle = this.audioContext.createOscillator();
+      const sparkleGain = this.audioContext.createGain();
+      sparkle.type = 'sine';
+      sparkle.frequency.setValueAtTime(pitchBase * 3, this.audioContext.currentTime + 0.06);
+      sparkle.frequency.exponentialRampToValueAtTime(pitchBase * 4.5, this.audioContext.currentTime + 0.12);
+      sparkleGain.gain.setValueAtTime(0, this.audioContext.currentTime + 0.06);
+      sparkleGain.gain.linearRampToValueAtTime(0.12, this.audioContext.currentTime + 0.09);
+      sparkleGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.3);
+      sparkle.connect(sparkleGain);
+      sparkleGain.connect(this.masterGain);
+      sparkle.start(this.audioContext.currentTime + 0.06);
+      sparkle.stop(this.audioContext.currentTime + 0.3);
+    }
+  }
+
+  /**
    * Play combo landed sound - ascending arpeggio
    */
   playComboLanded(multiplier: number): void {

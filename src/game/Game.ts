@@ -320,6 +320,7 @@ export class Game {
         
         // Play sounds based on combo events
         if (event.type === 'combo_landed' && event.totalScore) {
+          proceduralSounds.playChaChing(event.totalScore);  // 💰 cha-ching!
           proceduralSounds.playComboLanded(state.multiplier);
           // Impact zoom pulse on big landings (>5000 points)
           this.cameraController.impactZoomPulse(event.totalScore);
@@ -2820,13 +2821,18 @@ export class Game {
     const signMat = new THREE.MeshStandardMaterial({
       color: 0x00ff44,
       emissive: 0x00cc33,
-      emissiveIntensity: 2.0,
+      emissiveIntensity: 3.0,
       roughness: 0.2
     });
     const signGeom = new THREE.BoxGeometry(width - 0.1, height - 0.08, 0.04);
     const sign = new THREE.Mesh(signGeom, signMat);
     sign.position.z = 0.03;
     group.add(sign);
+
+    // Point light so the sign illuminates the surrounding area
+    const signLight = new THREE.PointLight(0x00ff66, 2.0, 6);
+    signLight.position.set(0, 0, 0.3);
+    group.add(signLight);
 
     return group;
   }
@@ -3055,6 +3061,9 @@ export class Game {
     
     // Update speed lines effect (radial blur at high speeds)
     this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);
+
+    // Update speed stock-chart HUD
+    this.hud?.setSpeed(currentSpeed);
     
     // Update dynamic FOV based on speed (wider FOV at high speeds)
     this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
@@ -3473,7 +3482,7 @@ export class Game {
     // THPS-style physics - snappy and responsive
     // Apply upgrade multipliers from story mode
     const accelSpeed = 0.4 * this.speedMultiplier;      // W/S - velocity boost per frame
-    const jumpImpulse = 8 * this.jumpMultiplier;        // Space - ollie
+    const jumpImpulse = 10 * this.jumpMultiplier;        // Space - ollie (snappy)
     const spinTorque = 6 * this.spinMultiplier;         // Q/E - spin in air
     const maxSpeed = 18 * this.speedMultiplier;         // Cap forward speed
     

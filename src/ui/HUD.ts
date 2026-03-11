@@ -29,7 +29,9 @@ export class HUD {
   private balanceArrow!: HTMLElement;
   private controlsHint!: HTMLElement;
   private spinCounterElement!: HTMLElement;
-  
+  private speedChartElement!: HTMLElement;
+  private speedBars: HTMLElement[] = [];
+
   private currentScore = 0;
   private displayedScore = 0;
   private specialAmount = 0;
@@ -59,16 +61,68 @@ export class HUD {
       
       .hud-score {
         position: absolute;
-        top: 20px;
+        top: 16px;
         right: 20px;
-        font-size: 48px;
+        font-size: 56px;
         text-align: right;
+        background: rgba(0,0,0,0.55);
+        border: 2px solid #00FF88;
+        border-radius: 10px;
+        padding: 8px 18px 6px;
+        min-width: 220px;
       }
       
       .hud-score-label {
-        font-size: 16px;
+        font-size: 14px;
+        color: #00FF88;
+        letter-spacing: 3px;
+        font-weight: 700;
+      }
+
+      .hud-score-value {
+        color: #00FF88;
+        font-weight: 900;
+        letter-spacing: 1px;
+        transition: transform 0.1s ease-out;
+      }
+
+      .hud-score-value.negative {
+        color: #FF4444;
+      }
+
+      /* Speed stock chart */
+      .hud-speed-chart {
+        position: absolute;
+        bottom: 60px;
+        right: 20px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        pointer-events: none;
+      }
+
+      .hud-speed-label {
+        font-size: 11px;
         color: #00FF88;
         letter-spacing: 2px;
+        font-weight: 700;
+        opacity: 0.9;
+      }
+
+      .hud-speed-bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 28px;
+      }
+
+      .hud-speed-bar {
+        width: 6px;
+        border-radius: 2px 2px 0 0;
+        background: #00FF88;
+        transition: height 0.15s ease-out, background 0.2s;
+        min-height: 2px;
       }
       
       .hud-combo {
@@ -79,6 +133,11 @@ export class HUD {
         text-align: center;
         opacity: 0;
         transition: opacity 0.2s;
+        background: rgba(0,0,0,0.6);
+        border: 2px solid rgba(255,215,0,0.4);
+        border-radius: 12px;
+        padding: 10px 22px 8px;
+        backdrop-filter: blur(4px);
       }
       
       .hud-combo.active {
@@ -86,18 +145,23 @@ export class HUD {
       }
       
       .hud-combo-tricks {
-        font-size: 24px;
+        font-size: 22px;
         color: #FFD700;
       }
       
       .hud-combo-score {
-        font-size: 36px;
+        font-size: 42px;
+        font-weight: 900;
+        color: #ffffff;
+        text-shadow: 0 0 16px rgba(255,255,255,0.5);
       }
       
       .hud-combo-multiplier {
-        font-size: 28px;
+        font-size: 32px;
+        font-weight: 700;
         color: #00FF88;
         transition: transform 0.15s ease-out;
+        text-shadow: 0 0 12px rgba(0,255,136,0.6);
       }
       
       .hud-combo-multiplier.pulse {
@@ -356,14 +420,34 @@ export class HUD {
     title.textContent = 'TONY STONKS';
     hud.appendChild(title);
     
-    // Stonks counter
+    // Stonks counter — prominent with $ sign
     this.scoreElement = document.createElement('div');
     this.scoreElement.className = 'hud-score';
     this.scoreElement.innerHTML = `
       <div class="hud-score-label">📈 STONKS</div>
-      <div class="hud-score-value">0</div>
+      <div class="hud-score-value">$0</div>
     `;
     hud.appendChild(this.scoreElement);
+
+    // Speed stock chart (bottom-right, above special meter)
+    this.speedChartElement = document.createElement('div');
+    this.speedChartElement.className = 'hud-speed-chart';
+    const barsContainer = document.createElement('div');
+    barsContainer.className = 'hud-speed-bars';
+    const numBars = 12;
+    for (let i = 0; i < numBars; i++) {
+      const bar = document.createElement('div');
+      bar.className = 'hud-speed-bar';
+      bar.style.height = '2px';
+      barsContainer.appendChild(bar);
+      this.speedBars.push(bar);
+    }
+    const speedLabel = document.createElement('div');
+    speedLabel.className = 'hud-speed-label';
+    speedLabel.textContent = '⚡ SPEED';
+    this.speedChartElement.appendChild(speedLabel);
+    this.speedChartElement.appendChild(barsContainer);
+    hud.appendChild(this.speedChartElement);
     
     // Combo display
     this.comboElement = document.createElement('div');
@@ -451,6 +535,42 @@ export class HUD {
   setScore(score: number): void {
     this.currentScore = score;
   }
+
+  /**
+   * Update speed stock-chart indicator
+   * @param speed - current speed (0–20 typical)
+   */
+  setSpeed(speed: number): void {
+    const maxSpeed = 20;
+    const numBars = this.speedBars.length;
+
+    // Shift history left and append current reading
+    // We track the last N speed values (one per bar)
+    const normalized = Math.min(1, speed / maxSpeed);
+    const maxBarH = 28;
+
+    // Simple: each bar independently represents current speed
+    // For a "stock chart" feel, we keep a rolling history
+    if (!this._speedHistory) this._speedHistory = new Array(numBars).fill(0);
+    this._speedHistory.push(normalized);
+    if (this._speedHistory.length > numBars) this._speedHistory.shift();
+
+    for (let i = 0; i < numBars; i++) {
+      const val = this._speedHistory[i] ?? 0;
+      const h = Math.max(2, Math.round(val * maxBarH));
+      const bar = this.speedBars[i];
+      bar.style.height = h + 'px';
+      // Color: green when climbing, yellow when high, red at max
+      if (val < 0.5) {
+        bar.style.background = '#00FF88';
+      } else if (val < 0.8) {
+        bar.style.background = '#FFD700';
+      } else {
+        bar.style.background = '#FF4444';
+      }
+    }
+  }
+  private _speedHistory?: number[];
   
   /**
    * Update displayed score (called each frame for smooth counting)
@@ -472,7 +592,7 @@ export class HUD {
       
       const scoreValue = this.scoreElement.querySelector('.hud-score-value') as HTMLElement;
       if (scoreValue) {
-        scoreValue.textContent = this.displayedScore.toLocaleString();
+        scoreValue.textContent = '$' + this.displayedScore.toLocaleString();
         
         // Add subtle scale pop when score is actively counting up big numbers
         if (diff > 100 && this.displayedScore !== prevScore) {
@@ -647,10 +767,12 @@ export class HUD {
     this.currentScore = 0;
     this.displayedScore = 0;
     this.specialAmount = 0;
+    this._speedHistory = new Array(this.speedBars.length).fill(0);
+    this.speedBars.forEach(b => { b.style.height = '2px'; b.style.background = '#00FF88'; });
     
     const scoreValue = this.scoreElement.querySelector('.hud-score-value');
     if (scoreValue) {
-      scoreValue.textContent = '0';
+      scoreValue.textContent = '$0';
     }
     
     this.specialFill.style.width = '0%';

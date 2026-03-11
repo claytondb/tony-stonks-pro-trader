@@ -163,6 +163,12 @@ const LEVEL_1_OFFICE: StoryLevelData = {
     { type: 'planter', position: [0, 0, 35] },
     
     // =============================================
+    // WELCOME RAMP — right in front of spawn for instant fun
+    // Spawn is at x=-28, z=-30 facing east (+x direction)
+    // =============================================
+    { type: 'ramp', position: [-18, 0, -30], rotation: [0, -90, 0] },  // Face player at spawn
+    
+    // =============================================
     // SKATE OBSTACLES IN CENTER AISLE
     // =============================================
     
@@ -209,9 +215,9 @@ const LEVEL_1_OFFICE: StoryLevelData = {
   
   introDialogue: [
     '📰 BREAKING NEWS: SEC RAIDS STONKS CAPITAL!',
-    'SEC AGENT: Tony Stonks, you\'re under arrest for... creative accounting!',
-    'TONY: Not today! *jumps on office chair*',
-    'TONY: Time to see if all those YouTube skating videos paid off!'
+    'SEC AGENT: Freeze! Tony Stonks, you\'re under arrest for market manipulation!',
+    'TONY: Not today! *jumps on office chair* YOLO! 🚀',
+    '🎯 OBJECTIVE: Escape the office!'
   ],
   
   outroDialogue: [
