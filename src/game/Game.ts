@@ -25,6 +25,7 @@ import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } fro
 import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
 import { ChaseHUD } from '../ui/ChaseHUD';
 import { DialogueBox } from '../ui/DialogueBox';
+import { NPCOfficer } from '../npc/NPCOfficer';
 
 export class Game {
   // Core
@@ -46,6 +47,7 @@ export class Game {
   onDialogueEnd?: () => void;
   onCheckpointReached?: (checkpointIndex: number, checkpointName: string) => void;
   onChaseStateChange?: (state: ChaseState) => void;
+  onOfficerCaught?: () => void;
   
   // Story systems
   private chaseMechanic!: ChaseMechanic;
@@ -106,6 +108,10 @@ export class Game {
   // Pre-loaded GLB models for level objects
   private modelCache: Map<string, THREE.Object3D> = new Map();
   private gltfLoader!: GLTFLoader;
+  
+  // NPC officers
+  private npcOfficers: NPCOfficer[] = [];
+  private officerCaughtCooldown = 0;  // Prevent rapid caught events (seconds)
   
   // Player state
   private playerState: PlayerTrickState = {
@@ -1344,6 +1350,9 @@ export class Game {
       this.chaseHUD?.hide();
     }
     
+    // Spawn NPC officers for story levels that have them defined
+    this.spawnLevelNPCs(level.id);
+    
     // Show intro dialogue after a short delay
     if (level.introDialogue && level.introDialogue.length > 0) {
       setTimeout(() => {
@@ -1505,6 +1514,165 @@ export class Game {
     
     // Clear physics colliders from previous level
     this.physics.clearStaticBodies();
+    
+    // Dispose and remove NPC officers
+    this.clearNPCOfficers();
+  }
+  
+  /**
+   * Remove all NPC officers from scene
+   */
+  private clearNPCOfficers(): void {
+    for (const officer of this.npcOfficers) {
+      this.scene.remove(officer.getGroup());
+      officer.dispose();
+    }
+    this.npcOfficers = [];
+    this.officerCaughtCooldown = 0;
+  }
+  
+  /**
+   * Spawn NPC officers for a given level ID
+   */
+  private spawnLevelNPCs(levelId: string): void {
+    // Only spawn for levels that need them
+    if (levelId === 'story_1_office') {
+      this.spawnOfficeOfficers();
+    } else if (levelId === 'story_6_forest' || levelId === 'story_9_finale') {
+      // Forest/finale chase levels: add officers to supplement the abstract chase mechanic
+      this.spawnChaseOfficers();
+    }
+  }
+  
+  /**
+   * Spawn 4 officers patrolling the office level (ch1_office)
+   * Officers patrol between cubicle rows; switch to chase when player within 15 units
+   */
+  private spawnOfficeOfficers(): void {
+    const officerConfigs = [
+      {
+        position: new THREE.Vector3(-25, 0, -10),
+        patrolPoints: [
+          new THREE.Vector3(-25, 0, -30),
+          new THREE.Vector3(-25, 0, 5),
+        ],
+      },
+      {
+        position: new THREE.Vector3(25, 0, -15),
+        patrolPoints: [
+          new THREE.Vector3(25, 0, -30),
+          new THREE.Vector3(25, 0, 5),
+        ],
+      },
+      {
+        position: new THREE.Vector3(0, 0, -25),
+        patrolPoints: [
+          new THREE.Vector3(-15, 0, -25),
+          new THREE.Vector3(15, 0, -25),
+        ],
+      },
+      {
+        position: new THREE.Vector3(0, 0, 5),
+        patrolPoints: [
+          new THREE.Vector3(-10, 0, 5),
+          new THREE.Vector3(10, 0, 5),
+        ],
+      },
+    ];
+    
+    for (const cfg of officerConfigs) {
+      const officer = new NPCOfficer(
+        {
+          position: cfg.position,
+          patrolPoints: cfg.patrolPoints,
+          detectionRange: 15,
+          chaseRange: 25,
+          catchRange: 2,
+          walkSpeed: 3,
+          runSpeed: 6,
+        },
+        {
+          onCaught: () => this.handleOfficerCaught(),
+        }
+      );
+      
+      this.npcOfficers.push(officer);
+      
+      // Load async — add to scene when ready
+      officer.load(this.gltfLoader).then((group) => {
+        this.scene.add(group);
+        console.log('[Game] NPC officer spawned at', cfg.position);
+      }).catch((err) => {
+        console.warn('[Game] Failed to load NPC officer model:', err);
+      });
+    }
+  }
+  
+  /**
+   * Spawn officers for chase levels (visual pursuers)
+   */
+  private spawnChaseOfficers(): void {
+    const spawnPos = this.currentStoryLevel?.spawnPoint.position;
+    if (!spawnPos) return;
+    
+    const base = new THREE.Vector3(spawnPos[0] - 10, 0, spawnPos[2]);
+    
+    for (let i = 0; i < 2; i++) {
+      const offset = new THREE.Vector3((i - 0.5) * 4, 0, 0);
+      const officer = new NPCOfficer(
+        {
+          position: base.clone().add(offset),
+          detectionRange: 999,   // Always chasing
+          chaseRange: 999,
+          catchRange: 2,
+          walkSpeed: 4,
+          runSpeed: 8,
+        },
+        {
+          onCaught: () => this.handleOfficerCaught(),
+        }
+      );
+      
+      officer.startChase();
+      this.npcOfficers.push(officer);
+      
+      officer.load(this.gltfLoader).then((group) => {
+        this.scene.add(group);
+        console.log('[Game] Chase NPC officer spawned');
+      }).catch((err) => {
+        console.warn('[Game] Failed to load chase NPC officer:', err);
+      });
+    }
+  }
+  
+  /**
+   * Handle the "caught" event from an NPC officer
+   */
+  private handleOfficerCaught(): void {
+    // Cooldown to avoid rapid re-triggering
+    if (this.officerCaughtCooldown > 0) return;
+    this.officerCaughtCooldown = 3; // 3 second cooldown
+    
+    console.log('[Game] Player caught by officer NPC!');
+    this.onOfficerCaught?.();
+    
+    // Camera shake for impact
+    this.cameraController.shake(1.2, 0.5);
+    
+    // Deduct score penalty
+    const penalty = 500;
+    this.totalStonks = Math.max(0, this.totalStonks - penalty);
+    this.hud?.setScore(Math.floor(this.totalStonks));
+    
+    // Show brief dialogue
+    if (this.dialogueBox) {
+      this.dialogueBox.show(['SEC OFFICER: Gotcha! ...wait, he\'s still going?!']);
+    }
+    
+    // Restore from checkpoint if available, else keep going (non-fatal)
+    if (this.lastCheckpointIndex >= 0 && this.checkpointPosition) {
+      this.restoreCheckpoint();
+    }
   }
   
   /**
@@ -2945,6 +3113,19 @@ export class Game {
       // Update chase HUD
       if (this.chaseHUD) {
         this.chaseHUD.update(this.chaseMechanic.getState());
+      }
+    }
+    
+    // Update NPC officers
+    if (this.npcOfficers.length > 0) {
+      // Tick caught cooldown
+      if (this.officerCaughtCooldown > 0) {
+        this.officerCaughtCooldown -= dt;
+      }
+      
+      const playerPos = this.chair.position;
+      for (const officer of this.npcOfficers) {
+        officer.update(dt, playerPos);
       }
     }
   }
