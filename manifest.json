@@ -1,0 +1,19 @@
+{
+  "name": "Tony Stonks Pro Trader",
+  "short_name": "Tony Stonks",
+  "description": "Tony Hawk-style office chair skating game",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#2D2D2D",
+  "theme_color": "#00FF88",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
