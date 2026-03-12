@@ -9,24 +9,24 @@ export class CameraController {
   private camera: THREE.PerspectiveCamera;
   private target: THREE.Object3D | null = null;
   
-  // Camera settings
-  private offset = new THREE.Vector3(0, 3, -5);  // Closer and lower
-  private lookAhead = 1.5;
-  private smoothSpeed = 5;
-  private rotationSmooth = 3;
+  // Camera settings — THPS-style: close, low, snappy
+  private offset = new THREE.Vector3(0, 2.2, -4.2);  // Closer and lower like THPS
+  private lookAhead = 1.0;
+  private smoothSpeed = 18;       // Was 5 — much snappier position tracking
+  private rotationSmooth = 14;    // Was 3 — snappy rotation follow
   
   // Dynamic FOV settings
-  private baseFOV = 75;      // Default FOV when stationary
-  private maxFOV = 90;       // FOV at max speed
-  private currentFOV = 75;
-  private targetFOV = 75;
-  private fovSmoothSpeed = 4;  // How fast FOV transitions
+  private baseFOV = 80;      // Slightly wider than before for speed feel
+  private maxFOV = 95;       // FOV at max speed
+  private currentFOV = 80;
+  private targetFOV = 80;
+  private fovSmoothSpeed = 6;  // Faster FOV transitions
   
   // Trick zoom settings (zoom out during air time for better visibility)
-  private trickZoomAmount = 0.15;   // How much to zoom out (0-1, where 1 = full offset change)
-  private targetZoomMultiplier = 1; // Current target zoom (1 = normal, >1 = zoomed out)
+  private trickZoomAmount = 0.10;   // Subtler zoom during tricks
+  private targetZoomMultiplier = 1;
   private currentZoomMultiplier = 1;
-  private zoomSmoothSpeed = 6;      // How fast zoom transitions
+  private zoomSmoothSpeed = 10;     // Snappier zoom transitions
   
   // Current state
   private currentOffset = new THREE.Vector3();
@@ -46,10 +46,10 @@ export class CameraController {
   private targetOrbitY = 0;
   private lastMouseX = 0;
   private lastMouseY = 0;
-  private orbitSensitivity = 0.005;
-  private orbitReturnSpeed = 2;  // Speed to return to default view
-  private maxOrbitY = Math.PI / 3;  // Limit vertical rotation
-  private minOrbitY = -Math.PI / 6;
+  private orbitSensitivity = 0.004;
+  private orbitReturnSpeed = 4;  // Faster snap back to default view
+  private maxOrbitY = Math.PI / 4;  // Tighter vertical limit like THPS
+  private minOrbitY = -Math.PI / 8;
   
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
@@ -229,8 +229,8 @@ export class CameraController {
    * Zoom in/out
    */
   setZoom(zoom: number): void {
-    this.offset.z = -8 * zoom;
-    this.offset.y = 4 * zoom;
+    this.offset.z = -4.2 * zoom;
+    this.offset.y = 2.2 * zoom;
   }
   
   /**
