@@ -45,9 +45,11 @@ export type ObjectType =
   | 'wall_indoor'
   | 'ceiling_slab'
   | 'ceiling_panel'
+  | 'fluorescent_light'
   | 'filing_cabinet'
   | 'printer'
-  | 'exit_sign';
+  | 'exit_sign'
+  | 'building_large';
 
 export interface LevelObject {
   type: ObjectType;
