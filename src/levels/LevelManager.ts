@@ -271,6 +271,25 @@ export class LevelManager {
       case 'quarter_pipe_med':
         mesh = this.createQuarterPipeMedium(pos, rot);
         break;
+      case 'wall_indoor':
+        mesh = this.createWallIndoor(pos, rot, obj.params);
+        break;
+      case 'ceiling_slab':
+        mesh = this.createCeilingSlab(pos, rot, obj.params);
+        break;
+      case 'ceiling_panel':
+      case 'fluorescent_light':
+        mesh = this.createCeilingPanel(pos, rot, obj.params);
+        break;
+      case 'filing_cabinet':
+        mesh = this.createFilingCabinet(pos, rot);
+        break;
+      case 'printer':
+        mesh = this.createPrinter(pos, rot);
+        break;
+      case 'exit_sign':
+        mesh = this.createExitSign(pos, rot, obj.params);
+        break;
     }
     
     if (mesh) {
@@ -560,47 +579,101 @@ export class LevelManager {
   private createCubicle(pos: THREE.Vector3, rot: THREE.Euler, params?: Record<string, unknown>): THREE.Group {
     const width = (params?.width as number) || 3;
     const depth = (params?.depth as number) || 3;
-    const height = 1.5;
-    
+    const height = (params?.height as number) || 1.5;
+    const wallThickness = 0.12;  // Thick enough to look solid
+
     const group = new THREE.Group();
-    const wallMat = this.materials.get('office')!;
+
+    // Fabric-covered cubicle panel material (dark teal/charcoal)
+    const fabricMat = new THREE.MeshStandardMaterial({
+      color: 0x2d4a4a,   // Dark teal fabric
+      roughness: 0.95,
+      metalness: 0.0
+    });
+    // Frame trim material (charcoal aluminum)
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: 0x444444,
+      roughness: 0.5,
+      metalness: 0.4
+    });
     const deskMat = this.materials.get('wood')!;
-    
-    // Walls (3 sides)
-    const wallGeom = new THREE.BoxGeometry(width, height, 0.05);
-    const backWall = new THREE.Mesh(wallGeom, wallMat);
+
+    // ── Back wall ──
+    const backWallGeom = new THREE.BoxGeometry(width, height, wallThickness);
+    const backWall = new THREE.Mesh(backWallGeom, fabricMat);
     backWall.position.set(0, height / 2, depth / 2);
     backWall.castShadow = true;
+    backWall.receiveShadow = true;
     group.add(backWall);
-    
-    const sideWallGeom = new THREE.BoxGeometry(0.05, height, depth);
+
+    // Back wall top trim
+    const backTrimGeom = new THREE.BoxGeometry(width + 0.05, 0.06, wallThickness + 0.04);
+    const backTrim = new THREE.Mesh(backTrimGeom, frameMat);
+    backTrim.position.set(0, height + 0.03, depth / 2);
+    group.add(backTrim);
+
+    // ── Side walls ──
+    const sideWallGeom = new THREE.BoxGeometry(wallThickness, height, depth);
     for (const side of [-1, 1]) {
-      const sideWall = new THREE.Mesh(sideWallGeom, wallMat);
+      const sideWall = new THREE.Mesh(sideWallGeom, fabricMat);
       sideWall.position.set(side * width / 2, height / 2, 0);
       sideWall.castShadow = true;
+      sideWall.receiveShadow = true;
       group.add(sideWall);
+
+      // Side wall top trim
+      const sideTrimGeom = new THREE.BoxGeometry(wallThickness + 0.04, 0.06, depth + 0.05);
+      const sideTrim = new THREE.Mesh(sideTrimGeom, frameMat);
+      sideTrim.position.set(side * width / 2, height + 0.03, 0);
+      group.add(sideTrim);
     }
-    
-    // Desk
-    const deskGeom = new THREE.BoxGeometry(width * 0.8, 0.05, depth * 0.4);
+
+    // ── Desk surface ──
+    const deskHeight = 0.75;
+    const deskGeom = new THREE.BoxGeometry(width - wallThickness * 2, 0.05, depth * 0.45);
     const desk = new THREE.Mesh(deskGeom, deskMat);
-    desk.position.set(0, 0.75, depth * 0.2);
+    desk.position.set(0, deskHeight, depth * 0.2);
     desk.castShadow = true;
     group.add(desk);
-    
+
+    // Desk support panel
+    const deskSupportGeom = new THREE.BoxGeometry(width - wallThickness * 2, deskHeight, 0.04);
+    const deskSupportMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.7 });
+    const deskSupport = new THREE.Mesh(deskSupportGeom, deskSupportMat);
+    deskSupport.position.set(0, deskHeight / 2, depth * 0.42);
+    group.add(deskSupport);
+
+    // ── Simple monitor on desk ──
+    const monitorBaseMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7 });
+    const screenMat = new THREE.MeshStandardMaterial({
+      color: 0x1a3a6a,
+      emissive: 0x0a1a3a,
+      emissiveIntensity: 0.4,
+      roughness: 0.3
+    });
+    const monitorStandGeom = new THREE.BoxGeometry(0.08, 0.28, 0.08);
+    const monitorStand = new THREE.Mesh(monitorStandGeom, monitorBaseMat);
+    monitorStand.position.set(0, deskHeight + 0.14, depth * 0.08);
+    group.add(monitorStand);
+    const monitorScreenGeom = new THREE.BoxGeometry(0.55, 0.38, 0.06);
+    const monitorScreen = new THREE.Mesh(monitorScreenGeom, screenMat);
+    monitorScreen.position.set(0, deskHeight + 0.47, depth * 0.08);
+    monitorScreen.castShadow = true;
+    group.add(monitorScreen);
+
     group.position.copy(pos);
     group.rotation.copy(rot);
-    
-    // Compound collider matching all parts
+
+    // ── Physics ──
     const compoundBody = this.physics.createCompoundBody(pos, rot);
-    // Back wall: BoxGeometry(width, height, 0.05) at (0, height/2, depth/2)
-    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, height / 2, depth / 2), new THREE.Vector3(width / 2, height / 2, 0.025));
-    // Side walls: BoxGeometry(0.05, height, depth) at (±width/2, height/2, 0)
-    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(-width / 2, height / 2, 0), new THREE.Vector3(0.025, height / 2, depth / 2));
-    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(width / 2, height / 2, 0), new THREE.Vector3(0.025, height / 2, depth / 2));
-    // Desk: BoxGeometry(width * 0.8, 0.05, depth * 0.4) at (0, 0.75, depth * 0.2)
-    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, 0.75, depth * 0.2), new THREE.Vector3(width * 0.4, 0.025, depth * 0.2));
-    
+    // Back wall
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, height / 2, depth / 2), new THREE.Vector3(width / 2, height / 2, wallThickness / 2));
+    // Side walls
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(-width / 2, height / 2, 0), new THREE.Vector3(wallThickness / 2, height / 2, depth / 2));
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(width / 2, height / 2, 0), new THREE.Vector3(wallThickness / 2, height / 2, depth / 2));
+    // Desk
+    this.physics.addBoxCollider(compoundBody, new THREE.Vector3(0, deskHeight, depth * 0.2), new THREE.Vector3((width - wallThickness * 2) / 2, 0.025, depth * 0.225));
+
     return group;
   }
   
@@ -837,6 +910,286 @@ export class LevelManager {
     return group;
   }
   
+  // =============================================
+  // OFFICE / INDOOR OBJECT CREATORS
+  // =============================================
+
+  private createWallIndoor(pos: THREE.Vector3, rot: THREE.Euler, params?: Record<string, unknown>): THREE.Group {
+    const width = (params?.width as number) || 10;
+    const height = (params?.height as number) || 8;
+    const depth = (params?.depth as number) || 1;
+
+    const group = new THREE.Group();
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0xd4cfc6,   // Off-white/cream office wall
+      roughness: 0.9,
+      metalness: 0.0
+    });
+
+    const geometry = new THREE.BoxGeometry(width, height, depth);
+    const wall = new THREE.Mesh(geometry, wallMat);
+    wall.receiveShadow = true;
+    wall.castShadow = true;
+    group.add(wall);
+
+    // Baseboard trim
+    const baseboardGeom = new THREE.BoxGeometry(width + 0.02, 0.15, depth + 0.02);
+    const baseboardMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+    const baseboard = new THREE.Mesh(baseboardGeom, baseboardMat);
+    baseboard.position.y = -(height / 2) + 0.075;
+    group.add(baseboard);
+
+    group.position.copy(pos);
+    group.rotation.copy(rot);
+
+    // Physics — wall is solid
+    this.physics.createStaticBox(
+      pos,
+      new THREE.Vector3(width / 2, height / 2, depth / 2),
+      rot
+    );
+
+    return group;
+  }
+
+  private createCeilingSlab(pos: THREE.Vector3, rot: THREE.Euler, params?: Record<string, unknown>): THREE.Group {
+    const width = (params?.width as number) || 80;
+    const depth = (params?.depth as number) || 80;
+
+    const group = new THREE.Group();
+    const ceilingMat = new THREE.MeshStandardMaterial({
+      color: 0xb8b8b8,   // Dropped-ceiling gray
+      roughness: 0.9
+    });
+
+    const geometry = new THREE.BoxGeometry(width, 0.4, depth);
+    const ceiling = new THREE.Mesh(geometry, ceilingMat);
+    ceiling.receiveShadow = true;
+    group.add(ceiling);
+
+    // Ceiling grid lines (acoustical tile pattern)
+    const gridMat = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.8 });
+    const gridSpacing = 5;
+    for (let x = -width / 2; x <= width / 2; x += gridSpacing) {
+      const lineGeom = new THREE.BoxGeometry(0.05, 0.02, depth);
+      const line = new THREE.Mesh(lineGeom, gridMat);
+      line.position.set(x, -0.2, 0);
+      group.add(line);
+    }
+    for (let z = -depth / 2; z <= depth / 2; z += gridSpacing) {
+      const lineGeom = new THREE.BoxGeometry(width, 0.02, 0.05);
+      const line = new THREE.Mesh(lineGeom, gridMat);
+      line.position.set(0, -0.2, z);
+      group.add(line);
+    }
+
+    group.position.copy(pos);
+    group.rotation.copy(rot);
+
+    // No physics — player is below the ceiling
+    return group;
+  }
+
+  private createCeilingPanel(pos: THREE.Vector3, rot: THREE.Euler, params?: Record<string, unknown>): THREE.Group {
+    const width = (params?.width as number) || 6;
+    const depth = (params?.depth as number) || 0.8;
+
+    const group = new THREE.Group();
+
+    // Housing/fixture frame
+    const frameMat = new THREE.MeshStandardMaterial({
+      color: 0xcccccc,
+      roughness: 0.5,
+      metalness: 0.3
+    });
+    const frameGeom = new THREE.BoxGeometry(width + 0.1, 0.08, depth + 0.1);
+    const frame = new THREE.Mesh(frameGeom, frameMat);
+    group.add(frame);
+
+    // Glowing diffuser panel
+    const panelMat = new THREE.MeshStandardMaterial({
+      color: 0xfff8e8,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.85,
+      roughness: 0.5
+    });
+    const panelGeom = new THREE.BoxGeometry(width - 0.05, 0.04, depth - 0.05);
+    const panel = new THREE.Mesh(panelGeom, panelMat);
+    panel.position.y = -0.05;
+    group.add(panel);
+
+    // Point light shining downward (warm fluorescent white)
+    const light = new THREE.PointLight(0xfff5e0, 1.5, 18, 1.5);
+    light.position.y = -1.0;
+    group.add(light);
+
+    group.position.copy(pos);
+    group.rotation.copy(rot);
+
+    // No physics — ceiling mounted
+    return group;
+  }
+
+  private createFilingCabinet(pos: THREE.Vector3, rot: THREE.Euler): THREE.Group {
+    const group = new THREE.Group();
+
+    const cabinetMat = new THREE.MeshStandardMaterial({
+      color: 0x888890,
+      roughness: 0.5,
+      metalness: 0.5
+    });
+    const handleMat = new THREE.MeshStandardMaterial({
+      color: 0xbbbbbb,
+      roughness: 0.2,
+      metalness: 0.9
+    });
+
+    // Cabinet body
+    const bodyGeom = new THREE.BoxGeometry(0.5, 1.3, 0.65);
+    const body = new THREE.Mesh(bodyGeom, cabinetMat);
+    body.position.y = 0.65;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+
+    // Drawer dividers + handles (3 drawers)
+    const drawerHeights = [0.3, 0.72, 1.14];
+    for (const dy of drawerHeights) {
+      // Drawer seam
+      const seamGeom = new THREE.BoxGeometry(0.5, 0.015, 0.65);
+      const seam = new THREE.Mesh(seamGeom, handleMat);
+      seam.position.y = dy;
+      group.add(seam);
+
+      // Drawer pull handle
+      const handleGeom = new THREE.BoxGeometry(0.18, 0.025, 0.025);
+      const handle = new THREE.Mesh(handleGeom, handleMat);
+      handle.position.set(0, dy + 0.17, 0.34);
+      group.add(handle);
+    }
+
+    // Top surface
+    const topGeom = new THREE.BoxGeometry(0.5, 0.03, 0.65);
+    const top = new THREE.Mesh(topGeom, handleMat);
+    top.position.y = 1.315;
+    group.add(top);
+
+    group.position.copy(pos);
+    group.rotation.copy(rot);
+
+    this.physics.createStaticBox(
+      new THREE.Vector3(pos.x, pos.y + 0.65, pos.z),
+      new THREE.Vector3(0.25, 0.65, 0.325),
+      rot
+    );
+
+    return group;
+  }
+
+  private createPrinter(pos: THREE.Vector3, rot: THREE.Euler): THREE.Group {
+    const group = new THREE.Group();
+
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a2a,
+      roughness: 0.7
+    });
+    const accentMat = new THREE.MeshStandardMaterial({
+      color: 0x444444,
+      roughness: 0.5,
+      metalness: 0.2
+    });
+    const paperMat = new THREE.MeshStandardMaterial({
+      color: 0xfafafa,
+      roughness: 0.5
+    });
+
+    // Main printer body
+    const bodyGeom = new THREE.BoxGeometry(0.65, 0.35, 0.55);
+    const body = new THREE.Mesh(bodyGeom, bodyMat);
+    body.position.y = 0.175;
+    body.castShadow = true;
+    group.add(body);
+
+    // Top panel (scanner/lid)
+    const lidGeom = new THREE.BoxGeometry(0.65, 0.06, 0.55);
+    const lid = new THREE.Mesh(lidGeom, accentMat);
+    lid.position.y = 0.38;
+    group.add(lid);
+
+    // Paper output tray
+    const trayGeom = new THREE.BoxGeometry(0.55, 0.04, 0.32);
+    const tray = new THREE.Mesh(trayGeom, accentMat);
+    tray.position.set(0, 0.36, 0.38);
+    group.add(tray);
+
+    // Paper in tray
+    const paperGeom = new THREE.BoxGeometry(0.45, 0.01, 0.22);
+    const paper = new THREE.Mesh(paperGeom, paperMat);
+    paper.position.set(0, 0.385, 0.38);
+    group.add(paper);
+
+    // Status light
+    const lightMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff44,
+      emissive: 0x00ff44,
+      emissiveIntensity: 0.6
+    });
+    const statusGeom = new THREE.BoxGeometry(0.04, 0.04, 0.04);
+    const statusLight = new THREE.Mesh(statusGeom, lightMat);
+    statusLight.position.set(0.28, 0.38, -0.22);
+    group.add(statusLight);
+
+    group.position.copy(pos);
+    group.rotation.copy(rot);
+
+    this.physics.createStaticBox(
+      new THREE.Vector3(pos.x, pos.y + 0.175, pos.z),
+      new THREE.Vector3(0.325, 0.175, 0.275),
+      rot
+    );
+
+    return group;
+  }
+
+  private createExitSign(pos: THREE.Vector3, rot: THREE.Euler, params?: Record<string, unknown>): THREE.Group {
+    const width = (params?.width as number) || 3;
+    const height = (params?.height as number) || 0.8;
+
+    const group = new THREE.Group();
+
+    // Green EXIT sign with glow
+    const signMat = new THREE.MeshStandardMaterial({
+      color: 0x00cc44,
+      emissive: 0x00aa22,
+      emissiveIntensity: 0.9,
+      roughness: 0.3
+    });
+    const signGeom = new THREE.BoxGeometry(width, height, 0.08);
+    const sign = new THREE.Mesh(signGeom, signMat);
+    sign.castShadow = false;
+    group.add(sign);
+
+    // Mounting bracket
+    const bracketMat = new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.6, roughness: 0.4 });
+    const bracketGeom = new THREE.BoxGeometry(0.1, 0.15, 0.1);
+    for (const side of [-1, 1]) {
+      const bracket = new THREE.Mesh(bracketGeom, bracketMat);
+      bracket.position.set(side * (width / 2 - 0.1), height / 2 + 0.075, 0);
+      group.add(bracket);
+    }
+
+    // Soft green ambient glow below sign
+    const glowLight = new THREE.PointLight(0x00ff44, 0.4, 5);
+    glowLight.position.y = -0.6;
+    group.add(glowLight);
+
+    group.position.copy(pos);
+    group.rotation.copy(rot);
+
+    // No physics — wall-mounted decoration
+    return group;
+  }
+
   private createCollectible(collectible: { type: string; position: number[]; value?: number }): void {
     // TODO: Implement collectible system
     // For now, just create visual markers

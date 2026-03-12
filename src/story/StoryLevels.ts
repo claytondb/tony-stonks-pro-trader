@@ -44,7 +44,7 @@ const LEVEL_1_OFFICE: StoryLevelData = {
   sunIntensity: 0,
   
   groundSize: 80,
-  groundColor: '#7a7a6a',  // Office carpet
+  groundColor: '#8B8B8B',  // Medium gray carpet
   
   spawnPoint: {
     position: [-28, 1.0, -30],  // Y=1.0 prevents sinking into ground
