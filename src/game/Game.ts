@@ -20,7 +20,13 @@ import { GrindParticles } from '../effects/GrindParticles';
 import { LandingParticles } from '../effects/LandingParticles';
 import { SpeedLines } from '../effects/SpeedLines';
 import { LevelData, LevelObject, getLevelById } from '../levels/LevelData';
-import { SkyGradient } from '../utils/SkyGradient';
+import { EnvironmentRig, type EnvPreset } from '../rendering/Environment';
+import { PostFX } from '../rendering/PostFX';
+import { MaterialLibrary } from '../materials/MaterialLibrary';
+import { configureFromRenderer, warmup } from '../materials/ProceduralTextures';
+import { buildOfficeInterior, disposeOfficeInterior, type OfficeInterior } from '../world/OfficeLevel';
+import { makeFilingCabinet, makePrinter, makeTrashCan, makeWaterCooler } from '../world/OfficeProps';
+import { buildOfficeChair, spinCasters, type ChairParts } from '../world/ChairModel';
 import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } from '../story';
 import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
 import { ChaseHUD } from '../ui/ChaseHUD';
@@ -75,14 +81,16 @@ export class Game {
   private scene!: THREE.Scene;
   private camera!: THREE.PerspectiveCamera;
   private renderer!: THREE.WebGLRenderer;
-  private skyGradient!: SkyGradient;
-  
-  // Lighting (stored for dynamic updates based on sky)
-  private ambientLight!: THREE.AmbientLight;
-  private sunLight!: THREE.DirectionalLight;
-  private hemiLight!: THREE.HemisphereLight;
-  private fillLight!: THREE.DirectionalLight;
-  
+
+  // Rendering pipeline: IBL + lighting rig, and the post-processing chain.
+  // These own scene.environment, scene.fog, scene.background, all lights,
+  // tone mapping and exposure. Do not add ad-hoc lights alongside them.
+  private envRig!: EnvironmentRig;
+  private postFX!: PostFX;
+  private lastDelta = 1 / 60;
+  private officeInterior: OfficeInterior | null = null;
+  private chairParts: ChairParts | null = null;
+
   // Systems
   private input!: InputManager;
   private physics!: PhysicsWorld;
@@ -170,7 +178,10 @@ export class Game {
       
       report(10, 'Setting up scene...');
       this.initScene();
-      
+
+      report(15, 'Building lighting & post FX...');
+      this.initRenderPipeline();
+
       report(20, 'Loading physics engine...');
       // Initialize physics (async WASM load)
       this.physics = new PhysicsWorld();
@@ -198,9 +209,12 @@ export class Game {
       report(75, 'Loading level assets...');
       await this.preloadLevelModels();
       
+      report(80, 'Generating surface textures...');
+      warmup(['officeCarpet', 'ceilingTile', 'cubicleFabric', 'deskLaminate', 'drywall', 'darkPlastic', 'brushedMetal', 'paper', 'cardboard']);
+
       report(85, 'Building environment...');
       this.initEnvironment();
-      
+
       report(95, 'Initializing audio...');
       // Initialize procedural audio
       proceduralSounds.init();
@@ -241,56 +255,58 @@ export class Game {
   
   private initScene(): void {
     this.scene = new THREE.Scene();
-    this.scene.background = null; // Use sky gradient instead of solid color
-    this.scene.fog = new THREE.Fog(0x87CEEB, 50, 200);
-    
-    // Create sky gradient dome
-    this.skyGradient = new SkyGradient();
-    this.scene.add(this.skyGradient.getMesh());
-    
-    // Camera
+
+    // Camera. near = 0.3 (not 0.1): GTAO's depth precision at far = 1000 is poor
+    // otherwise, and nothing ever gets closer than 30 cm to the follow camera.
     this.camera = new THREE.PerspectiveCamera(
       60,
       window.innerWidth / window.innerHeight,
-      0.1,
+      0.3,
       1000
     );
     this.camera.position.set(0, 5, -10);
     this.camera.lookAt(0, 0, 0);
-    
-    // Lighting - multi-source setup for rich, dynamic look
-    // Values here are defaults; updateLightingForSky() adjusts per level
-    
-    // Ambient light - base illumination
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-    this.scene.add(this.ambientLight);
-    
-    // Hemisphere light - sky/ground color blend for natural outdoor feel
-    this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x666666, 0.8);
-    this.scene.add(this.hemiLight);
-    
-    // Main sun/directional light
-    this.sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    this.sunLight.position.set(50, 100, 50);
-    this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.width = 2048;
-    this.sunLight.shadow.mapSize.height = 2048;
-    this.sunLight.shadow.camera.near = 10;
-    this.sunLight.shadow.camera.far = 200;
-    this.sunLight.shadow.camera.left = -50;
-    this.sunLight.shadow.camera.right = 50;
-    this.sunLight.shadow.camera.top = 50;
-    this.sunLight.shadow.camera.bottom = -50;
-    this.scene.add(this.sunLight);
-    
-    // Fill light - softer light from opposite side to reduce harsh shadows
-    this.fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    this.fillLight.position.set(-30, 40, -30);
-    this.scene.add(this.fillLight);
-    
+
+    // Lighting, IBL, fog and background are owned entirely by EnvironmentRig
+    // (see initRenderPipeline). There are deliberately no lights created here.
+
     // Camera controller
     this.cameraController = new CameraController(this.camera);
     this.cameraController.setupMouseControls(this.canvas);
+  }
+
+  /**
+   * Build the modern render pipeline: procedural texture config, the environment
+   * rig (IBL + key/fill/bounce + shadows + fog + sky) and the post FX chain
+   * (GTAO -> bloom -> ACES grade -> SMAA).
+   */
+  private initRenderPipeline(): void {
+    configureFromRenderer(this.renderer);
+
+    this.envRig = new EnvironmentRig(this.scene, this.renderer);
+    this.envRig.apply('officeInterior');
+
+    this.postFX = new PostFX(this.renderer, this.scene, this.camera, 'high');
+    this.postFX.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  /** Level id -> environment preset. Anything unmapped falls back to cityDay. */
+  private presetForLevel(levelId: string): EnvPreset {
+    const map: Record<string, EnvPreset> = {
+      ch1_office: 'officeInterior',
+      story_1_office: 'officeInterior',
+      ch1_garage: 'garageInterior',
+      ch2_downtown: 'cityDay',
+      story_2_stairwell: 'stairwell',
+      story_3_lobby: 'lobby',
+      story_4_highway: 'highwayNight',
+      story_5_home: 'suburbEvening',
+      story_6_forest: 'forestDay',
+      story_7_trainyard: 'trainyardOvercast',
+      story_8_rooftops: 'cityDusk',
+      story_9_finale: 'rooftopSunset',
+    };
+    return map[levelId] ?? 'cityDay';
   }
   
   // Physics is now initialized in init() before other systems
@@ -522,57 +538,47 @@ export class Game {
     this.chair.position.set(0, 0, 5); // Start in the middle of the skate area
     this.scene.add(this.chair);
     
-    const loader = new GLTFLoader();
-    
-    // Load chair GLB model
+    // Procedural office chair (ChairModel). Replaces chair.glb, which shipped
+    // metalness = 1.0 with no env map and rendered as a black lump. This one is
+    // faceted low-poly built from MaterialLibrary surfaces and is authored in
+    // real-world metres with its caster contact points at y = 0.
     try {
-      const chairGltf = await loader.loadAsync('./models/chair.glb');
-      const chairModel = chairGltf.scene;
-      
-      // Chair model - larger scale
-      chairModel.scale.set(0.35, 0.35, 0.35);
-      chairModel.position.set(0, -0.3, 0);  // Offset to sit on ground
-      // Model's natural +Z should face forward (away from camera)
-      
-      // Enable shadows and find wheel meshes
-      this.wheelMeshes = [];
-      chairModel.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.castShadow = true;
-          child.receiveShadow = true;
-        }
-        // Find wheel meshes by name (common patterns: wheel, caster, roller)
-        const nameLower = child.name.toLowerCase();
-        if (nameLower.includes('wheel') || nameLower.includes('caster') || nameLower.includes('roller')) {
-          this.wheelMeshes.push(child);
-        }
-      });
-      
-      this.chair.add(chairModel);
-      console.log(`Chair GLB model loaded with ${this.wheelMeshes.length} wheel meshes`);
+      const parts = buildOfficeChair({ tier: 1, seed: 4 });
+      // Rapier chair capsule (halfHeight 0.3 + radius 0.4) centres the body 0.7
+      // above the contact patch, so drop the chair root by that much.
+      parts.root.position.y = -0.70;
+      this.chairParts = parts;
+      this.wheelMeshes = parts.casters;
+      this.chair.add(parts.root);
+      console.log(`Procedural chair built (${parts.root.userData.triangles} tris, ${parts.casters.length} casters)`);
     } catch (error) {
-      console.warn('Failed to load chair GLB, using primitives:', error);
-      // Fallback to primitive chair
-      const primitiveChair = this.createChairMesh();
-      this.chair.add(primitiveChair);
+      console.warn('Failed to build procedural chair, using primitives:', error);
+      this.chair.add(this.createChairMesh());
     }
-    
+
     // Load GLB player model if enabled
     if (this.useGLBModel) {
       try {
         this.playerModel = new PlayerModel();
         const model = await this.playerModel.load();
-        
+
+        // The FBX ships Phong/Lambert materials with a hot specular lobe. Under
+        // the physically-scaled EnvironmentRig (key at 3.6) they blow out to
+        // white. Re-author them as PBR standard so they take the IBL properly.
+        this.convertToPBR(model);
+
         // Position player centered on chair (handled by PlayerModel.update to prevent root motion drift)
         // Start in standing position (behind chair)
         this.playerModel.setLocalPosition(0, 0, -1.2);
         model.position.set(0, 0, -1.2);
         model.rotation.y = 0;
         
-        // Start in standing idle
-        this.playerModel.play('idle');
-        this.isMounted = false;
-        this.animState = 'standing';
+        // Start seated on the chair. Every reference frame is the guy riding
+        // the chair; standing behind it left the model floating beside it.
+        this.isMounted = true;
+        this.animState = 'rolling';
+        this.updatePlayerMountPosition();
+        this.playerModel.play('rolling', { loop: true });
         
         this.chair.add(model);
         
@@ -590,6 +596,51 @@ export class Game {
     this.cameraController.setTarget(this.chair);
   }
   
+  /**
+   * Re-author an imported model's materials as MeshStandardMaterial so they
+   * receive scene.environment and behave under physically-scaled lighting.
+   * Imported FBX/GLB assets here ship either a hot Phong specular or
+   * metalness = 1.0, both of which look broken in a PBR pipeline.
+   */
+  private convertToPBR(root: THREE.Object3D): void {
+    const seen = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+
+    root.traverse((child) => {
+      const m = child as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.castShadow = true;
+      m.receiveShadow = true;
+
+      const convert = (src: THREE.Material): THREE.Material => {
+        if (src instanceof THREE.MeshStandardMaterial) {
+          // Already PBR: just make sure it isn't fully metallic with no albedo.
+          if (src.metalness > 0.6) src.metalness = 0.05;
+          return src;
+        }
+        const cached = seen.get(src);
+        if (cached) return cached;
+
+        const any = src as unknown as { map?: THREE.Texture; color?: THREE.Color; skinning?: boolean };
+        const std = new THREE.MeshStandardMaterial({
+          map: any.map ?? null,
+          color: any.color ? any.color.clone() : new THREE.Color(0xffffff),
+          roughness: 0.78,
+          metalness: 0.0,
+          side: src.side,
+          transparent: src.transparent,
+          opacity: src.opacity,
+          alphaTest: src.alphaTest,
+        });
+        std.name = src.name;
+        if (std.map) std.map.colorSpace = THREE.SRGBColorSpace;
+        seen.set(src, std);
+        return std;
+      };
+
+      m.material = Array.isArray(m.material) ? m.material.map(convert) : convert(m.material);
+    });
+  }
+
   private createChairMesh(): THREE.Group {
     const chair = new THREE.Group();
     
@@ -909,82 +960,22 @@ export class Game {
   
   private initEnvironment(): void {
     const groundSize = 200;  // Much bigger ground
-    
-    // Sky color
-    this.scene.background = new THREE.Color(0x87CEEB);
-    
-    // Add gradient sky sphere
-    const skyGeometry = new THREE.SphereGeometry(500, 32, 32);
-    const skyMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        topColor: { value: new THREE.Color(0x4A90D9) },
-        bottomColor: { value: new THREE.Color(0xFFFFFF) },
-        offset: { value: 20 },
-        exponent: { value: 0.6 }
-      },
-      vertexShader: `
-        varying vec3 vWorldPosition;
-        void main() {
-          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-          vWorldPosition = worldPosition.xyz;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform vec3 topColor;
-        uniform vec3 bottomColor;
-        uniform float offset;
-        uniform float exponent;
-        varying vec3 vWorldPosition;
-        void main() {
-          float h = normalize(vWorldPosition + offset).y;
-          gl_FragColor = vec4(mix(bottomColor, topColor, max(pow(max(h, 0.0), exponent), 0.0)), 1.0);
-        }
-      `,
-      side: THREE.BackSide
-    });
-    const sky = new THREE.Mesh(skyGeometry, skyMaterial);
-    this.scene.add(sky);
-    this.levelObjects.push(sky);  // Track for clearing
-    
-    // Ground plane with grid texture
-    const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize, 50, 50);
-    
-    // Create grid texture
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = '#555555';
-    ctx.fillRect(0, 0, 512, 512);
-    ctx.strokeStyle = '#666666';
-    ctx.lineWidth = 2;
-    for (let i = 0; i <= 16; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * 32, 0);
-      ctx.lineTo(i * 32, 512);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(0, i * 32);
-      ctx.lineTo(512, i * 32);
-      ctx.stroke();
-    }
-    
-    const groundTexture = new THREE.CanvasTexture(canvas);
-    groundTexture.wrapS = THREE.RepeatWrapping;
-    groundTexture.wrapT = THREE.RepeatWrapping;
-    groundTexture.repeat.set(40, 40);  // More repeats for bigger ground
-    
-    const groundMaterial = new THREE.MeshStandardMaterial({ 
-      map: groundTexture,
-      roughness: 0.9
-    });
+
+    // NOTE: no sky dome and no background are created here. EnvironmentRig owns
+    // scene.background / scene.environment / scene.fog and draws its own sky for
+    // exterior presets. Two competing sky domes used to fight over the horizon.
+
+    // Placeholder ground for free-skate before any level is loaded. Every real
+    // level replaces this in loadLevelObjects().
+    const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize);
+    groundGeometry.setAttribute('uv1', groundGeometry.getAttribute('uv').clone());
+    const groundMaterial = MaterialLibrary.get('concreteFloor', { repeat: [groundSize / 3, groundSize / 3] });
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     this.scene.add(ground);
     this.levelObjects.push(ground);  // Track for clearing
-    
+
     // Add visible walls around the perimeter
     const wallHeight = 3;
     const wallMaterial = new THREE.MeshStandardMaterial({ 
@@ -1391,12 +1382,12 @@ export class Game {
       airTime: 0
     };
     
-    // Reset mount state - start standing behind chair
-    this.isMounted = false;
-    this.animState = 'standing';
+    // Start the level already seated on the chair.
+    this.isMounted = true;
+    this.animState = 'rolling';
     this.updatePlayerMountPosition();
     if (this.playerModel) {
-      this.playerModel.play('idle');
+      this.playerModel.play('rolling', { loop: true });
     }
     
     // Reset combo
@@ -1405,24 +1396,11 @@ export class Game {
     // Clear existing level objects
     this.clearLevelObjects();
     
-    // Update environment settings - sky gradient
-    const skyTop = (level as any).skyColorTop || level.skyColor || '#1e90ff';
-    const skyBottom = (level as any).skyColorBottom || level.skyColor || '#87ceeb';
-    this.skyGradient.setColors(skyTop, skyBottom);
-    
-    // Apply level-specific lighting if present
-    const levelAmbient = (level as any).ambientLight;
-    const levelSunIntensity = (level as any).sunIntensity;
-    this.updateLightingForSky(skyTop, skyBottom, levelAmbient, levelSunIntensity);
-    this.scene.background = null; // Use gradient, not solid color
-    
-    if (level.fogColor) {
-      this.scene.fog = new THREE.Fog(level.fogColor, level.fogNear || 50, level.fogFar || 200);
-    } else {
-      // Clear fog if not specified
-      this.scene.fog = null;
-    }
-    
+    // Environment: IBL, key/fill/bounce lights, shadow frustum, fog, background
+    // and exposure all come from the preset. The old per-level sky/fog/ambient
+    // fields in LevelData are intentionally no longer read.
+    this.envRig.apply(this.presetForLevel(level.id));
+
     // Load level objects
     this.loadLevelObjects(level.objects, level.groundSize, level.groundColor || '#555555');
     
@@ -1439,68 +1417,6 @@ export class Game {
   }
   
   /**
-   * Update lighting to match the sky colors for a cohesive look
-   * Boosted values for better visibility
-   * @param levelAmbient - Optional level-specific ambient light intensity
-   * @param levelSunIntensity - Optional level-specific sun intensity
-   */
-  private updateLightingForSky(skyTop: string, skyBottom: string, levelAmbient?: number, levelSunIntensity?: number): void {
-    const topColor = new THREE.Color(skyTop);
-    const bottomColor = new THREE.Color(skyBottom);
-    
-    // Calculate average brightness of sky (0-1)
-    const topLum = topColor.getHSL({ h: 0, s: 0, l: 0 }).l;
-    const bottomLum = bottomColor.getHSL({ h: 0, s: 0, l: 0 }).l;
-    const avgBrightness = (topLum + bottomLum) / 2;
-    
-    // Hemisphere light: sky color on top, darker ground bounce
-    this.hemiLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.5);
-    this.hemiLight.groundColor.copy(bottomColor).lerp(new THREE.Color(0x888888), 0.3);
-    this.hemiLight.intensity = 0.6 + avgBrightness * 0.5; // 0.6-1.1 based on brightness
-    
-    // Sun light: warmer for sunset/dawn, cooler for day, dimmer for night
-    const topHSL = topColor.getHSL({ h: 0, s: 0, l: 0 });
-    const isWarm = topHSL.h > 0.02 && topHSL.h < 0.15; // Orange/red hues
-    const isDark = avgBrightness < 0.2;
-    
-    if (isDark) {
-      // Night/midnight - moonlight but still playable
-      this.sunLight.color.setHex(0xaabbdd);
-      this.sunLight.intensity = 0.6;
-      this.fillLight.color.setHex(0x8899bb);
-      this.fillLight.intensity = 0.4;
-      this.ambientLight.intensity = 0.5;
-    } else if (isWarm) {
-      // Sunset/dawn - warm golden light
-      this.sunLight.color.setHex(0xffcc88);
-      this.sunLight.intensity = 1.4;
-      this.sunLight.position.set(80, 30, 50); // Lower sun angle
-      this.fillLight.color.setHex(0x88aacc);
-      this.fillLight.intensity = 0.5;
-      this.ambientLight.intensity = 0.6;
-    } else {
-      // Day/cloudy - bright and clear
-      this.sunLight.color.setHex(0xffffff);
-      this.sunLight.intensity = 1.4 + avgBrightness * 0.4; // 1.4-1.8
-      this.sunLight.position.set(50, 100, 50); // High noon position
-      this.fillLight.color.setHex(0xffffff);
-      this.fillLight.intensity = 0.5;
-      this.ambientLight.intensity = 0.6 + avgBrightness * 0.3; // 0.6-0.9
-    }
-    
-    // Ambient always gets some of the sky color mixed in (but mostly white)
-    this.ambientLight.color.copy(topColor).lerp(new THREE.Color(0xffffff), 0.8);
-    
-    // Apply level-specific overrides if provided
-    if (levelAmbient !== undefined) {
-      this.ambientLight.intensity = levelAmbient;
-    }
-    if (levelSunIntensity !== undefined) {
-      this.sunLight.intensity = levelSunIntensity;
-    }
-  }
-  
-  /**
    * Clear all level-specific objects
    */
   private clearLevelObjects(): void {
@@ -1509,7 +1425,14 @@ export class Game {
       this.scene.remove(obj);
     }
     this.levelObjects = [];
-    
+
+    // The office floorplate owns real geometry; free it rather than leaking it.
+    if (this.officeInterior) {
+      this.scene.remove(this.officeInterior.root);
+      disposeOfficeInterior(this.officeInterior);
+      this.officeInterior = null;
+    }
+
     // Clear grind system rails
     this.grindSystem.clearRails();
     
@@ -1680,9 +1603,14 @@ export class Game {
    * Load objects from level data with instancing optimization
    */
   private loadLevelObjects(objects: LevelObject[], groundSize: number, groundColor: string = '#555555'): void {
-    // Create ground for the level
-    this.createLevelGround(groundSize, groundColor);
-    
+    // Enclosed office levels build a full interior shell (carpet, walls, suspended
+    // ceiling, cubicle farm) instead of a bare ground quad under open sky.
+    if (this.currentLevelId === 'ch1_office') {
+      this.buildOfficeFloorplate();
+    } else {
+      this.createLevelGround(groundSize, groundColor);
+    }
+
     // Types that can be instanced (decorative objects with simple/no physics)
     const instanceableTypes = new Set([
       'shrub_small', 'shrub_medium', 'shrub_large', 
@@ -1852,16 +1780,65 @@ export class Game {
   }
   
   /**
+   * Build the enclosed open-plan office: carpet, four walls, a suspended ceiling
+   * with recessed troffers, and a cubicle farm around a cross-shaped skate runway.
+   * Static geometry is merged per material by OfficeLevel, so this is ~30 draw calls.
+   */
+  private buildOfficeFloorplate(): void {
+    const interior = buildOfficeInterior({
+      width: 50,
+      depth: 50,
+      height: 3.1,
+      seed: 20260730,
+      lightBudget: 8,
+      // The level data owns the main aisle props; keep pods and aisle clutter
+      // out of the stair landing and the conference-table fun box.
+      keepClear: [
+        { minX: -5.0, maxX: 5.0, minZ: 16.5, maxZ: 23.5 },
+        { minX: -5.0, maxX: 5.0, minZ: -21.5, maxZ: -14.5 },
+      ],
+    });
+
+    this.scene.add(interior.root);
+    this.officeInterior = interior;
+
+    for (const c of interior.colliders) {
+      this.physics.createStaticBox(
+        c.position,
+        c.halfExtents,
+        c.rotationY ? new THREE.Euler(0, c.rotationY, 0) : undefined
+      );
+    }
+
+    let railId = 0;
+    for (const r of interior.rails) {
+      this.grindSystem.addRail(r.start, r.end, `cube_${railId++}`);
+    }
+
+    // Floor collider + out-of-bounds walls.
+    this.physics.createGround(interior.size.width / 2);
+
+    console.log(
+      `[OfficeLevel] ${interior.triangles} tris, ${interior.colliders.length} colliders, ` +
+      `${interior.rails.length} grind edges, ${interior.lights.length} point lights`
+    );
+  }
+
+  /**
    * Create ground plane for a level
    */
   private createLevelGround(size: number, groundColor: string = '#555555'): void {
     const groundGeometry = new THREE.PlaneGeometry(size, size);
-    
-    // Simple solid color ground - no grid lines during gameplay
-    const groundMaterial = new THREE.MeshStandardMaterial({ 
-      color: groundColor,
-      roughness: 0.9,
-      metalness: 0.1
+    groundGeometry.setAttribute('uv1', groundGeometry.getAttribute('uv').clone());
+
+    // Textured PBR ground. The level's groundColor is now a tint over real
+    // asphalt (albedo/normal/roughness/AO) instead of a flat untextured colour,
+    // which is what made every non-office level read as a grey void.
+    const tint = new THREE.Color(groundColor);
+    tint.multiplyScalar(1.9); // the map already carries the mid value
+    const groundMaterial = MaterialLibrary.get('asphalt', {
+      repeat: [size / 6, size / 6],
+      color: tint.getHex(),
     });
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
     ground.rotation.x = -Math.PI / 2;
@@ -1879,22 +1856,16 @@ export class Game {
   private createLevelObject(data: LevelObject): THREE.Object3D | null {
     let mesh: THREE.Object3D | null = null;
     
-    const railMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0xcccccc, metalness: 0.8, roughness: 0.2
-    });
-    const woodMaterial = new THREE.MeshStandardMaterial({
-      color: 0x8B4513, roughness: 0.7
-    });
-    const concreteMaterial = new THREE.MeshStandardMaterial({
-      color: 0x666666, roughness: 0.9
-    });
-    const metalMaterial = new THREE.MeshStandardMaterial({
-      color: 0x888888, metalness: 0.6, roughness: 0.4
-    });
-    const officeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x4a4a5e, roughness: 0.7
-    });
-    
+    // Shared, cached PBR materials. These used to be five fresh
+    // MeshStandardMaterials allocated per object (131 meshes -> 69 materials).
+    const railMaterial = MaterialLibrary.get('grindMetal');
+    // Ramps in this game are improvised from office furniture, so desk laminate
+    // rather than skatepark plywood (which read as garish orange planks).
+    const woodMaterial = MaterialLibrary.get('deskLaminate', { repeat: [1.1, 1.1], color: 0xa8adb4 });
+    const concreteMaterial = MaterialLibrary.get('concreteFloor', { repeat: [3, 3] });
+    const metalMaterial = MaterialLibrary.get('brushedMetal');
+    const officeMaterial = MaterialLibrary.get('cubicleFabric', { repeat: [3, 2] });
+
     switch (data.type) {
       case 'rail':
       case 'rail_angled':
@@ -1913,16 +1884,19 @@ export class Game {
         break;
       }
       
-      case 'ramp':
+      case 'ramp': {
         mesh = this.createRampMesh(woodMaterial);
-        // Add physics
-        const rampRot = data.rotation?.[1] || 0;
+        // Collider is a thin slab lying on the slope, matching the wedge mesh.
+        const rampRot = (data.rotation?.[1] || 0) * Math.PI / 180;
+        const slope = Math.atan2(Game.RAMP_H, Game.RAMP_D);
+        const cx = Math.sin(rampRot) * 0;
         this.physics.createStaticBox(
-          new THREE.Vector3(data.position[0], 0.5, data.position[2]),
-          new THREE.Vector3(2.2, 0.2, 1.8),
-          new THREE.Euler(-Math.PI / 12, rampRot * Math.PI / 180, 0)
+          new THREE.Vector3(data.position[0] + cx, Game.RAMP_H / 2, data.position[2]),
+          new THREE.Vector3(Game.RAMP_W / 2, 0.09, Math.hypot(Game.RAMP_D, Game.RAMP_H) / 2),
+          new THREE.Euler(-slope, rampRot, 0)
         );
         break;
+      }
         
       case 'quarter_pipe':
       case 'quarter_pipe_small':
@@ -2028,7 +2002,7 @@ export class Game {
         break;
         
       case 'water_cooler':
-        mesh = this.createWaterCoolerMesh();
+        mesh = makeWaterCooler({ seed: Math.round(data.position[0] * 7 + data.position[2] * 3) });
         // Collision: water cooler (approx 0.4x1.2x0.4)
         this.physics.createStaticBox(
           new THREE.Vector3(data.position[0], 0.6, data.position[2]),
@@ -2037,7 +2011,7 @@ export class Game {
         break;
         
       case 'trash_can':
-        mesh = this.createTrashCanMesh(metalMaterial);
+        mesh = makeTrashCan({ seed: Math.round(data.position[0] * 5 + data.position[2] * 11) });
         // Collision: trash can cylinder approx as box (0.4x0.8x0.4)
         this.physics.createStaticBox(
           new THREE.Vector3(data.position[0], 0.4, data.position[2]),
@@ -2175,7 +2149,7 @@ export class Game {
       }
 
       case 'filing_cabinet': {
-        mesh = this.createFilingCabinetMesh();
+        mesh = makeFilingCabinet({ seed: Math.round(data.position[0] * 13 + data.position[2] * 5) });
         this.physics.createStaticBox(
           new THREE.Vector3(data.position[0], 0.9, data.position[2]),
           new THREE.Vector3(0.4, 0.9, 0.3)
@@ -2184,7 +2158,7 @@ export class Game {
       }
 
       case 'printer': {
-        mesh = this.createPrinterMesh();
+        mesh = makePrinter({ seed: Math.round(data.position[0] * 17 + data.position[2] * 7) });
         this.physics.createStaticBox(
           new THREE.Vector3(data.position[0], 0.35, data.position[2]),
           new THREE.Vector3(0.35, 0.35, 0.3)
@@ -2244,23 +2218,53 @@ export class Game {
     return group;
   }
   
+  // Ramp dimensions, shared by the mesh and its collider so they can't drift.
+  private static readonly RAMP_W = 3.4;
+  private static readonly RAMP_D = 1.8;
+  private static readonly RAMP_H = 0.85;
+
+  /**
+   * A solid low-poly kicker. The old version was a tilted 4x3 plank floating
+   * 60 cm off the carpet on two thin fins, which read as broken geometry and
+   * cast a hard rectangular shadow onto nothing.
+   */
   private createRampMesh(material: THREE.Material): THREE.Group {
     const group = new THREE.Group();
-    
-    const rampGeom = new THREE.BoxGeometry(4, 0.15, 3);
-    const ramp = new THREE.Mesh(rampGeom, material);
-    ramp.position.set(0, 0.6, 0);
-    ramp.rotation.x = -Math.PI / 8;
-    ramp.castShadow = true;
-    group.add(ramp);
-    
-    const sideGeom = new THREE.BoxGeometry(0.1, 0.8, 3.2);
-    for (const side of [-1, 1]) {
-      const wall = new THREE.Mesh(sideGeom, material);
-      wall.position.set(side * 2, 0.4, 0);
-      group.add(wall);
-    }
-    
+    const w = Game.RAMP_W / 2;
+    const d = Game.RAMP_D / 2;
+    const h = Game.RAMP_H;
+
+    // Triangular prism: flat at -Z, rising to full height at +Z.
+    const shape = new THREE.Shape();
+    shape.moveTo(-d, 0);
+    shape.lineTo(d, 0);
+    shape.lineTo(d, h);
+    shape.closePath();
+
+    const geom = new THREE.ExtrudeGeometry(shape, { depth: Game.RAMP_W, bevelEnabled: false });
+    // Extrude runs along +Z; rotate so the slope runs along Z and width along X.
+    geom.rotateY(Math.PI / 2);
+    geom.translate(0, 0, -w);
+    geom.computeVertexNormals();
+    const uv = geom.getAttribute('uv');
+    if (uv) geom.setAttribute('uv1', uv.clone());
+
+    const wedge = new THREE.Mesh(geom, material);
+    wedge.castShadow = true;
+    wedge.receiveShadow = true;
+    group.add(wedge);
+
+    // Steel nosing along the top lip — reads as an edge highlight and matches
+    // the metal trim on the cubicle caps.
+    const lip = new THREE.Mesh(
+      new THREE.BoxGeometry(Game.RAMP_W + 0.06, 0.07, 0.14),
+      MaterialLibrary.get('grindMetal')
+    );
+    lip.position.set(0, h - 0.02, d - 0.05);
+    lip.castShadow = true;
+    lip.receiveShadow = true;
+    group.add(lip);
+
     return group;
   }
   
@@ -2511,30 +2515,7 @@ export class Game {
     return group;
   }
   
-  private createWaterCoolerMesh(): THREE.Group {
-    const group = new THREE.Group();
-    
-    const bodyGeom = new THREE.CylinderGeometry(0.2, 0.25, 1, 12);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x6688aa });
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.position.y = 0.5;
-    group.add(body);
-    
-    const jugGeom = new THREE.CylinderGeometry(0.15, 0.18, 0.4, 12);
-    const jugMat = new THREE.MeshStandardMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 });
-    const jug = new THREE.Mesh(jugGeom, jugMat);
-    jug.position.y = 1.2;
-    group.add(jug);
-    
-    return group;
-  }
   
-  private createTrashCanMesh(material: THREE.Material): THREE.Mesh {
-    const geometry = new THREE.CylinderGeometry(0.25, 0.2, 0.6, 12);
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.y = 0.3;
-    return mesh;
-  }
   
   private createConeMesh(): THREE.Mesh {
     const geometry = new THREE.ConeGeometry(0.2, 0.5, 8);
@@ -2730,88 +2711,7 @@ export class Game {
     return group;
   }
 
-  private createFilingCabinetMesh(): THREE.Group {
-    const group = new THREE.Group();
 
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x808080,  // Medium gray metal
-      roughness: 0.6,
-      metalness: 0.5
-    });
-    const handleMat = new THREE.MeshStandardMaterial({
-      color: 0x999999,
-      roughness: 0.3,
-      metalness: 0.8
-    });
-
-    // Cabinet body (tall, narrow)
-    const bodyGeom = new THREE.BoxGeometry(0.8, 1.8, 0.6);
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.position.y = 0.9;
-    body.castShadow = true;
-    body.receiveShadow = true;
-    group.add(body);
-
-    // Drawer handles (3 drawers)
-    const handleGeom = new THREE.BoxGeometry(0.3, 0.04, 0.05);
-    for (let i = 0; i < 3; i++) {
-      const handle = new THREE.Mesh(handleGeom, handleMat);
-      handle.position.set(0, 0.4 + i * 0.5, 0.33);
-      group.add(handle);
-    }
-
-    // Drawer divider lines
-    const lineGeom = new THREE.BoxGeometry(0.78, 0.01, 0.59);
-    const lineMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
-    for (let i = 0; i < 3; i++) {
-      const line = new THREE.Mesh(lineGeom, lineMat);
-      line.position.set(0, 0.15 + i * 0.5, 0);
-      group.add(line);
-    }
-
-    return group;
-  }
-
-  private createPrinterMesh(): THREE.Group {
-    const group = new THREE.Group();
-
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x2a2a2a,  // Dark gray plastic
-      roughness: 0.7,
-      metalness: 0.1
-    });
-    const accentMat = new THREE.MeshStandardMaterial({
-      color: 0x555555,
-      roughness: 0.6
-    });
-    const screenMat = new THREE.MeshStandardMaterial({
-      color: 0x112233,
-      emissive: 0x001122,
-      emissiveIntensity: 0.5
-    });
-
-    // Main body
-    const bodyGeom = new THREE.BoxGeometry(0.7, 0.5, 0.6);
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.position.y = 0.4;
-    body.castShadow = true;
-    body.receiveShadow = true;
-    group.add(body);
-
-    // Paper tray (protruding bottom)
-    const trayGeom = new THREE.BoxGeometry(0.65, 0.06, 0.35);
-    const tray = new THREE.Mesh(trayGeom, accentMat);
-    tray.position.set(0, 0.18, 0.15);
-    group.add(tray);
-
-    // Small control panel / screen
-    const screenGeom = new THREE.BoxGeometry(0.2, 0.12, 0.02);
-    const screen = new THREE.Mesh(screenGeom, screenMat);
-    screen.position.set(-0.2, 0.62, 0.3);
-    group.add(screen);
-
-    return group;
-  }
 
   private createExitSignMesh(width: number, height: number): THREE.Group {
     const group = new THREE.Group();
@@ -2854,7 +2754,8 @@ export class Game {
     
     const deltaTime = (currentTime - this.lastTime) / 1000;
     this.lastTime = currentTime;
-    
+    this.lastDelta = deltaTime;
+
     // Don't update game logic when paused
     if (!this.isPaused) {
       this.accumulator += deltaTime;
@@ -2874,14 +2775,25 @@ export class Game {
       }
     }
     
-    // Update sky gradient to follow camera
-    if (this.skyGradient && this.camera) {
-      this.skyGradient.update(this.camera.position);
+    // Roof cutaway: drop the suspended ceiling when the camera is above it.
+    this.officeInterior?.setCameraHeight(this.camera.position.y);
+
+    // Environment rig: recentre + texel-snap the shadow frustum on the player,
+    // and keep the sky dome / clouds riding along with them. Must run every frame.
+    if (this.envRig && this.chair) {
+      this.envRig.update(deltaTime, this.chair.position);
     }
-    
+
+    // Speed-driven radial blur + chromatic aberration.
+    if (this.postFX && this.chairBody) {
+      const v = this.physics.getVelocity(this.chairBody);
+      const speed = Math.sqrt(v.x * v.x + v.z * v.z);
+      this.postFX.setSpeed(Math.max(0, Math.min(1, speed / 22)));
+    }
+
     // Always render (even when paused)
     this.render();
-    
+
     requestAnimationFrame(this.loop.bind(this));
   }
   
@@ -3054,17 +2966,15 @@ export class Game {
     const currentSpeed = new THREE.Vector3(currentVel.x, 0, currentVel.z).length();
     proceduralSounds.updateWheelRoll(currentSpeed, this.playerState.isGrounded && !this.playerState.isGrinding);
     
-    // Rotate wheel meshes based on speed (visual feedback)
-    // Assuming ~5cm wheel diameter (0.025m radius), rotation = speed / radius
-    if (this.wheelMeshes.length > 0 && this.playerState.isGrounded && !this.playerState.isGrinding) {
-      const wheelRadius = 0.025;
-      const rotationDelta = (currentSpeed / wheelRadius) * dt;
-      for (const wheel of this.wheelMeshes) {
-        // Rotate around local X axis (wheels roll forward/back)
-        wheel.rotation.x += rotationDelta;
-      }
+    // Caster animation: forks trail the direction of travel, tyres roll at v/r.
+    // Must run AFTER the chair transform is written this frame.
+    if (this.chairParts) {
+      spinCasters(this.chairParts, currentSpeed, dt);
+    } else if (this.wheelMeshes.length > 0 && this.playerState.isGrounded && !this.playerState.isGrinding) {
+      const rotationDelta = (currentSpeed / 0.025) * dt;
+      for (const wheel of this.wheelMeshes) wheel.rotation.x += rotationDelta;
     }
-    
+
     // Update speed lines effect (radial blur at high speeds)
     this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);
 
@@ -3308,8 +3218,10 @@ export class Game {
     if (!this.playerModel) return;
     
     if (this.isMounted) {
-      // Mounted: player sits on chair
-      this.playerModel.setLocalPosition(-0.2, -0.4, 0);
+      // Mounted: player sits on the chair. Tuned to ChairModel tier 1, whose
+      // seat pan top sits at y = 0.45 above the caster contact patch (the chair
+      // group itself rides 0.70 above it, hence the negative local Y).
+      this.playerModel.setLocalPosition(-0.40, -0.46, 0.02);
     } else {
       // Standing: player behind chair, facing it
       // Position player behind and slightly to the side of chair
@@ -3322,6 +3234,7 @@ export class Game {
    * Trigger crash animation (called on bail)
    */
   triggerCrash(): void {
+    this.postFX?.pulse(1.0);
     if (!this.playerModel) return;
     this.animState = 'crash';
     this.stateStartTime = performance.now();
@@ -3455,7 +3368,10 @@ export class Game {
       if (impactShake > 0.05) {
         this.cameraController.shake(impactShake, 0.2);
       }
-      
+
+      // Screen-space impact punch (zoom + flash), decays over ~0.3s.
+      this.postFX?.pulse(Math.min(1, 0.25 + landingIntensity * 0.75));
+
       this.spinRotation = 0;
       this.cumulativeSpinDegrees = 0;
       this.hud?.setSpinCounter(0);  // Hide spin counter on landing
@@ -3597,17 +3513,24 @@ export class Game {
   }
   
   private render(_alpha?: number): void {
-    this.renderer.render(this.scene, this.camera);
+    // PostFX owns tone mapping while enabled and falls back to a plain
+    // renderer.render() internally if the composer failed to build.
+    if (this.postFX) {
+      this.postFX.render(this.lastDelta);
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
-  
+
   private onResize(): void {
     const width = window.innerWidth;
     const height = window.innerHeight;
-    
+
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    
+
     this.renderer.setSize(width, height);
+    this.postFX?.setSize(width, height);
   }
   
   /**

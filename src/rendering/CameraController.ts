@@ -6,6 +6,12 @@
 import * as THREE from 'three';
 
 export class CameraController {
+  /**
+   * Set false to stop the controller writing to the camera at all, leaving an
+   * external owner (the screenshot harness, a cutscene) in control of it.
+   */
+  enabled = true;
+
   private camera: THREE.PerspectiveCamera;
   private target: THREE.Object3D | null = null;
   
@@ -115,6 +121,7 @@ export class CameraController {
   }
   
   update(dt: number): void {
+    if (!this.enabled) return;
     if (!this.target) return;
     
     // Smoothly return orbit to default when not dragging

@@ -148,7 +148,9 @@ const SHADOW_OUTDOOR: ShadowSpec = {
 export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
   officeInterior: {
     interior: true,
-    exposure: 1.1,
+    // Measured against the reference histograms: at 1.1 the graded frame sat at
+    // p25/p50/p75 = 98/130/171 versus the refs' 50/91/127.
+    exposure: 0.8,
     envIntensity: 1.0,
     sky: {
       zenith: 0xe9ecef,
@@ -177,11 +179,13 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     },
     sun: { color: 0xeef3ff, intensity: 3.6, dir: [0.3, 1.0, 0.24] },
     fill: { color: 0x9fbcf0, intensity: 0.5, dir: [-0.65, 0.42, -0.75] },
-    bounce: { color: 0xffc189, intensity: 0.6, dir: [0.1, -1.0, -0.25] },
-    hemi: { sky: 0xdde7f5, ground: 0x8a6f52, intensity: 0.3 },
-    ambient: { color: 0xb6c2d0, intensity: 0.1 },
+    // Up-facing carpet bounce. Kept low: in a real floorplate the ceiling is a
+    // huge surface, and anything above ~0.25 here paints the whole ceiling amber.
+    bounce: { color: 0xffc189, intensity: 0.12, dir: [0.1, -1.0, -0.25] },
+    hemi: { sky: 0xdde7f5, ground: 0x8a6f52, intensity: 0.24 },
+    ambient: { color: 0xb6c2d0, intensity: 0.08 },
     shadow: SHADOW_INDOOR,
-    fog: { kind: 'linear', color: 0xa9a69e, near: 24, far: 96 },
+    fog: { kind: 'linear', color: 0x55534f, near: 16, far: 58 },
     background: 0x15171b,
     clouds: 0,
   },

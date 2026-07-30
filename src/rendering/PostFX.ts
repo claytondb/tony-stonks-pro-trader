@@ -254,14 +254,17 @@ void main() {
 
 // Baseline grade values, tuned against the office reference frames.
 const GRADE_DEFAULTS = {
-  saturation: 1.16,
-  contrast: 1.085,
-  pivot: 0.44,
-  vignette: 0.22,
+  // Retuned against the reference histograms after integration: the office
+  // interior has no sky and no true blacks of its own, so the original lift of
+  // 0.022 pushed p1 to 34/255 (refs sit at 6-9) and the whole frame read flat.
+  saturation: 1.26,
+  contrast: 1.22,
+  pivot: 0.42,
+  vignette: 0.26,
   grain: 0.028,
-  split: 0.6,
-  chromaticBase: 0.0011,
-  lift: new THREE.Vector3(0.022, 0.022, 0.031),
+  split: 0.5,
+  chromaticBase: 0.0005,
+  lift: new THREE.Vector3(0.004, 0.004, 0.009),
   gammaInv: new THREE.Vector3(1.0, 1.0, 1.0 / 1.02),
   gain: new THREE.Vector3(1.025, 1.015, 1.0),
   shadowTint: new THREE.Vector3(0.88, 0.955, 1.145),
@@ -422,11 +425,11 @@ export class PostFX {
         p.output = GTAOPass.OUTPUT.Default;
         p.blendIntensity = this.opts.aoIntensity;
         p.updateGtaoMaterial({
-          radius: 0.55,
+          radius: 1.3,
           distanceExponent: 1.0,
           thickness: 1.0,
           distanceFallOff: 1.0,
-          scale: 1.25,
+          scale: 1.6,
           samples: tier.aoSamples,
           screenSpaceRadius: false,
         });

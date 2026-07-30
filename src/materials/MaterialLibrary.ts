@@ -130,22 +130,29 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     env: 0.40, normalScale: 0.55, aoIntensity: 0.9,
   },
   ceilingTile: {
+    // A suspended ceiling only ever sees the floor bounce, which indoors is a dim
+    // warm brown — left untouched the whole ceiling renders tan. Cool the albedo
+    // and add a small self-emission so it reads as the bright neutral acoustic
+    // tile of the refs. Kept well under the 0.85 bloom threshold.
     surface: 'ceilingTile', repeat: [8, 8],
-    color: 0xffffff, roughness: 0.96, metalness: 0.0,
+    color: 0xd4dde6, roughness: 0.96, metalness: 0.0,
+    emissive: 0xbcc9d6, emissiveIntensity: 0.26,
     env: 0.50, normalScale: 0.6, aoIntensity: 1.0,
   },
   ceilingGrid: {
     // Painted aluminium T-bar: paint is a dielectric, so this is NOT metalness 1.
     surface: 'ceilingGridMetal', repeat: [4, 4],
-    color: 0xe9e6e0, roughness: 0.55, metalness: 0.12,
+    color: 0xb9bcc0, roughness: 0.55, metalness: 0.12,
     env: 0.85, normalScale: 0.4,
   },
   cubicleFabric: {
     // Cool blue-grey against the warm carpet — that warm/cool split is the whole look.
+    // Tinted slightly grey-down: at full white the panels read as saturated denim
+    // rather than the desaturated slate-grey of the refs.
     // Kept as MeshStandardMaterial on purpose: it has the largest screen coverage of any
     // prop surface and sheen would cost more than it returns here.
     surface: 'cubicleFabric', repeat: [4, 3],
-    color: 0xffffff, roughness: 0.93, metalness: 0.0,
+    color: 0xcfcdc6, roughness: 0.93, metalness: 0.0,
     env: 0.45, normalScale: 0.9, aoIntensity: 1.0,
   },
   cubicleTrim: {
@@ -162,8 +169,10 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     physical: { clearcoat: 0.45, clearcoatRoughness: 0.22, ior: 1.5 },
   },
   drywall: {
+    // Painted commercial partition. Tinted down from white: a pure-white albedo
+    // clips against a 3.6-intensity key and destroys the read of the cubicle line.
     surface: 'drywall', repeat: [8, 4],
-    color: 0xffffff, roughness: 0.96, metalness: 0.0,
+    color: 0xc8c4bc, roughness: 0.96, metalness: 0.0,
     env: 0.50, normalScale: 0.45,
   },
   concreteFloor: {

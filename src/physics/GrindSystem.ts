@@ -13,6 +13,8 @@ export interface Rail {
   end: THREE.Vector3;
   direction: THREE.Vector3;
   length: number;
+  /** Grind surface height at the rail. Derived from start/end y. */
+  height: number;
   mesh?: THREE.Object3D;
 }
 
@@ -49,7 +51,6 @@ export class GrindSystem {
   private readonly GRIND_FRICTION = 0.995;     // Very little friction (was 0.98)
   private readonly BALANCE_DRIFT = 0.08;       // Slow balance drift
   private readonly BALANCE_CORRECTION = 4.0;   // Fast player correction
-  private readonly RAIL_HEIGHT = 0.8;          // Height of rails
   private readonly MIN_GRIND_SPEED = 3.0;      // Don't go slower than this while grinding
   
   /**
@@ -73,6 +74,7 @@ export class GrindSystem {
       end: end.clone(),
       direction,
       length,
+      height: (start.y + end.y) * 0.5,
       mesh
     };
     
@@ -118,8 +120,9 @@ export class GrindSystem {
         playerPos.z - result.point.z
       ).length();
       
-      // Check height - player should be above or near rail height
-      const heightDiff = Math.abs(playerPos.y - this.RAIL_HEIGHT);
+      // Check height - player should be above or near this rail's own height.
+      // (Cubicle-panel tops sit at 1.4 m, floor rails at 0.8 m.)
+      const heightDiff = Math.abs(playerPos.y - rail.height);
       
       if (horizontalDist < nearestDist && heightDiff < this.SNAP_HEIGHT_TOLERANCE) {
         nearestDist = horizontalDist;
@@ -203,7 +206,7 @@ export class GrindSystem {
       rail.end,
       this.grindState.progress
     );
-    position.y = this.RAIL_HEIGHT + 0.3; // Slightly above rail
+    position.y = rail.height + 0.3; // Slightly above rail
     
     // Calculate velocity (for camera and animations)
     const velocity = rail.direction.clone()
@@ -231,7 +234,7 @@ export class GrindSystem {
     
     // Exit position at end of rail
     const exitPos = this.grindState.progress > 1 ? rail.end.clone() : rail.start.clone();
-    exitPos.y = this.RAIL_HEIGHT + 0.3;
+    exitPos.y = rail.height + 0.3;
     
     // Exit velocity maintains speed along rail direction
     const exitVel = rail.direction.clone()
@@ -260,7 +263,7 @@ export class GrindSystem {
       rail.end,
       this.grindState.progress
     );
-    pos.y = this.RAIL_HEIGHT;
+    pos.y = rail.height;
     
     // Fall off to the side based on balance
     const sideDir = new THREE.Vector3()
