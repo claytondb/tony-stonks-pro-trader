@@ -148,14 +148,19 @@ export interface PresetSpec {
  * that the contact point under each wheel survives.
  */
 const SHADOW_INDOOR: ShadowSpec = {
-  radius: 15,
+  // 15 m was a gameplay-camera number. In any establishing/wide framing it meant the
+  // ONLY shadows in the picture were the ones within 15 m of the player, and the
+  // remaining 80% of the floorplate was an unshadowed flat plane — which is precisely
+  // what read as "grey-beige archviz walkthrough". 20 m on the 4k map is 9.8 mm/texel,
+  // still fine enough that the chair casters keep their contact point.
+  radius: 20,
   distance: 45,
   castHeight: 8, // desks/cubicles/chairs cast; the ceiling slab above does not
   mapSize: 4096,
   // Tightened along with the resolution: the old -0.0005 / 0.02 pair was set for a
   // 2 cm texel and peter-pans the chair casters clean off their own contact shadow.
-  bias: -0.00022,
-  normalBias: 0.012,
+  bias: -0.00026,
+  normalBias: 0.015,
 };
 const SHADOW_OUTDOOR: ShadowSpec = {
   radius: 36,
@@ -174,58 +179,76 @@ const SHADOW_OUTDOOR: ShadowSpec = {
 export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
   officeInterior: {
     interior: true,
-    // Measured against the reference histograms: at 1.1 the graded frame sat at
-    // p25/p50/p75 = 98/130/171 versus the refs' 50/91/127.
-    exposure: 0.8,
-    envIntensity: 1.0,
+    // Raised with the ambient cut below (env 1.0 -> 0.78, hemi 0.24 -> 0.12,
+    // ambient 0.08 -> 0.03). Same mid-tone placement, but now the mid tone is
+    // carried by the KEY instead of by a uniform ambient wash, so the unlit side
+    // of every form actually falls away.
+    exposure: 0.95,
+    // The single biggest flattener in the old rig. A room IBL is a near-uniform
+    // dome: every unit of envIntensity fills the shadow side of every object and
+    // narrows the frame's tonal range. Dropping it and pushing the key up buys the
+    // whole "deep blacks / bright pools" separation the refs have.
+    envIntensity: 0.78,
     sky: {
-      zenith: 0xe9ecef,
-      horizon: 0xbdb9b1,
-      ground: 0x8b7f70,
+      zenith: 0xd6e0ee,
+      horizon: 0x93a0b2,
+      ground: 0x4f4a42,
       skyEnergy: 1.0,
-      groundEnergy: 0.3,
+      groundEnergy: 0.25,
       sunDiscEnergy: 0,
       bgGain: 1.0,
     },
     room: {
-      // Dim tile + bright, tightly-bounded troffers: the IBL integral stays low enough
-      // that the key light still sculpts, but reflective surfaces get a punchy highlight.
-      ceiling: 0xe4e6e6,
-      ceilingEnergy: 0.34,
-      panel: 0xf2f6ff, // ~5000K fluorescent
-      panelEnergy: 4.5,
+      // COOL tile, WARM troffers. This is the warm/cool separation baked straight
+      // into the IBL: an upward-facing surface catches warm light from the fixture
+      // grid, a vertical one catches cool bounce off the tile and the walls. It is
+      // not physically what a 5000K troffer does; it is what the concept art does,
+      // and the concept art is the target.
+      ceiling: 0xc9d6e8,
+      ceilingEnergy: 0.24,
+      panel: 0xfff0d4, // warm troffer — drives the amber highlight pools
+      panelEnergy: 7.0,
       panelCols: 8,
       panelRows: 4,
-      panelW: 0.34,
-      panelH: 0.3,
-      wall: 0xbdb8ae,
-      wallEnergy: 0.3,
-      floor: 0x8f8271, // warm carpet
-      floorEnergy: 0.18,
+      panelW: 0.3,
+      panelH: 0.26,
+      // Cool slate walls at a third of the old energy. The old 0xbdb8ae @ 0.30 was
+      // literally painting beige ambient onto every vertical surface in the level.
+      wall: 0x7d8798,
+      wallEnergy: 0.115,
+      floor: 0x6a5e50, // warm carpet, but barely any bounce energy
+      floorEnergy: 0.07,
     },
     // 41 degrees off the horizontal, NOT the old near-vertical 73. A 1.4 m cubicle
     // wall now lays a 1.6 m shadow band across the aisle, which is the whole reason
     // the floor reads as a surface instead of a texture.
-    sun: { color: 0xeef3ff, intensity: 3.5, dir: [0.62, 0.72, 0.34] },
-    // Raised 0.5 -> 0.85: the cool bounce has to actually land on the shaded face of
-    // every cubicle, or the warm/cool split exists only in the code comments.
-    fill: { color: 0x9fbcf0, intensity: 0.85, dir: [-0.65, 0.42, -0.75] },
+    //
+    // Warm (0xffeed2) and much stronger. Warm key + cool fill + cool IBL is the
+    // separation; doing it in the lights rather than only in the grade means the
+    // hue split survives into the material response and the specular highlights.
+    sun: { color: 0xffeed2, intensity: 5.2, dir: [0.62, 0.72, 0.34] },
+    // Saturated, not pastel: 0x9fbcf0 at 0.85 was a bright wash that filled the
+    // shadow side back in. A deeper blue at 0.5 tints the shadow instead of lifting it.
+    fill: { color: 0x5f8ee0, intensity: 0.5, dir: [-0.65, 0.42, -0.75] },
     // Up-facing carpet bounce. Kept low: in a real floorplate the ceiling is a
     // huge surface, and anything above ~0.25 here paints the whole ceiling amber.
-    bounce: { color: 0xffc189, intensity: 0.16, dir: [0.1, -1.0, -0.25] },
+    bounce: { color: 0xffb673, intensity: 0.1, dir: [0.1, -1.0, -0.25] },
     // Cool back rim so the near-black chair and the hero's shirt separate from the
-    // mid-tone carpet at follow-camera distance.
-    rim: { color: 0xcfe2ff, intensity: 1.15, yaw: 152, pitch: 26 },
-    hemi: { sky: 0xdde7f5, ground: 0x8a6f52, intensity: 0.24 },
-    ambient: { color: 0xb6c2d0, intensity: 0.08 },
+    // mid-tone carpet at follow-camera distance. Pushed hard — with the ambient gone
+    // the rim is now the ONLY thing drawing the hero's silhouette.
+    rim: { color: 0x9ec6ff, intensity: 1.9, yaw: 152, pitch: 26 },
+    hemi: { sky: 0xa8c2e6, ground: 0x453d33, intensity: 0.12 },
+    ambient: { color: 0x5c6c88, intensity: 0.03 },
     shadow: SHADOW_INDOOR,
-    // Aerial perspective: haze must start INSIDE the playable corridor and its value
-    // must sit ABOVE the carpet, otherwise fog subtracts light instead of receding.
-    fog: { kind: 'linear', color: 0x7d786e, near: 13, far: 56 },
-    // Matched to the fog. Anything the camera sees past the room shell (an
-    // establishing shot above the ceiling plane, a gap at the wall cap) now reads as
-    // the same haze rather than a hard black void.
-    background: 0x7d786e,
+    // Aerial perspective, rewritten. The old 0x7d786e / 13 / 56 pair fully saturated
+    // at 56 m, so in any wide framing the entire back half of the picture WAS the fog
+    // colour — one flat warm-grey slab. That is the "grey-beige archviz" note, almost
+    // literally. Now: a dark COOL slate that starts far out and never fully saturates
+    // inside the room, so distance reads as cool and dark against the warm foreground.
+    fog: { kind: 'linear', color: 0x475467, near: 24, far: 110 },
+    // Deliberately DARKER than the fog. Any hole in the room shell now reads as a
+    // deep-black void, which is a value the frame otherwise never reaches.
+    background: 0x1e242e,
     clouds: 0,
   },
 

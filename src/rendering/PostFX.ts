@@ -116,6 +116,7 @@ uniform float uGrain;
 uniform float uSaturation;
 uniform float uContrast;
 uniform float uPivot;
+uniform float uBlack;        // black point subtracted before the S-curve
 uniform vec3  uLift;
 uniform vec3  uGammaInv;
 uniform vec3  uGain;
@@ -157,6 +158,21 @@ vec3 tonemapACES( vec3 c ) {
   c = rrtOdtFit( c );
   c = ACES_OUT * c;
   return clamp( c, 0.0, 1.0 );
+}
+
+// --- contrast ---------------------------------------------------------------
+// A true S-curve, not `(x - pivot) * k + pivot`. The linear form has to be
+// clamped at both ends, so every value the expansion pushes past 1.0 lands on
+// exactly 1.0 and every value it pushes below 0 lands on exactly 0: crank it far
+// enough to open up the mid band and you buy flat clipped highlights and dead
+// black holes. This is a matched pair of power curves that meet C1-continuously
+// at the pivot, maps [0,1] onto [0,1] bijectively, has slope k at the pivot and
+// rolls smoothly into a toe and a shoulder. It can be pushed much harder.
+vec3 sCurve( vec3 x, float pivot, float k ) {
+  vec3 c = clamp( x, 0.0, 1.0 );
+  vec3 lo = pivot * pow( c / pivot, vec3( k ) );
+  vec3 hi = 1.0 - ( 1.0 - pivot ) * pow( ( 1.0 - c ) / ( 1.0 - pivot ), vec3( k ) );
+  return mix( lo, hi, step( vec3( pivot ), c ) );
 }
 
 float hash21( vec2 p ) {
