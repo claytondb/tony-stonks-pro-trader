@@ -350,7 +350,7 @@ export class PostFX {
     // > 1 deliberately: the grade's lift + pivot lift the AO term straight back out
     // again, so the pass has to over-deliver for the contact darkening to survive to
     // the frame.
-    aoIntensity: 1.3,
+    aoIntensity: 1.15,
     chromaticBase: GRADE_DEFAULTS.chromaticBase,
   };
 
@@ -446,11 +446,11 @@ export class PostFX {
         // most — the 2 cm where a cubicle partition meets the carpet — gets almost
         // nothing. 0.45 m with a superlinear exponent puts the energy at the contact.
         p.updateGtaoMaterial({
-          radius: 0.75,
-          distanceExponent: 1.5,
-          thickness: 0.6,
+          radius: 0.45,
+          distanceExponent: 1.7,
+          thickness: 0.45,
           distanceFallOff: 1.0,
-          scale: 2.2,
+          scale: 2.1,
           samples: tier.aoSamples,
           screenSpaceRadius: false,
         });

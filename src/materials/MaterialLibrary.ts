@@ -211,7 +211,7 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     // Warmer and more saturated: the desks are the warm note that the cool cubicle
     // fabric plays against, and at 0xf2deb5 they were washing out to bone.
     surface: 'deskLaminate', repeat: [3, 2],
-    color: 0xe8c98d, roughness: 0.35, metalness: 0.0,
+    color: 0xe3cb9e, roughness: 0.35, metalness: 0.0,
     env: 0.90, normalScale: 0.35, flatShading: true,
     physical: { clearcoat: 0.45, clearcoatRoughness: 0.22, ior: 1.5 },
   },
@@ -510,9 +510,9 @@ export interface LightPoolSpec {
   pitch: number;
   /** World-space XZ phase of the grid, in metres. */
   offset: [number, number];
-  /** Normalised cell distance at which the pool starts to fall off (0 = centre). */
+  /** Exponent on the raised-cosine pool. <1 broadens the pool, >1 tightens it. */
   inner: number;
-  /** Normalised cell distance at which the pool has fully fallen off (~1.41 = corner). */
+  /** 0..1 blend towards an S-curve, which sharpens the pool edge. */
   outer: number;
   /** Floor multiplier midway between fixtures. 1 = no pooling at all. */
   min: number;
@@ -532,10 +532,10 @@ export interface LightPoolSpec {
 export const LIGHT_POOL_OFFICE: LightPoolSpec = {
   pitch: 3.66,
   offset: [1.83, 1.83],
-  inner: 0.10,
-  outer: 1.02,
-  min: 0.80,
-  max: 1.13,
+  inner: 0.45,
+  outer: 0.35,
+  min: 0.84,
+  max: 1.12,
   color: 0xfff4e2,
   wear: 0.05,
 };
@@ -567,10 +567,14 @@ uniform float uLPOn;
 
 const LP_FRAG_BODY = /* glsl */ `
 if ( uLPOn > 0.5 ) {
+  // Separable raised-cosine, NOT a radial smoothstep. A radial falloff on a square
+  // lattice leaves dark star-shaped corners between four fixtures, which reads as
+  // coffee stains on the carpet rather than as light. The separable form gives the
+  // smooth overlapping ellipses a real troffer grid actually produces.
   vec2 cell = ( vLPWorld.xz - uLPOffset ) / uLPPitch;
-  vec2 f = abs( fract( cell ) - 0.5 ) * 2.0;
-  float d = length( f );
-  float pool = 1.0 - smoothstep( uLPInner, uLPOuter, d );
+  vec2 c = 0.5 + 0.5 * cos( 6.2831853 * cell );
+  float pool = pow( clamp( c.x * c.y, 0.0, 1.0 ), uLPInner );
+  pool = mix( pool, smoothstep( 0.0, 1.0, pool ), uLPOuter );
 
   // Two incommensurate low-frequency layers => no visible period at play scale.
   float wear = 0.5 + 0.5 * (
