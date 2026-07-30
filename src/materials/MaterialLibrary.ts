@@ -173,8 +173,8 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     // 0.6 m module and its fissured surface is one of the most recognisable textures in
     // an office. normalScale up so it actually catches the troffer grazing light.
     surface: 'ceilingTile', repeat: [8, 8], repeatScale: 2.0,
-    color: 0xd4dde6, roughness: 0.96, metalness: 0.0,
-    emissive: 0xbcc9d6, emissiveIntensity: 0.26, emissiveClamp: 0.4,
+    color: 0xc2ccd6, roughness: 0.96, metalness: 0.0,
+    emissive: 0xb0bece, emissiveIntensity: 0.13, emissiveClamp: 0.3,
     env: 0.50, normalScale: 0.9, aoIntensity: 1.0,
   },
   ceilingGrid: {
@@ -194,8 +194,8 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     // essentially no gloss. flatShading so the chamfered panel hulls read as authored
     // planes rather than smooth-shaded boxes.
     surface: 'cubicleFabric', repeat: [4, 3], repeatScale: 2.2,
-    color: 0xcfcdc6, roughness: 0.975, metalness: 0.0,
-    env: 0.35, normalScale: 0.22, aoIntensity: 1.0, flatShading: true,
+    color: 0xafaeac, roughness: 0.975, metalness: 0.0,
+    env: 0.30, normalScale: 0.34, aoIntensity: 1.0, flatShading: true,
   },
   cubicleTrim: {
     // The cap rail the player grinds — the primary skate surface in the level, so it
@@ -532,10 +532,10 @@ export interface LightPoolSpec {
 export const LIGHT_POOL_OFFICE: LightPoolSpec = {
   pitch: 3.66,
   offset: [1.83, 1.83],
-  inner: 0.12,
-  outer: 0.98,
-  min: 0.72,
-  max: 1.16,
+  inner: 0.10,
+  outer: 1.00,
+  min: 0.60,
+  max: 1.26,
   color: 0xfff0d6,
   wear: 0.13,
 };

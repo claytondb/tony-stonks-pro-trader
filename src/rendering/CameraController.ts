@@ -26,15 +26,15 @@ export class CameraController {
   //
   // The framing below is built from three numbers:
   //   - 58 deg vertical fov (~85 deg horizontal) — a skate-game lens, not a fisheye
-  //   - a look-at target 0.8 m BELOW the camera over a 3.4 m boom => ~13 deg of
-  //     downward pitch, which puts the ceiling line in the top ~15% of frame
+  //   - a look-at target ~1.05 m BELOW the camera over a 3.4 m boom => ~17 deg of
+  //     downward pitch, which puts the ceiling line in the top ~20% of frame
   //   - a lateral boom offset with a *smaller* matching look-at offset, so the
   //     vanishing point sits off-centre and the mirror symmetry breaks
   // ---------------------------------------------------------------------------
   private offset = new THREE.Vector3(0, 1.7, -3.4);
   /** Boom shifted off the player's centre line; the look-at follows only partly. */
   private lateralOffset = 0.5;
-  private lookAtHeight = 0.9;
+  private lookAtHeight = 0.66;
   private lookAtLateral = 0.16;
   private lookAhead = 0.5;
   private smoothSpeed = 30;       // Near-instant position tracking

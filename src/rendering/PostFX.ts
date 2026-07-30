@@ -271,8 +271,8 @@ const GRADE_DEFAULTS = {
   // pivot 0.42 -> 0.375: the contrast S-curve pivots around the office's own median,
   // and at 0.42 the expansion was pushing the AO/shadow band UP instead of down —
   // the ambient-occlusion term was being graded straight back out of the image.
-  saturation: 1.33,
-  contrast: 1.26,
+  saturation: 1.40,
+  contrast: 1.30,
   pivot: 0.375,
   vignette: 0.26,
   grain: 0.028,
@@ -446,8 +446,8 @@ export class PostFX {
         // most — the 2 cm where a cubicle partition meets the carpet — gets almost
         // nothing. 0.45 m with a superlinear exponent puts the energy at the contact.
         p.updateGtaoMaterial({
-          radius: 0.45,
-          distanceExponent: 1.6,
+          radius: 0.75,
+          distanceExponent: 1.5,
           thickness: 0.6,
           distanceFallOff: 1.0,
           scale: 2.2,

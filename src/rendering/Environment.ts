@@ -221,7 +221,7 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     shadow: SHADOW_INDOOR,
     // Aerial perspective: haze must start INSIDE the playable corridor and its value
     // must sit ABOVE the carpet, otherwise fog subtracts light instead of receding.
-    fog: { kind: 'linear', color: 0x7d786e, near: 11, far: 50 },
+    fog: { kind: 'linear', color: 0x7d786e, near: 13, far: 56 },
     // Matched to the fog. Anything the camera sees past the room shell (an
     // establishing shot above the ceiling plane, a gap at the wall cap) now reads as
     // the same haze rather than a hard black void.

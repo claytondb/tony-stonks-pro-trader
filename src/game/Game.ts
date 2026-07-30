@@ -25,7 +25,7 @@ import { PostFX } from '../rendering/PostFX';
 import { MaterialLibrary } from '../materials/MaterialLibrary';
 import { configureFromRenderer, warmup } from '../materials/ProceduralTextures';
 import { buildOfficeInterior, disposeOfficeInterior, type OfficeInterior } from '../world/OfficeLevel';
-import { makeFilingCabinet, makePrinter, makeTrashCan, makeWaterCooler } from '../world/OfficeProps';
+import { makeFilingCabinet, makeGrindRail, makeKickerRamp, makePrinter, makeTrashCan, makeWaterCooler } from '../world/OfficeProps';
 import { buildOfficeChair, spinCasters, type ChairParts } from '../world/ChairModel';
 import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } from '../story';
 import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
@@ -1876,7 +1876,7 @@ export class Game {
       case 'rail_angled':
       case 'rail_curved': {
         const length = (data.params?.length as number) || 10;
-        mesh = this.createRailMesh(length, railMaterial, metalMaterial);
+        mesh = this.createRailMesh(length);
         // Register with grind system
         const rot = data.rotation?.[1] || 0;
         const radRot = rot * Math.PI / 180;
@@ -1890,7 +1890,7 @@ export class Game {
       }
       
       case 'ramp': {
-        mesh = this.createRampMesh(woodMaterial);
+        mesh = this.createRampMesh();
         // Collider is a thin slab lying on the slope, matching the wedge mesh.
         const rampRot = (data.rotation?.[1] || 0) * Math.PI / 180;
         const slope = Math.atan2(Game.RAMP_H, Game.RAMP_D);
@@ -1898,8 +1898,24 @@ export class Game {
         this.physics.createStaticBox(
           new THREE.Vector3(data.position[0] + cx, Game.RAMP_H / 2, data.position[2]),
           new THREE.Vector3(Game.RAMP_W / 2, 0.09, Math.hypot(Game.RAMP_D, Game.RAMP_H) / 2),
-          new THREE.Euler(-slope, rampRot, 0)
+          // 'YXZ': yaw FIRST, then pitch about the ramp's own X. The default 'XYZ' order
+          // composes Rx*Ry, which tilts the collider out of the slope for any yaw other
+          // than 0 — it only went unnoticed while every ramp in the game faced the same way.
+          new THREE.Euler(-slope, rampRot, 0, 'YXZ')
         );
+        // The coping lip along the top of the kicker is a grind edge (makeKickerRamp
+        // publishes it in userData.grindEdges). Register it so a kicker can be ledged as
+        // well as launched off — that is what turns two ramps into a line.
+        for (const e of ((mesh.userData.grindEdges as { start: number[]; end: number[] }[]) ?? [])) {
+          const c = Math.cos(rampRot);
+          const s = Math.sin(rampRot);
+          const map = (p: number[]) => new THREE.Vector3(
+            data.position[0] + p[0] * c + p[2] * s,
+            p[1],
+            data.position[2] - p[0] * s + p[2] * c
+          );
+          this.grindSystem.addRail(map(e.start), map(e.end), `ramp_${data.position[0]}_${data.position[2]}`, mesh);
+        }
         break;
       }
         
@@ -2203,24 +2219,14 @@ export class Game {
   // LEVEL OBJECT MESH CREATION HELPERS
   // =============================================
   
-  private createRailMesh(length: number, railMat: THREE.Material, metalMat: THREE.Material): THREE.Group {
-    const group = new THREE.Group();
-    
-    const railGeom = new THREE.BoxGeometry(length, 0.08, 0.08);
-    const rail = new THREE.Mesh(railGeom, railMat);
-    rail.position.y = 0.8;
-    rail.castShadow = true;
-    group.add(rail);
-    
-    const postGeom = new THREE.CylinderGeometry(0.04, 0.04, 0.8);
-    for (const side of [-1, 1]) {
-      const post = new THREE.Mesh(postGeom, metalMat);
-      post.position.set(side * (length / 2 - 0.2), 0.4, 0);
-      post.castShadow = true;
-      group.add(post);
-    }
-    
-    return group;
+  /**
+   * A grind rail. Delegates to OfficeProps.makeGrindRail: round steel shaft with a
+   * caster-polished contact strip, welded base plates and a mid-brace, instead of the box
+   * on two pins this used to be. Top of the shaft is still at y = 0.80, so every existing
+   * grind registration is unchanged.
+   */
+  private createRailMesh(length: number): THREE.Group {
+    return makeGrindRail(length, { seed: Math.round(length * 13) + 1 });
   }
   
   // Ramp dimensions, shared by the mesh and its collider so they can't drift.
@@ -2229,48 +2235,19 @@ export class Game {
   private static readonly RAMP_H = 0.85;
 
   /**
-   * A solid low-poly kicker. The old version was a tilted 4x3 plank floating
-   * 60 cm off the carpet on two thin fins, which read as broken geometry and
-   * cast a hard rectangular shadow onto nothing.
+   * A kicker ramp. Delegates to OfficeProps.makeKickerRamp: beveled plywood deck, steel
+   * coping lip along the top edge (which is also a grind edge), deck battens, bolt heads,
+   * side cheek plates and a floor transition plate. The previous version was a bare
+   * ExtrudeGeometry wedge with hard 90-degree corners — the most obviously prototype-grade
+   * geometry in the level, and the object the player stares at longest during a trick.
    */
-  private createRampMesh(material: THREE.Material): THREE.Group {
-    const group = new THREE.Group();
-    const w = Game.RAMP_W / 2;
-    const d = Game.RAMP_D / 2;
-    const h = Game.RAMP_H;
-
-    // Triangular prism: flat at -Z, rising to full height at +Z.
-    const shape = new THREE.Shape();
-    shape.moveTo(-d, 0);
-    shape.lineTo(d, 0);
-    shape.lineTo(d, h);
-    shape.closePath();
-
-    const geom = new THREE.ExtrudeGeometry(shape, { depth: Game.RAMP_W, bevelEnabled: false });
-    // Extrude runs along +Z; rotate so the slope runs along Z and width along X.
-    geom.rotateY(Math.PI / 2);
-    geom.translate(0, 0, -w);
-    geom.computeVertexNormals();
-    const uv = geom.getAttribute('uv');
-    if (uv) geom.setAttribute('uv1', uv.clone());
-
-    const wedge = new THREE.Mesh(geom, material);
-    wedge.castShadow = true;
-    wedge.receiveShadow = true;
-    group.add(wedge);
-
-    // Steel nosing along the top lip — reads as an edge highlight and matches
-    // the metal trim on the cubicle caps.
-    const lip = new THREE.Mesh(
-      new THREE.BoxGeometry(Game.RAMP_W + 0.06, 0.07, 0.14),
-      MaterialLibrary.get('grindMetal')
-    );
-    lip.position.set(0, h - 0.02, d - 0.05);
-    lip.castShadow = true;
-    lip.receiveShadow = true;
-    group.add(lip);
-
-    return group;
+  private createRampMesh(): THREE.Group {
+    return makeKickerRamp({
+      width: Game.RAMP_W,
+      depth: Game.RAMP_D,
+      height: Game.RAMP_H,
+      seed: 4211,
+    });
   }
   
   private createQuarterPipeMesh(material: THREE.Material): THREE.Mesh {
