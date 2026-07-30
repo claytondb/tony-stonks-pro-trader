@@ -740,10 +740,10 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     acc.wear.push({
       x: rand(-halfW + 3, halfW - 3),
       z: rand(-halfD + 3, halfD - 3),
-      width: rand(0.5, 1.5),
-      depth: rand(0.5, 1.5),
+      width: rand(0.45, 1.1),
+      depth: rand(0.45, 1.1),
       rotation: rand(0, 3.14),
-      strength: rand(0.4, 0.8),
+      strength: rand(0.3, 0.6),
     });
   }
   const wearBatch = makeFloorWear(acc.wear);

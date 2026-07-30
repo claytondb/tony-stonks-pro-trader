@@ -432,7 +432,20 @@ const MAT = {
   plant: ['plantGreen', undefined] as [MaterialId, MaterialOptions | undefined],
   pot: ['terracotta', undefined] as [MaterialId, MaterialOptions | undefined],
   wood: ['woodFloor', { color: 0x7d6042, roughness: 0.55 }] as [MaterialId, MaterialOptions],
-  plywood: ['woodFloor', { color: 0xc79a5e, roughness: 0.62 }] as [MaterialId, MaterialOptions],
+  /**
+   * Ramp deck. Office laminate, not floorboard: the ramps in this game are improvised out of
+   * office furniture, and — more practically — ExtrudeGeometry emits UVs in METRES, so the
+   * library's woodFloor plank map tiled across a 3 m wedge as a saturated orange
+   * chequerboard. deskLaminate at ~one tile per 2 m gives a fine warm grain that holds up at
+   * the distance the player actually looks at a kicker from.
+   */
+  plywood: ['deskLaminate', { color: 0xd8c49a, roughness: 0.52, repeat: [0.55, 0.42] }] as [MaterialId, MaterialOptions],
+  /**
+   * Rail steel. POWDER-COATED, not bare metal: a metalness-1 shaft in a dim interior has
+   * nothing but a dark IBL to reflect, so bare-metal rails render as black bars. The polished
+   * caster strip on top is the only true metal on the prop, and it is the brighter for it.
+   */
+  railSteel: PAINT(0xc6ccd2, 0.34),
 
   // ---- SATURATED ACCENT FAMILY ---------------------------------------------
   // The refs get their production value from a handful of high-chroma notes against the
@@ -1896,7 +1909,7 @@ export function makeGrindRail(length: number, o?: PropOptions): THREE.Group {
   const shaftY = topY - rad;
 
   // Shaft: a duller steel than the contact strip, so the strip reads as worn.
-  const shaft = mesh(cyl(rad, rad, L, 10), ['brushedMetal', { color: 0xcdd2d8, roughness: 0.34 }], {
+  const shaft = mesh(cyl(rad, rad, L, 10), MAT.railSteel, {
     pos: [0, shaftY, 0],
     rot: [0, 0, Math.PI / 2],
   });
@@ -1921,13 +1934,13 @@ export function makeGrindRail(length: number, o?: PropOptions): THREE.Group {
   const legs = L > 9 ? 3 : 2;
   for (let i = 0; i < legs; i++) {
     const lx = -L / 2 + 0.35 + (i * (L - 0.7)) / (legs - 1);
-    ctx.root.add(mesh(cyl(0.026, 0.032, shaftY, 8), MAT.metal, { pos: [lx, shaftY / 2, 0] }));
+    ctx.root.add(mesh(cyl(0.026, 0.032, shaftY, 8), MAT.railSteel, { pos: [lx, shaftY / 2, 0] }));
     ctx.root.add(mesh(cbox(0.15, 0.022, 0.15, 0.006), MAT.deskFrame, { pos: [lx, 0.011, 0] }));
     // Weld collar.
-    ctx.root.add(mesh(cyl(0.042, 0.05, 0.03, 8), MAT.metal, { pos: [lx, 0.036, 0], cast: false }));
+    ctx.root.add(mesh(cyl(0.042, 0.05, 0.03, 8), MAT.railSteel, { pos: [lx, 0.036, 0], cast: false }));
   }
   if (legs > 2) {
-    ctx.root.add(mesh(sbox(L - 0.7, 0.03, 0.03), MAT.metal, { pos: [0, 0.22, 0] }));
+    ctx.root.add(mesh(sbox(L - 0.7, 0.03, 0.03), MAT.railSteel, { pos: [0, 0.22, 0] }));
   }
 
   ctx.grinds.push({ start: [-L / 2, topY, 0], end: [L / 2, topY, 0] });

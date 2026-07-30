@@ -175,7 +175,7 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     surface: 'ceilingTile', repeat: [8, 8], repeatScale: 2.0,
     color: 0xc2ccd6, roughness: 0.96, metalness: 0.0,
     emissive: 0xb0bece, emissiveIntensity: 0.13, emissiveClamp: 0.3,
-    env: 0.50, normalScale: 0.9, aoIntensity: 1.0,
+    env: 0.50, normalScale: 0.72, aoIntensity: 1.0,
   },
   ceilingGrid: {
     // Painted aluminium T-bar: paint is a dielectric, so this is NOT metalness 1.
@@ -537,7 +537,7 @@ export const LIGHT_POOL_OFFICE: LightPoolSpec = {
   min: 0.84,
   max: 1.12,
   color: 0xfff4e2,
-  wear: 0.05,
+  wear: 0.09,
 };
 
 const LP_UNIFORMS = {
