@@ -387,12 +387,27 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // shell that the far walls silhouette against instead of terminating on nothing.
   //
   // Costs 12 triangles and one draw call, and is fully occluded during gameplay.
+  //
+  // The tint is deliberately light: every face of a BackSide box has its normal pointing
+  // INWARD, so the sun never lights the underside of the roof and a mid-grey shell crushes to
+  // near-black exactly where the establishing camera looks. Light albedo + a shell height
+  // that keeps the roof inside the fog's far plane is what keeps that band readable.
+  const SHELL_H = H + 6;
   const shell = new THREE.Mesh(
-    withUV1(new THREE.BoxGeometry(W + 4, H + 9, D + 4)),
-    MaterialLibrary.get('drywall', { repeat: [6, 3], color: 0x8f8b83 }),
+    withUV1(new THREE.BoxGeometry(W + 4, SHELL_H, D + 4)),
+    // The small self-emission is the point: the roof face of a BackSide box has its normal
+    // pointing straight down, so no directional light will ever touch it and it crushes to
+    // black. A flat ~0.4 emissive pinned near the fog value makes the shell behave like
+    // aerial perspective instead of like a hole in the world. Far under the bloom threshold.
+    MaterialLibrary.get('drywall', {
+      repeat: [6, 3],
+      color: 0xcfc9bd,
+      emissive: 0x8a8479,
+      emissiveIntensity: 0.55,
+    }),
   );
   shell.material.side = THREE.BackSide;
-  shell.position.set(0, (H + 9) / 2 - 0.6, 0);
+  shell.position.set(0, SHELL_H / 2 - 0.6, 0);
   shell.name = 'officeBuildingShell';
   shell.castShadow = false;
   shell.receiveShadow = false;

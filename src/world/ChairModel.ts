@@ -884,6 +884,95 @@ function buildBack(spec: TierSpec, pal: Palette): { group: THREE.Group; triangle
 }
 
 // ---------------------------------------------------------------------------
+// Contact shadow
+// ---------------------------------------------------------------------------
+
+let CONTACT_TEX: THREE.CanvasTexture | null = null;
+
+/**
+ * A soft radial darkening disc, multiply-blended onto whatever is under the chair.
+ *
+ * The shadow map alone cannot do this job: the sun frustum covers the whole room, so at the
+ * scale of a 26 mm caster the cast shadow is a couple of texels wide and gets pushed off the
+ * contact point by the normal bias — which is exactly the "the five wheels do not touch their
+ * own shadow, so the chair appears to hover" note from the review. A dedicated contact term is
+ * how every shipped skate game solves it, and it costs one transparent quad.
+ */
+function contactShadowTexture(): THREE.CanvasTexture {
+  if (CONTACT_TEX) return CONTACT_TEX;
+  const S = 128;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d')!;
+  g.fillStyle = '#ffffff';
+  g.fillRect(0, 0, S, S);
+
+  const img = g.getImageData(0, 0, S, S);
+  const px = img.data;
+  const c = (S - 1) * 0.5;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const dx = (x - c) / c;
+      const dy = (y - c) / c;
+      // Slightly elliptical, biased back under the seat where the mass actually is.
+      const r = Math.sqrt(dx * dx + (dy - 0.06) * (dy - 0.06) * 1.15);
+      // Two lobes: a tight dark core at the caster ring, a wide soft ambient falloff.
+      const core = Math.max(0, 1 - Math.pow(r / 0.46, 1.7));
+      const wide = Math.max(0, 1 - Math.pow(Math.min(r, 1), 1.35));
+      const k = Math.min(1, core * 0.62 + wide * 0.40);
+      const v = Math.round(255 * (1 - k));
+      const i = (y * S + x) * 4;
+      px[i] = px[i + 1] = px[i + 2] = v;
+      px[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(cv);
+  // Multiply-blended luminance, not albedo: this map must stay linear.
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  CONTACT_TEX = tex;
+  return tex;
+}
+
+function buildContactShadow(spec: TierSpec): THREE.Mesh {
+  const r = (spec.spokeLen + 0.06) * 2.35;
+  const geo = new THREE.PlaneGeometry(r, r * 1.05);
+  geo.rotateX(-Math.PI * 0.5);
+  // Blend maths: result = dst * ( src + 1 - a ). Driving both `color` and `opacity` with the
+  // same fade f (so src = f * tex, a = f) collapses that to dst * mix( 1, tex, f ) — a true
+  // multiply that can be faded out to a no-op when the chair leaves the ground.
+  const mat = new THREE.MeshBasicMaterial({
+    map: contactShadowTexture(),
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+    fog: false,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.DstColorFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+    blendEquation: THREE.AddEquation,
+    blendSrcAlpha: THREE.ZeroFactor,
+    blendDstAlpha: THREE.OneFactor,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'chairContactShadow';
+  mesh.position.y = 0.006;
+  mesh.renderOrder = 2;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+  mesh.frustumCulled = false;
+  return mesh;
+}
+
+// ---------------------------------------------------------------------------
 // Assembly
 // ---------------------------------------------------------------------------
 
@@ -922,6 +1011,12 @@ export function buildOfficeChair(opts?: ChairOptions): ChairParts {
   const backBuilt = buildBack(spec, pal);
   seatBuilt.group.add(backBuilt.group);
 
+  // Contact shadow lives on the root (the caster contact plane), NOT on the swivel, so it
+  // stays square to the floor while the seat spins.
+  const contact = buildContactShadow(spec);
+  root.add(contact);
+  root.userData.contactShadow = contact;
+
   root.userData.swivel = swivel;
   root.userData.tier = tier;
   root.userData.triangles =
@@ -929,7 +1024,7 @@ export function buildOfficeChair(opts?: ChairOptions): ChairParts {
     baseBuilt.casters.reduce((n, c) => n + ((c.userData.triangles as number) ?? 0), 0);
 
   root.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh) {
+    if ((o as THREE.Mesh).isMesh && o !== contact) {
       o.castShadow = true;
       o.receiveShadow = true;
     }
@@ -955,6 +1050,9 @@ interface CasterState {
   yaw: number[];
   prevPos: THREE.Vector3;
   hasPrev: boolean;
+  /** Asymmetric tracker for the floor the chair was last standing on. */
+  groundY: number;
+  contactFade: number;
 }
 
 const CASTER_STATE = new WeakMap<THREE.Object3D, CasterState>();
@@ -980,7 +1078,10 @@ export function spinCasters(parts: ChairParts, speed: number, dt: number): void 
 
   let st = CASTER_STATE.get(root);
   if (!st) {
-    st = { spin: 0, yaw: parts.casters.map((c) => c.rotation.y), prevPos: new THREE.Vector3(), hasPrev: false };
+    st = {
+      spin: 0, yaw: parts.casters.map((c) => c.rotation.y), prevPos: new THREE.Vector3(),
+      hasPrev: false, groundY: 0, contactFade: 1,
+    };
     CASTER_STATE.set(root, st);
   }
   while (st.yaw.length < parts.casters.length) st.yaw.push(0);
@@ -1039,6 +1140,31 @@ export function spinCasters(parts: ChairParts, speed: number, dt: number): void 
   }
 
   st.spin += v * dt;
+
+  // ---- contact shadow ------------------------------------------------------
+  // The caster ring is at root y = 0, so the root's own world height above the floor it last
+  // touched IS the hover distance. Track that floor asymmetrically: instant on the way down
+  // (landing, or rolling onto a lower surface), slow on the way up, so ollies and drops both
+  // read correctly without the chair needing to tell us it is airborne.
+  const contact = root.userData.contactShadow as THREE.Mesh | undefined;
+  if (contact) {
+    if (!st.hasPrev) st.groundY = _worldPos.y;
+    if (_worldPos.y < st.groundY) st.groundY = _worldPos.y;
+    else st.groundY += (_worldPos.y - st.groundY) * Math.min(1, dt * 0.9);
+
+    const hover = Math.max(0, _worldPos.y - st.groundY);
+    const target = Math.max(0, 1 - hover / 0.55);
+    st.contactFade += (target - st.contactFade) * Math.min(1, dt * 12);
+
+    const f = st.contactFade;
+    const m = contact.material as THREE.MeshBasicMaterial;
+    m.color.setScalar(f);
+    m.opacity = f;
+    // The disc grows and softens with height, exactly like a real penumbra.
+    const s = 1 + hover * 0.55;
+    contact.scale.set(s, 1, s);
+    contact.visible = f > 0.02;
+  }
 }
 
 /** Free every geometry the chair owns. Materials belong to MaterialLibrary — left alone. */

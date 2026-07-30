@@ -23,13 +23,16 @@ export class SpeedLines {
   private camera: THREE.Camera;
   
   // Settings
-  private readonly MAX_LINES = 40;
-  private readonly SPEED_THRESHOLD = 10;     // Start showing at this speed
-  private readonly FULL_EFFECT_SPEED = 18;   // Full intensity at this speed
-  private readonly LINE_LIFETIME = 0.15;      // Seconds
-  private readonly SPAWN_RATE = 80;           // Lines per second at full speed
-  private readonly MIN_RADIUS = 0.7;          // Screen-space distance from center (0-1)
-  private readonly MAX_RADIUS = 0.95;
+  // A skate game has to sell velocity in a STILL frame. The old thresholds (10 -> 18 m/s)
+  // meant the effect only existed at terminal velocity, so the "in motion" screenshot was
+  // pixel-identical to the static one. Cruise is ~6-11 m/s; the ramp now lives there.
+  private readonly MAX_LINES = 64;
+  private readonly SPEED_THRESHOLD = 4.5;    // Start showing at this speed
+  private readonly FULL_EFFECT_SPEED = 13;   // Full intensity at this speed
+  private readonly LINE_LIFETIME = 0.17;      // Seconds
+  private readonly SPAWN_RATE = 150;          // Lines per second at full speed
+  private readonly MIN_RADIUS = 0.52;         // Screen-space distance from center (0-1)
+  private readonly MAX_RADIUS = 1.02;
   
   private spawnAccumulator = 0;
   private currentIntensity = 0;  // 0-1 based on speed
@@ -50,7 +53,9 @@ export class SpeedLines {
     this.material = new THREE.LineBasicMaterial({
       vertexColors: true,
       transparent: true,
-      opacity: 0.8,
+      opacity: 0.85,
+      toneMapped: false,
+      fog: false,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       depthTest: false,  // Always render on top
@@ -81,12 +86,18 @@ export class SpeedLines {
     const radiusT = Math.pow(Math.random(), 0.5);  // Bias toward outer
     const radius = this.MIN_RADIUS + radiusT * (this.MAX_RADIUS - this.MIN_RADIUS);
     
-    // Convert to camera-local position (in front of camera, at edge of view)
-    const distance = 2;  // Distance from camera
-    const fovFactor = 1.2;  // Adjust for FOV
-    
-    const x = Math.cos(angle) * radius * fovFactor;
-    const y = Math.sin(angle) * radius * fovFactor;
+    // Convert to camera-local position (in front of camera, at the edge of the view frustum).
+    // Deriving the extent from the live camera means the streaks stay pinned to the frame edge
+    // through the whole speed-driven FOV ramp instead of drifting inward as the lens widens.
+    const distance = 2;
+    const cam = this.camera as THREE.PerspectiveCamera;
+    const halfH = cam.isPerspectiveCamera
+      ? distance * Math.tan(THREE.MathUtils.degToRad(cam.fov) * 0.5)
+      : 1.1;
+    const halfW = halfH * (cam.isPerspectiveCamera ? cam.aspect : 1.78);
+
+    const x = Math.cos(angle) * radius * halfW;
+    const y = Math.sin(angle) * radius * halfH;
     
     // Velocity points inward (toward center) with slight randomization
     const inwardSpeed = 8 + Math.random() * 4;
@@ -208,15 +219,15 @@ export class SpeedLines {
         const fade = lifeRatio * lifeRatio;  // Quadratic fade
         const brightness = fade * this.currentIntensity;
         
-        // Start of line (brighter, more white)
-        colors[baseIdx] = 0.9 * brightness;      // R
-        colors[baseIdx + 1] = 0.95 * brightness; // G
-        colors[baseIdx + 2] = 1.0 * brightness;  // B (slight cyan tint)
-        
-        // End of line (dimmer, fades out)
-        colors[baseIdx + 3] = 0.7 * brightness;
-        colors[baseIdx + 4] = 0.8 * brightness;
-        colors[baseIdx + 5] = 1.0 * brightness;
+        // Inner end: hot and near-white. Outer end: cools to nothing, so each streak has a
+        // direction and the frame gets a radial read instead of a ring of even dashes.
+        colors[baseIdx] = 1.00 * brightness;
+        colors[baseIdx + 1] = 0.97 * brightness;
+        colors[baseIdx + 2] = 0.90 * brightness;
+
+        colors[baseIdx + 3] = 0.30 * brightness;
+        colors[baseIdx + 4] = 0.26 * brightness;
+        colors[baseIdx + 5] = 0.22 * brightness;
       } else {
         // Hide unused line segments by moving off-screen
         positions[baseIdx] = 0;
