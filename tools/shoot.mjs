@@ -226,7 +226,10 @@ async function main() {
       };
     });
 
-    await page.screenshot({ path: OUT });
+    // Software WebGL (SwiftShader) renders the full post-FX stack at a fraction of a
+    // frame per second, so a single screenshot can take minutes. The default 30s cap
+    // was silently failing every capture once GTAO + bloom + SMAA came online.
+    await page.screenshot({ path: OUT, timeout: 240000, animations: 'allow' });
   } catch (e) {
     report.errors.push(`HARNESS: ${String(e).slice(0, 600)}`);
     exitCode = 1;
