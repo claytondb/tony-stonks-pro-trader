@@ -22,6 +22,9 @@ function damp(k: number, dt: number): number {
   return 1 - Math.exp(-k * dt);
 }
 
+/** Camera-local forward axis, reused for the dutch-roll quaternion. */
+const FORWARD_AXIS = /*@__PURE__*/ new THREE.Vector3(0, 0, 1);
+
 /** Shortest signed angular difference, wrapped to [-pi, pi]. */
 function angleDelta(to: number, from: number): number {
   let d = to - from;
@@ -95,6 +98,7 @@ export class CameraController {
   private hasPrevYaw = false;
   private rollCurrent = 0;
   private readonly maxRoll = 0.075;   // ~4.3 degrees
+  private readonly rollQuat = new THREE.Quaternion();
   
   // Trick zoom settings (zoom out during air time for better visibility)
   private trickZoomAmount = 0.10;   // Subtler zoom during tricks
@@ -320,8 +324,44 @@ export class CameraController {
       const targetRoll = THREE.MathUtils.clamp(-lateral * 0.010, -this.maxRoll, this.maxRoll);
       this.rollCurrent += (targetRoll - this.rollCurrent) * damp(8, dt);
     }
+    // Apply the roll as a rotation about the camera's OWN forward axis.
+    //
+    // This used to be `this.camera.rotation.z = this.rollCurrent`, which is what was
+    // flipping the camera upside-down. `camera.rotation` is an Euler with order 'XYZ',
+    // and after lookAt() all three of its components are non-zero and COUPLED — the z
+    // term is not camera roll, it is the third factor of an XYZ decomposition. Writing
+    // it in isolation both applies the wrong rotation and, as the pitch term approaches
+    // the XYZ gimbal singularity, recomposes into a wildly different orientation. Skate
+    // around long enough to swing the camera through that heading and it inverts.
+    //
+    // A quaternion multiply on the local Z axis is an exact camera-space roll with no
+    // singularity anywhere.
     if (Math.abs(this.rollCurrent) > 1e-4) {
-      this.camera.rotation.z = this.rollCurrent;
+      this.rollQuat.setFromAxisAngle(FORWARD_AXIS, this.rollCurrent);
+      this.camera.quaternion.multiply(this.rollQuat);
+    }
+
+    // Last line of defence. A single NaN anywhere upstream (a degenerate normalize, a
+    // divide by a zero dt) propagates into the camera transform and never clears itself,
+    // because every subsequent frame lerps from the poisoned value. Detect it and
+    // re-seed from the target rather than leaving the player with a broken view.
+    if (
+      !Number.isFinite(this.camera.position.x) ||
+      !Number.isFinite(this.camera.position.y) ||
+      !Number.isFinite(this.camera.position.z) ||
+      !Number.isFinite(this.currentLookAt.x) ||
+      !Number.isFinite(this.currentOffset.x)
+    ) {
+      console.warn('[CameraController] non-finite transform — re-seeding from target');
+      this.currentOffset.copy(this.offset);
+      this.currentLookAt.copy(this.target.position);
+      this.camera.position.copy(this.target.position).add(this.offset);
+      this.camera.up.set(0, 1, 0);
+      this.camera.quaternion.identity();
+      this.rollCurrent = 0;
+      this.hasCamYaw = false;
+      this.hasPrevYaw = false;
+      this.camera.lookAt(this.currentLookAt);
     }
 
     // Update impact zoom decay
