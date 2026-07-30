@@ -57,6 +57,8 @@ export type PostQuality = 'off' | 'low' | 'medium' | 'high' | 'ultra';
 export interface GradeOptions {
   saturation?: number;
   contrast?: number;
+  /** Black point subtracted (in the gamma-2.2 working space) before the S-curve. */
+  black?: number;
   vignette?: number;
   grain?: number;
   split?: number;
@@ -66,6 +68,9 @@ export interface GradeOptions {
   aoIntensity?: number;
   chromaticBase?: number;
 }
+
+/** GTAO debug views. 'default' is the shipping composite. */
+export type AODebug = 'default' | 'ao' | 'denoise' | 'off';
 
 interface TierSpec {
   bloom: boolean;
@@ -161,7 +166,7 @@ vec3 tonemapACES( vec3 c ) {
 }
 
 // --- contrast ---------------------------------------------------------------
-// A true S-curve, not `(x - pivot) * k + pivot`. The linear form has to be
+// A true S-curve, not the linear (x - pivot) * k + pivot. That form has to be
 // clamped at both ends, so every value the expansion pushes past 1.0 lands on
 // exactly 1.0 and every value it pushes below 0 lands on exactly 0: crank it far
 // enough to open up the mid band and you buy flat clipped highlights and dead
@@ -239,8 +244,14 @@ void main() {
   col = col * uGain;
   col = pow( max( col, 0.0 ), uGammaInv );
 
+  // black point ----------------------------------------------------------
+  // An interior with a room IBL has no true black of its own; every surface
+  // gets some ambient. Re-anchoring the floor of the range here is what lets
+  // the S-curve below produce an actual shadow CORE instead of another mid grey.
+  col = max( col - uBlack, 0.0 ) / max( 1.0 - uBlack, 1e-3 );
+
   // contrast around a sub-0.5 pivot (refs sit at a ~0.37 median) ---------
-  col = ( col - uPivot ) * uContrast + uPivot;
+  col = sCurve( col, uPivot, uContrast );
 
   // lift LAST so the filmic toe survives the contrast S-curve. The refs
   // never reach true black: their 1st-percentile luma is 6-9/255.
@@ -248,12 +259,19 @@ void main() {
 
   // warm highlight / cool shadow split tone ------------------------------
   float l = dot( clamp( col, 0.0, 1.0 ), LUMA );
-  vec3 tint = mix( uShadowTint, uHighlightTint, smoothstep( 0.06, 0.62, l ) );
+  vec3 tint = mix( uShadowTint, uHighlightTint, smoothstep( 0.04, 0.66, l ) );
   col *= mix( vec3( 1.0 ), tint, uSplit );
 
-  // saturation -----------------------------------------------------------
+  // saturation, vibrance-weighted ----------------------------------------
+  // A flat multiply on an already-neutral frame just amplifies grade noise in
+  // the greys while leaving the accents (navy panel, red tie, orange ramp)
+  // barely moved. Weighting the boost by how UNsaturated a pixel already is
+  // pushes the accents hardest and leaves the carpet alone.
   float g = dot( clamp( col, 0.0, 1.0 ), LUMA );
-  col = mix( vec3( g ), col, uSaturation );
+  vec3 dev = col - vec3( g );
+  float chroma = length( dev ) * 1.4142;
+  float vib = 1.0 + ( uSaturation - 1.0 ) * ( 0.55 + 0.9 * smoothstep( 0.02, 0.34, chroma ) );
+  col = vec3( g ) + dev * vib;
 
   // pulse white flash ----------------------------------------------------
   col += p * vec3( 0.22, 0.208, 0.185 );
@@ -287,21 +305,39 @@ const GRADE_DEFAULTS = {
   // pivot 0.42 -> 0.375: the contrast S-curve pivots around the office's own median,
   // and at 0.42 the expansion was pushing the AO/shadow band UP instead of down —
   // the ambient-occlusion term was being graded straight back out of the image.
-  saturation: 1.28,
-  contrast: 1.30,
-  pivot: 0.375,
-  vignette: 0.22,
-  grain: 0.028,
-  split: 0.5,
+  // Retuned again after measuring the r2 build against the refs. The build was
+  // sitting at std(luma) 44.8 with 69% of every frame inside the 60-140 band; the
+  // refs are std 53-58 with only 47-53% in that band, 10-13% below 32 and 5-8%
+  // above 200. i.e. the grade was not producing a narrow band because it lacked
+  // gain, it was producing one because the linear contrast had to stay timid to
+  // avoid clipping. With the real S-curve it can be pushed.
+  saturation: 1.36,
+  contrast: 1.46, // slope at the pivot; a true S-curve, so this does not clip
+  pivot: 0.36,
+  black: 0.03,
+  vignette: 0.3,
+  grain: 0.026,
+  // 0.5 -> 0.66. Measured shadow R/B was 0.86 against the refs' 0.70-0.81 — the
+  // shadows were not cool, they were neutral with a story about being cool.
+  split: 0.66,
   chromaticBase: 0.0005,
-  lift: new THREE.Vector3(0.004, 0.004, 0.009),
-  gammaInv: new THREE.Vector3(1.0, 1.0, 1.0 / 1.02),
-  gain: new THREE.Vector3(1.025, 1.015, 1.0),
-  shadowTint: new THREE.Vector3(0.88, 0.955, 1.145),
-  highlightTint: new THREE.Vector3(1.08, 1.0, 0.885),
+  lift: new THREE.Vector3(0.003, 0.004, 0.011),
+  gammaInv: new THREE.Vector3(1.0, 1.0, 1.0 / 1.03),
+  // Was (1.025, 1.015, 1.0) — a warm multiply on EVERY pixel including the
+  // shadows, which is a large part of how the whole frame came out beige. Warmth
+  // now lives only in the highlight end of the split tone, where it belongs.
+  gain: new THREE.Vector3(1.0, 1.0, 1.0),
+  shadowTint: new THREE.Vector3(0.8, 0.935, 1.225),
+  highlightTint: new THREE.Vector3(1.11, 1.0, 0.855),
 };
 
-const BLOOM_DEFAULTS = { strength: 0.35, radius: 0.6, threshold: 0.85 };
+// threshold 0.85 linear was above everything in the scene EXCEPT the emissive
+// troffer quads, so the bloom had exactly one client and it read as a blown-out
+// sprite rather than as light in a room. Scene mid-grey lands near 0.14 linear and
+// a brightly-lit ceiling/desk near 0.6, so 0.55 lets the lit surfaces themselves
+// halate — the fixtures stop being uniquely special — while the lower strength
+// and wider radius turn the fixture from a hard white quad into a soft pool.
+const BLOOM_DEFAULTS = { strength: 0.42, radius: 0.9, threshold: 0.55 };
 
 /** Wrap an addon constructor so a broken/absent pass degrades instead of throwing. */
 function tryMake<T>(label: string, factory: () => T): T | null {
@@ -353,20 +389,23 @@ export class PostFX {
 
   private savedToneMapping: THREE.ToneMapping;
   private lastSeenExposure = 1;
+  private aoDebug: AODebug = 'default';
 
   private opts: Required<Omit<GradeOptions, never>> = {
     saturation: GRADE_DEFAULTS.saturation,
     contrast: GRADE_DEFAULTS.contrast,
+    black: GRADE_DEFAULTS.black,
     vignette: GRADE_DEFAULTS.vignette,
     grain: GRADE_DEFAULTS.grain,
     split: GRADE_DEFAULTS.split,
     bloomStrength: BLOOM_DEFAULTS.strength,
     bloomRadius: BLOOM_DEFAULTS.radius,
     bloomThreshold: BLOOM_DEFAULTS.threshold,
-    // > 1 deliberately: the grade's lift + pivot lift the AO term straight back out
-    // again, so the pass has to over-deliver for the contact darkening to survive to
-    // the frame.
-    aoIntensity: 1.15,
+    // > 1 deliberately: the blend is `mix(vec3(1.0), ao, intensity)` multiplied onto
+    // the beauty buffer, so intensity > 1 extrapolates past the raw AO and darkens
+    // harder. It has to: the grade's lift + pivot lift the AO term straight back out
+    // again, so the pass must over-deliver for contact darkening to survive to frame.
+    aoIntensity: 1.55,
     chromaticBase: GRADE_DEFAULTS.chromaticBase,
   };
 
@@ -455,18 +494,25 @@ export class PostFX {
       const gtao = tryMake('GTAOPass', () => {
         if (!isCtor(GTAOPass)) throw new Error('GTAOPass missing');
         const p = new GTAOPass(this.scene, this.camera, aw, ah);
-        p.output = GTAOPass.OUTPUT.Default;
+        p.output = this.aoDebugOutput();
         p.blendIntensity = this.opts.aoIntensity;
         // CONTACT occlusion, not mid-range room occlusion. A 1.3 m world radius with a
         // linear distance falloff spreads the term so thinly that the place it matters
         // most — the 2 cm where a cubicle partition meets the carpet — gets almost
-        // nothing. 0.45 m with a superlinear exponent puts the energy at the contact.
+        // nothing. A tight radius with a superlinear exponent puts the energy at the
+        // contact.
+        //
+        // 0.45 m was still too tight for THIS scene's scale, though: a desk pedestal is
+        // ~0.6 m deep and a cubicle bay ~1.5 m, so at 0.45 m the pass could only see the
+        // last centimetre of every junction and the "soft dark pool" the whole desk
+        // should be sitting in never formed. 0.7 m spans the pedestal, and `thickness`
+        // is kept well under the radius so background geometry doesn't false-occlude.
         p.updateGtaoMaterial({
-          radius: 0.45,
-          distanceExponent: 1.7,
-          thickness: 0.45,
+          radius: 0.7,
+          distanceExponent: 1.45,
+          thickness: 0.32,
           distanceFallOff: 1.0,
-          scale: 2.1,
+          scale: 2.6,
           samples: tier.aoSamples,
           screenSpaceRadius: false,
         });
@@ -476,7 +522,7 @@ export class PostFX {
           lumaPhi: 10,
           depthPhi: 1.5,
           normalPhi: 4,
-          radius: 2.5,
+          radius: 3,
           radiusExponent: 1,
           rings: 2,
           samples: tier.pdSamples,
@@ -535,6 +581,7 @@ export class PostFX {
           uSaturation: { value: this.opts.saturation },
           uContrast: { value: this.opts.contrast },
           uPivot: { value: GRADE_DEFAULTS.pivot },
+          uBlack: { value: this.opts.black },
           uLift: { value: GRADE_DEFAULTS.lift.clone() },
           uGammaInv: { value: GRADE_DEFAULTS.gammaInv.clone() },
           uGain: { value: GRADE_DEFAULTS.gain.clone() },
@@ -677,6 +724,33 @@ export class PostFX {
     this.pulseValue = Math.max(this.pulseValue, s);
   }
 
+  /**
+   * Show the raw / denoised AO buffer instead of the composite. Diagnostic only —
+   * the shipping path is 'default'. Use this before ever concluding "AO is on but
+   * invisible": it distinguishes "the pass produced nothing" from "the pass produced
+   * something and the grade ate it".
+   */
+  setAODebug(mode: AODebug): void {
+    if (mode === this.aoDebug) return;
+    this.aoDebug = mode;
+    if (this.aoPass && this.aoPass instanceof GTAOPass) {
+      this.aoPass.output = this.aoDebugOutput();
+    }
+  }
+
+  private aoDebugOutput(): number {
+    switch (this.aoDebug) {
+      case 'ao':
+        return GTAOPass.OUTPUT.AO;
+      case 'denoise':
+        return GTAOPass.OUTPUT.Denoise;
+      case 'off':
+        return GTAOPass.OUTPUT.Off;
+      default:
+        return GTAOPass.OUTPUT.Default;
+    }
+  }
+
   /** Live tuning; any subset of the grade/bloom/AO knobs. */
   configure(o: GradeOptions): void {
     Object.assign(this.opts, o);
@@ -685,6 +759,7 @@ export class PostFX {
       const u = this.gradePass.uniforms;
       u['uSaturation'].value = this.opts.saturation;
       u['uContrast'].value = this.opts.contrast;
+      u['uBlack'].value = this.opts.black;
       u['uVignette'].value = this.opts.vignette;
       u['uGrain'].value = this.opts.grain;
       u['uSplit'].value = this.opts.split;
