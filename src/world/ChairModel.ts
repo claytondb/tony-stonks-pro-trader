@@ -40,6 +40,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { MaterialLibrary, type MaterialId, type MaterialOptions } from '../materials/MaterialLibrary';
+import { applyRimLight } from '../player/LowPolyKit';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -350,7 +351,7 @@ const TIERS: Record<ChairTier, TierSpec> = {
   0: {
     label: 'battered typist chair',
     seatW: 0.42, seatD: 0.40, seatT: 0.090, seatY: 0.430,
-    backW: 0.37, backH: 0.28, backTilt: 0.10, lumbarGap: 0.125,
+    backW: 0.36, backH: 0.210, backTilt: 0.10, lumbarGap: 0.115,
     headrest: false, meshBack: false, arms: 'stub',
     spokeLen: 0.25, spokeTaper: 0.55,
     wheelR: 0.026, wheelW: 0.020, wheelSeg: 8,
@@ -359,7 +360,7 @@ const TIERS: Record<ChairTier, TierSpec> = {
   1: {
     label: 'standard task chair',
     seatW: 0.46, seatD: 0.44, seatT: 0.105, seatY: 0.455,
-    backW: 0.43, backH: 0.42, backTilt: 0.13, lumbarGap: 0.105,
+    backW: 0.405, backH: 0.315, backTilt: 0.13, lumbarGap: 0.100,
     headrest: false, meshBack: false, arms: 'loop',
     spokeLen: 0.275, spokeTaper: 0.50,
     wheelR: 0.028, wheelW: 0.022, wheelSeg: 8,
@@ -368,7 +369,7 @@ const TIERS: Record<ChairTier, TierSpec> = {
   2: {
     label: 'ergonomic mesh chair',
     seatW: 0.49, seatD: 0.46, seatT: 0.115, seatY: 0.470,
-    backW: 0.46, backH: 0.52, backTilt: 0.15, lumbarGap: 0.10,
+    backW: 0.435, backH: 0.400, backTilt: 0.15, lumbarGap: 0.095,
     headrest: true, meshBack: true, arms: 'tee',
     spokeLen: 0.30, spokeTaper: 0.45,
     wheelR: 0.030, wheelW: 0.024, wheelSeg: 10,
@@ -377,7 +378,7 @@ const TIERS: Record<ChairTier, TierSpec> = {
   3: {
     label: 'chrome-and-carbon executive',
     seatW: 0.52, seatD: 0.48, seatT: 0.125, seatY: 0.485,
-    backW: 0.49, backH: 0.56, backTilt: 0.17, lumbarGap: 0.095,
+    backW: 0.460, backH: 0.430, backTilt: 0.17, lumbarGap: 0.090,
     headrest: true, meshBack: true, arms: 'cantilever',
     spokeLen: 0.325, spokeTaper: 0.40,
     wheelR: 0.032, wheelW: 0.026, wheelSeg: 10,
@@ -414,13 +415,40 @@ interface Palette {
   accent: THREE.MeshStandardMaterial;    // trim strip, lever
 }
 
-function mat(id: MaterialId, opts: MaterialOptions): THREE.MeshStandardMaterial {
-  return MaterialLibrary.get(id, { flatShading: true, ...opts });
+/**
+ * Chair materials are PRIVATE CLONES of the library entries, not the shared instances.
+ *
+ * The chair is a hero asset: it needs a camera-relative Fresnel rim so its near-black mass
+ * separates from a mid-tone carpet at follow-camera distance (the panel's "the hero silhouette
+ * dies against the environment"). Patching a shared MaterialLibrary entry would push that rim
+ * onto every cubicle and bin in the level, so the chair owns its own copies instead.
+ *
+ * The clone drops its material-level envMap and inherits the source's envMapIntensity, which
+ * makes three fall back to `scene.environment` — set by EnvironmentRig for exactly this reason,
+ * so the clones keep receiving the IBL without being in the library's rebind list.
+ */
+const RIM_CLONES = new Map<THREE.MeshStandardMaterial, THREE.MeshStandardMaterial>();
+
+function heroise(src: THREE.MeshStandardMaterial, rimStrength: number): THREE.MeshStandardMaterial {
+  const hit = RIM_CLONES.get(src);
+  if (hit) return hit;
+  const clone = src.clone();
+  clone.name = `${src.name}#hero`;
+  clone.envMapIntensity = src.envMapIntensity;
+  clone.envMap = null;
+  applyRimLight(clone, { color: 0xd6e2f4, power: 3.0, strength: rimStrength });
+  RIM_CLONES.set(src, clone);
+  return clone;
+}
+
+function mat(id: MaterialId, opts: MaterialOptions & { rim?: number }): THREE.MeshStandardMaterial {
+  const { rim, ...rest } = opts;
+  return heroise(MaterialLibrary.get(id, { flatShading: true, ...rest }), rim ?? 0.30);
 }
 
 /** Generic untextured dielectric with an exact albedo. */
-function solid(color: number, roughness: number): THREE.MeshStandardMaterial {
-  return mat('shoeBlack', { color, roughness });
+function solid(color: number, roughness: number, rim = 0.34): THREE.MeshStandardMaterial {
+  return mat('shoeBlack', { color, roughness, rim });
 }
 
 function paletteFor(tier: ChairTier): Palette {

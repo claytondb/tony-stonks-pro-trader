@@ -52,18 +52,21 @@
  *
  * THE WAKE (the "ride over them" moment)
  * --------------------------------------
- * The player drags a wake box behind them, scaled by speed. Settled sheets caught in it are
- * lifted, dragged forward, spun, and pulled into a pair of counter-rotating vortices so the
- * litter converges and spirals in behind the chair rather than blowing apart symmetrically.
- * Already-airborne sheets inside the wake get the same field as *wind* rather than as an
- * impulse, so paper keeps billowing around the player instead of being punched once.
+ * The player drags a speed-scaled wake box behind them. Crucially the wake is a WIND FIELD,
+ * not an impulse — see KICK_LIFT_BASE for why that distinction is the difference between
+ * litter hopping 14 cm and litter flying to chest height. Inside the box the air moves
+ * forward with the chair, upward at up to ~7.5 m/s, and around a pair of counter-rotating
+ * vertical vortices, so the litter converges and spirals in behind the chair rather than
+ * blowing apart symmetrically. A settled sheet gets a small impulse to break floor contact
+ * and is then carried by that field for as long as it stays in it.
  *
  * BUDGET
  * ------
  * 400 sheets by default, hard cap, oldest recycled first via a ring cursor (O(1)). Resting
- * sheets skip the integrator and their instance matrices are not rewritten. A full storm of
- * 400 simultaneously-airborne sheets measures well under 0.2 ms of CPU per frame; the
- * common case (a few hundred settled + a few dozen flying) is an order of magnitude less.
+ * sheets skip the integrator and their instance matrices are not rewritten. Measured on the
+ * headless harness: 0.23 ms/frame with all 400 sheets simultaneously airborne (a worst case
+ * that needs a deliberate 400-sheet burst), and 0.004 ms/frame for 400 settled sheets. The
+ * realistic case — a few hundred settled plus a few dozen flying — is around 0.02 ms.
  */
 
 import * as THREE from 'three';
