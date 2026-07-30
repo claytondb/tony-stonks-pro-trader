@@ -2,8 +2,9 @@
  * TrickAnimator — the seated rig and the per-trick motion driver for Tony Stonks Pro Trader.
  *
  * WHY THIS EXISTS
- *   The build shipped TWO baked clips ('trick' and 'chairhold') covering all 36 tricks, picked by
- *   raw button rather than by trick, and no sitting pose at all: a standing FBX rig was shoved
+ *   The build shipped TWO baked clips ('trick' and 'chairhold') covering every trick in the
+ *   registry, picked by raw button rather than by trick, and no sitting pose at all: a standing rig
+ *   was shoved
  *   down 0.46 m so the hips happened to land near the seat. Every trick therefore looked the same,
  *   and the man was not sitting on the chair — he was standing inside it.
  *
@@ -11,13 +12,14 @@
  *   (solved with two-bone IK against the chair's actual seat/armrest/caster-spider geometry, so it
  *   is correct for any rig proportions), then layers additive motion on top of it: lean into turns,
  *   tuck in the air, reach on grabs, arms out on the balance axis, sprawl on a bail, a push kick —
- *   and one distinct pose signature for every one of the 36 trick ids in TrickRegistry.
+ *   and one distinct pose signature for every one of the 35 trick ids in TrickRegistry.
  *
  * HOW THE POSE MATHS WORKS (read this before changing numbers)
  *   Every authored value is expressed in MODEL SPACE (the character root's frame): +Y up,
  *   +Z the direction the rider faces, +X the rider's LEFT (the Mixamo convention these FBX rigs
  *   use). For each tracked bone we cache, at bind time:
- *     - its rest local transform (captured after Skeleton.pose(), so it is the true bind pose),
+ *     - its rest local transform (restored from the skeleton's boneInverses, so it is the true
+ *       bind pose even if a clip has already run — see restoreBindPose()),
  *     - its rest orientation in model space,
  *     - its rest DIRECTION in model space (the unit vector toward its child bone).
  *
@@ -723,6 +725,7 @@ const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _mat = new THREE.Matrix4();
+const _mat2 = new THREE.Matrix4();
 const _decompScale = new THREE.Vector3();
 const _ikA = new THREE.Vector3();
 const _ikN = new THREE.Vector3();
@@ -739,12 +742,15 @@ export class TrickAnimator {
     pelvisAboveSeat: 0.090,
     pelvisForward: -0.030,
     pelvisLateral: 0,
+    // Measured off ChairModel tier 1: seat top 0.560, spoke top ~0.101 at a tip radius of 0.275
+    // with two spokes at (+/-0.162, 0.222); armrest pad top 0.660 at x = +/-0.25, pad centred on
+    // z = 0.026 and 0.31 long. The soles land on those two spokes and the palms on the pads.
     feetBelowSeat: 0.465,
-    feetForward: 0.280,
+    feetForward: 0.215,
     feetApart: 0.115,
     handsAboveSeat: 0.115,
     handsApart: 0.245,
-    handsForward: 0.095,
+    handsForward: 0.020,
     fallbackHipHeight: 0.95,
     pushFoot: 1,
     pushCycle: 0.62,
@@ -829,12 +835,42 @@ export class TrickAnimator {
   }
 
   /**
-   * Find, classify and cache the rest pose of every bone we can drive.
+   * Put the skeleton back on its bind pose, so the rest transforms we cache are the real rest
+   * transforms even if a clip has already been played on this rig.
    *
-   * Skeleton.pose() puts the rig back on its bind pose first, so this is correct even if the
-   * caller has already started a clip — three computes the bind locals from the skeleton's own
-   * boneInverses, which is the only trustworthy source of a rest pose after load.
+   * This deliberately does NOT call THREE.Skeleton.pose(). That method writes the ROOT bone's
+   * bind WORLD matrix into its LOCAL matrix (Skeleton.js: the `else` branch when the parent is
+   * not a Bone), which is only correct when the root bone's parent is at identity. Our rig hangs
+   * off an Armature node under a model scaled to 0.006, so pose() collapses the whole skeleton by
+   * that factor. Deriving each local from the parent's boneInverse is space-independent and has
+   * no such assumption; the root bone is simply left alone.
    */
+  private restoreBindPose(): void {
+    const seen = new Set<THREE.Skeleton>();
+    this.rig.model.traverse((o) => {
+      const sm = o as THREE.SkinnedMesh;
+      if (!sm.isSkinnedMesh || !sm.skeleton) return;
+      const sk = sm.skeleton;
+      if (seen.has(sk)) return;
+      seen.add(sk);
+      const inv = sk.boneInverses;
+      if (!inv || inv.length !== sk.bones.length) return;
+      const index = new Map<THREE.Object3D, number>();
+      for (let i = 0; i < sk.bones.length; i++) index.set(sk.bones[i], i);
+      for (let i = 0; i < sk.bones.length; i++) {
+        const b = sk.bones[i];
+        if (!b.parent) continue;
+        const pi = index.get(b.parent);
+        if (pi === undefined) continue;                 // root of the chain: leave it as authored
+        // local = parentBindWorld⁻¹ * childBindWorld = boneInverse[parent] * boneInverse[child]⁻¹
+        _mat.copy(inv[i]).invert();
+        _mat2.copy(inv[pi]).multiply(_mat);
+        _mat2.decompose(b.position, b.quaternion, b.scale);
+      }
+    });
+  }
+
+  /** Find, classify and cache the rest pose of every bone we can drive. */
   private bindBones(): void {
     const model = this.rig.model;
 
@@ -851,10 +887,7 @@ export class TrickAnimator {
     if (candidates.length === 0) return;
 
     // 2. restore the bind pose so the transforms we read are the rest pose
-    model.traverse((o) => {
-      const sm = o as THREE.SkinnedMesh;
-      if (sm.isSkinnedMesh && sm.skeleton) sm.skeleton.pose();
-    });
+    this.restoreBindPose();
     model.updateMatrixWorld(true);
     _mat.copy(model.matrixWorld).invert();
     const modelInv = _mat.clone();

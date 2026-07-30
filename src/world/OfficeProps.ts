@@ -1810,10 +1810,18 @@ function wedge(w: number, d: number, h: number, bevel = 0.02): THREE.BufferGeome
       bevelSegments: 1,
       steps: 1,
     });
-    // Extrude runs along +Z with the profile in XY; rotate the profile into ZY and the
-    // extrusion into X so the ramp rises along +Z and is `w` wide along X.
-    g.rotateY(Math.PI / 2);
-    g.translate(0, 0, -(w - bevel * 2) / 2 - bevel);
+    // ExtrudeGeometry builds the profile in XY and extrudes along +Z, so we have
+    //   X = ramp depth, Y = height, Z = ramp width
+    // and we want X = width, Z = depth (rising toward +Z).
+    //
+    // rotateY(-90) maps old Z -> -X and old X -> +Z, which gets the axes right AND keeps the
+    // tall end of the profile at +Z. The bevel puts the extrusion range at [-bevel, w-bevel]
+    // on the new X axis, so the recentring translation is along X, by +(w/2 - bevel).
+    // (Translating along Z instead — which is what this did originally — leaves the deck
+    // offset by half its width in BOTH axes, and the parts bolted to it with chamferBox,
+    // which is correctly centred, come off in a different direction. The ramp comes apart.)
+    g.rotateY(-Math.PI / 2);
+    g.translate(w / 2 - bevel, 0, 0);
     return finalize(g);
   });
 }
