@@ -50,3 +50,6 @@ electron/dist/
 # Assets (large files - use Git LFS or separate hosting)
 # assets/models/*.glb
 # assets/audio/*.mp3
+shots/
+refs/
+*.local.*

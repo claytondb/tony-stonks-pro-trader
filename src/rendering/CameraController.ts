@@ -9,11 +9,11 @@ export class CameraController {
   private camera: THREE.PerspectiveCamera;
   private target: THREE.Object3D | null = null;
   
-  // Camera settings — THPS-style: close, low, snappy
-  private offset = new THREE.Vector3(0, 2.2, -4.2);  // Closer and lower like THPS
-  private lookAhead = 1.0;
-  private smoothSpeed = 18;       // Was 5 — much snappier position tracking
-  private rotationSmooth = 14;    // Was 3 — snappy rotation follow
+  // Camera settings — locked tight behind player
+  private offset = new THREE.Vector3(0, 1.6, -3.2);  // Even closer and lower
+  private lookAhead = 0.5;
+  private smoothSpeed = 30;       // Near-instant position tracking
+  private rotationSmooth = 25;    // Near-instant rotation follow
   
   // Dynamic FOV settings
   private baseFOV = 80;      // Slightly wider than before for speed feel
@@ -46,10 +46,10 @@ export class CameraController {
   private targetOrbitY = 0;
   private lastMouseX = 0;
   private lastMouseY = 0;
-  private orbitSensitivity = 0.004;
-  private orbitReturnSpeed = 4;  // Faster snap back to default view
-  private maxOrbitY = Math.PI / 4;  // Tighter vertical limit like THPS
-  private minOrbitY = -Math.PI / 8;
+  private orbitSensitivity = 0.003;
+  private orbitReturnSpeed = 8;  // Very fast snap back — always behind player
+  private maxOrbitY = Math.PI / 6;  // Minimal vertical orbit
+  private minOrbitY = -Math.PI / 12;
   
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;

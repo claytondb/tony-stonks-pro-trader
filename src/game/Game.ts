@@ -879,7 +879,7 @@ export class Game {
     this.gltfLoader = new GLTFLoader();
     
     const modelPaths: Record<string, string> = {
-      'cubicle': './models/cubicle.glb',
+      // 'cubicle': './models/cubicle.glb',  // Disabled: GLB renders as flat slab; use procedural mesh instead
       'quarter_pipe_small': './models/qtr-pipe-small.glb',
       'quarter_pipe_med': './models/qtr-pipe-med.glb',
       'quarter_pipe_large': './models/qtr-pipe-lg.glb',
@@ -2366,13 +2366,19 @@ export class Game {
     return group;
   }
   
-  private createCubicleMesh(_wallMat: THREE.Material, deskMat: THREE.Material, width: number, depth: number, height: number = 1.5): THREE.Group {
+  private createCubicleMesh(_wallMat: THREE.Material, _deskMat: THREE.Material, width: number, depth: number, height: number = 1.5): THREE.Group {
     const group = new THREE.Group();
 
-    // Cubicle wall color — fabric-covered panels (charcoal blue-gray)
+    // Cubicle wall color — fabric-covered panels (dark teal, per spec #2d5a5a)
     const fabricMat = new THREE.MeshStandardMaterial({
-      color: 0x3a3f50,
+      color: 0x2d5a5a,
       roughness: 0.95,
+      metalness: 0.0
+    });
+    // Light wood desk surface (per spec #c8a96e)
+    const lightWoodMat = new THREE.MeshStandardMaterial({
+      color: 0xc8a96e,
+      roughness: 0.6,
       metalness: 0.0
     });
 
@@ -2394,9 +2400,9 @@ export class Game {
       group.add(sideWall);
     }
 
-    // Desk surface (laminate wood color)
+    // Desk surface (light wood laminate)
     const deskGeom = new THREE.BoxGeometry(width * 0.85, 0.06, depth * 0.42);
-    const desk = new THREE.Mesh(deskGeom, deskMat);
+    const desk = new THREE.Mesh(deskGeom, lightWoodMat);
     desk.position.set(0, 0.76, depth * 0.2);
     desk.castShadow = true;
     desk.receiveShadow = true;

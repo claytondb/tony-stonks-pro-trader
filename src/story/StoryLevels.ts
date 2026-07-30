@@ -38,29 +38,29 @@ const LEVEL_1_OFFICE: StoryLevelData = {
   skyColorTop: '#111111',
   skyColorBottom: '#1a1a1a',
   fogColor: '#2a2a2e',
-  fogNear: 25,
-  fogFar: 60,
+  fogNear: 100,
+  fogFar: 350,
   ambientLight: 1.5,
   sunIntensity: 0,
   
-  groundSize: 80,
+  groundSize: 400,
   groundColor: '#8B8B8B',  // Medium gray carpet
   
   spawnPoint: {
-    position: [-28, 1.0, -30],  // Y=1.0 prevents sinking into ground
+    position: [-120, 1.0, -140],  // Y=1.0 prevents sinking into ground
     rotation: 90
   },
   
   bounds: {
-    minX: -38,
-    maxX: 38,
-    minZ: -38,
-    maxZ: 38
+    minX: -195,
+    maxX: 195,
+    minZ: -195,
+    maxZ: 195
   },
   
   checkpoints: [
     {
-      position: [0, 1.0, 28],
+      position: [0, 1.0, 145],
       rotation: 0,
       name: 'Reached the stairwell',
       dialogue: ['TONY: There\'s the stairs! Time to ride!']
@@ -71,137 +71,131 @@ const LEVEL_1_OFFICE: StoryLevelData = {
     // =============================================
     // PERIMETER WALLS (indoor room enclosure)
     // =============================================
-    // North wall (far end — stairwell side)
-    { type: 'wall_indoor', position: [0, 4, 38.5], params: { width: 78, height: 8, depth: 1 } },
-    // South wall (spawn side)
-    { type: 'wall_indoor', position: [0, 4, -38.5], params: { width: 78, height: 8, depth: 1 } },
-    // East wall
-    { type: 'wall_indoor', position: [38.5, 4, 0], rotation: [0, 90, 0], params: { width: 78, height: 8, depth: 1 } },
-    // West wall
-    { type: 'wall_indoor', position: [-38.5, 4, 0], rotation: [0, 90, 0], params: { width: 78, height: 8, depth: 1 } },
+    { type: 'wall_indoor', position: [0, 15, 195], params: { width: 390, height: 30, depth: 1 } },
+    { type: 'wall_indoor', position: [0, 15, -195], params: { width: 390, height: 30, depth: 1 } },
+    { type: 'wall_indoor', position: [195, 15, 0], rotation: [0, 90, 0], params: { width: 390, height: 30, depth: 1 } },
+    { type: 'wall_indoor', position: [-195, 15, 0], rotation: [0, 90, 0], params: { width: 390, height: 30, depth: 1 } },
     
     // CEILING
-    { type: 'ceiling_slab', position: [0, 7.8, 0], params: { width: 78, depth: 78 } },
+    { type: 'ceiling_slab', position: [0, 30, 0], params: { width: 390, depth: 390 } },
     
     // =============================================
-    // FLUORESCENT CEILING LIGHT PANELS
+    // FLUORESCENT CEILING LIGHT PANELS (scaled up)
     // =============================================
-    { type: 'ceiling_panel', position: [-20, 7.6, -25], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [0, 7.6, -25], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [20, 7.6, -25], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [-20, 7.6, -8], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [0, 7.6, -8], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [20, 7.6, -8], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [-20, 7.6, 10], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [0, 7.6, 10], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [20, 7.6, 10], params: { width: 6, depth: 0.8 } },
-    { type: 'ceiling_panel', position: [0, 7.6, 28], params: { width: 6, depth: 0.8 } },
-    
-    // =============================================
-    // CUBICLES — proper office grid with skating aisles
-    // Layout: Left block (x=-28,-22) and Right block (x=22,28)
-    // Center main aisle: x=-19 to x=19 (38 units wide)
-    // Cubicle size: 5×5 footprint, 2.2 tall walls
-    // =============================================
-    
-    // Left block — Column A (x=-28)
-    { type: 'cubicle', position: [-28, 0, -28], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [-28, 0, -18], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [-28, 0, -8], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [-28, 0, 2], params: { width: 5, depth: 5, height: 2.2 } },
-    
-    // Left block — Column B (x=-22)
-    { type: 'cubicle', position: [-22, 0, -28], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [-22, 0, -18], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [-22, 0, -8], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [-22, 0, 2], params: { width: 5, depth: 5, height: 2.2 } },
-    
-    // Right block — Column C (x=22)
-    { type: 'cubicle', position: [22, 0, -28], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [22, 0, -18], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [22, 0, -8], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [22, 0, 2], params: { width: 5, depth: 5, height: 2.2 } },
-    
-    // Right block — Column D (x=28)
-    { type: 'cubicle', position: [28, 0, -28], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [28, 0, -18], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [28, 0, -8], params: { width: 5, depth: 5, height: 2.2 } },
-    { type: 'cubicle', position: [28, 0, 2], params: { width: 5, depth: 5, height: 2.2 } },
+    { type: 'ceiling_panel', position: [-100, 29.5, -120], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [0, 29.5, -120], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [100, 29.5, -120], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [-100, 29.5, -40], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [0, 29.5, -40], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [100, 29.5, -40], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [-100, 29.5, 40], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [0, 29.5, 40], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [100, 29.5, 40], params: { width: 30, depth: 4 } },
+    { type: 'ceiling_panel', position: [0, 29.5, 130], params: { width: 30, depth: 4 } },
     
     // =============================================
-    // OFFICE PROPS
+    // CUBICLES — 10x larger (50×50, height 22)
+    // Layout: Left block (x=-130,-70) and Right block (x=70,130)
+    // Giant cubicle partitions with wide skating aisles between
     // =============================================
     
-    // Filing cabinets (along walls, near cubicles)
-    { type: 'filing_cabinet', position: [-35, 0, -30] },
-    { type: 'filing_cabinet', position: [-35, 0, -22] },
-    { type: 'filing_cabinet', position: [-35, 0, -14] },
-    { type: 'filing_cabinet', position: [35, 0, -30] },
-    { type: 'filing_cabinet', position: [35, 0, -22] },
-    { type: 'filing_cabinet', position: [35, 0, -14] },
+    // Left block — Column A (x=-130)
+    { type: 'cubicle', position: [-130, 0, -120], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [-130, 0, -55], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [-130, 0, 10], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [-130, 0, 75], params: { width: 50, depth: 50, height: 22 } },
     
-    // Printers (scattered near cubicle clusters)
-    { type: 'printer', position: [-18, 0, -32] },
-    { type: 'printer', position: [18, 0, -32] },
-    { type: 'printer', position: [-18, 0, 10] },
-    { type: 'printer', position: [18, 0, 10] },
+    // Left block — Column B (x=-70)
+    { type: 'cubicle', position: [-70, 0, -120], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [-70, 0, -55], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [-70, 0, 10], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [-70, 0, 75], params: { width: 50, depth: 50, height: 22 } },
     
-    // Water coolers (in center aisle — obstacles/jump ramps)
-    { type: 'water_cooler', position: [-8, 0, -22] },
-    { type: 'water_cooler', position: [8, 0, -22] },
-    { type: 'water_cooler', position: [0, 0, -5] },
+    // Right block — Column C (x=70)
+    { type: 'cubicle', position: [70, 0, -120], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [70, 0, -55], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [70, 0, 10], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [70, 0, 75], params: { width: 50, depth: 50, height: 22 } },
+    
+    // Right block — Column D (x=130)
+    { type: 'cubicle', position: [130, 0, -120], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [130, 0, -55], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [130, 0, 10], params: { width: 50, depth: 50, height: 22 } },
+    { type: 'cubicle', position: [130, 0, 75], params: { width: 50, depth: 50, height: 22 } },
+    
+    // =============================================
+    // OFFICE PROPS (scaled positions)
+    // =============================================
+    
+    // Filing cabinets (along walls)
+    { type: 'filing_cabinet', position: [-180, 0, -140] },
+    { type: 'filing_cabinet', position: [-180, 0, -100] },
+    { type: 'filing_cabinet', position: [-180, 0, -60] },
+    { type: 'filing_cabinet', position: [180, 0, -140] },
+    { type: 'filing_cabinet', position: [180, 0, -100] },
+    { type: 'filing_cabinet', position: [180, 0, -60] },
+    
+    // Printers
+    { type: 'printer', position: [-90, 0, -155] },
+    { type: 'printer', position: [90, 0, -155] },
+    { type: 'printer', position: [-90, 0, 45] },
+    { type: 'printer', position: [90, 0, 45] },
+    
+    // Water coolers (in center aisle)
+    { type: 'water_cooler', position: [-40, 0, -100] },
+    { type: 'water_cooler', position: [40, 0, -100] },
+    { type: 'water_cooler', position: [0, 0, -20] },
     
     // Trash cans
-    { type: 'trash_can', position: [-12, 0, -30] },
-    { type: 'trash_can', position: [12, 0, -30] },
-    { type: 'trash_can', position: [-5, 0, 8] },
-    { type: 'trash_can', position: [5, 0, 8] },
+    { type: 'trash_can', position: [-60, 0, -150] },
+    { type: 'trash_can', position: [60, 0, -150] },
+    { type: 'trash_can', position: [-25, 0, 40] },
+    { type: 'trash_can', position: [25, 0, 40] },
     
-    // Plants (near walls — decorative)
-    { type: 'planter', position: [-36, 0, 5] },
-    { type: 'planter', position: [36, 0, 5] },
-    { type: 'planter', position: [0, 0, 35] },
+    // Plants
+    { type: 'planter', position: [-180, 0, 30] },
+    { type: 'planter', position: [180, 0, 30] },
+    { type: 'planter', position: [0, 0, 170] },
     
     // =============================================
-    // WELCOME RAMP — right in front of spawn for instant fun
-    // Spawn is at x=-28, z=-30 facing east (+x direction)
+    // WELCOME RAMP — right in front of spawn
     // =============================================
-    { type: 'ramp', position: [-18, 0, -30], rotation: [0, -90, 0] },  // Face player at spawn
+    { type: 'ramp', position: [-80, 0, -140], rotation: [0, -90, 0] },
     
     // =============================================
     // SKATE OBSTACLES IN CENTER AISLE
     // =============================================
     
-    // Conference table rails (main grinding spots)
-    { type: 'rail', position: [0, 0, -18], params: { length: 12 } },
-    { type: 'rail', position: [0, 0, -5], params: { length: 16 } },
-    { type: 'rail', position: [-10, 0, 5], params: { length: 8 }, rotation: [0, 90, 0] },
-    { type: 'rail', position: [10, 0, 5], params: { length: 8 }, rotation: [0, 90, 0] },
+    // Conference table rails
+    { type: 'rail', position: [0, 0, -90], params: { length: 60 } },
+    { type: 'rail', position: [0, 0, -25], params: { length: 80 } },
+    { type: 'rail', position: [-50, 0, 25], params: { length: 40 }, rotation: [0, 90, 0] },
+    { type: 'rail', position: [50, 0, 25], params: { length: 40 }, rotation: [0, 90, 0] },
     
-    // Fun box (overturned copy machine/desk)
-    { type: 'fun_box', position: [0, 0, -32], params: { width: 8, depth: 4, height: 0.9 } },
-    { type: 'fun_box', position: [-8, 0, 15], params: { width: 5, depth: 3, height: 0.8 } },
-    { type: 'fun_box', position: [8, 0, 15], params: { width: 5, depth: 3, height: 0.8 } },
+    // Fun boxes
+    { type: 'fun_box', position: [0, 0, -160], params: { width: 40, depth: 20, height: 4.5 } },
+    { type: 'fun_box', position: [-40, 0, 75], params: { width: 25, depth: 15, height: 4 } },
+    { type: 'fun_box', position: [40, 0, 75], params: { width: 25, depth: 15, height: 4 } },
     
-    // Ramps (overturned desks / filing cabinets)
-    { type: 'ramp', position: [-5, 0, -12], rotation: [0, 0, 0] },
-    { type: 'ramp', position: [5, 0, -12], rotation: [0, 180, 0] },
-    { type: 'ramp', position: [0, 0, 18], rotation: [0, 0, 0] },
+    // Ramps
+    { type: 'ramp', position: [-25, 0, -60], rotation: [0, 0, 0] },
+    { type: 'ramp', position: [25, 0, -60], rotation: [0, 180, 0] },
+    { type: 'ramp', position: [0, 0, 90], rotation: [0, 0, 0] },
     
     // =============================================
     // STAIRWELL EXIT (end goal)
     // =============================================
-    { type: 'exit_sign', position: [0, 3.5, 37], params: { width: 3, height: 0.8 } },
-    { type: 'stairs', position: [0, 0, 32], rotation: [0, 180, 0], params: { steps: 6 } },
+    { type: 'exit_sign', position: [0, 16, 185], params: { width: 15, height: 4 } },
+    { type: 'stairs', position: [0, 0, 160], rotation: [0, 180, 0], params: { steps: 6 } },
   ],
   
   collectibles: [
-    { type: 'document', position: [-20, 1.5, -18], value: 200 },
-    { type: 'document', position: [20, 1.5, -18], value: 200 },
-    { type: 'document', position: [0, 2, -5], value: 500 },
-    { type: 'money', position: [-8, 1.2, -30], value: 1000 },
-    { type: 'money', position: [8, 1.2, -30], value: 1000 },
-    { type: 'special', position: [0, 2.5, -32], value: 2500 },
+    { type: 'document', position: [-100, 1.5, -90], value: 200 },
+    { type: 'document', position: [100, 1.5, -90], value: 200 },
+    { type: 'document', position: [0, 2, -25], value: 500 },
+    { type: 'money', position: [-40, 1.2, -150], value: 1000 },
+    { type: 'money', position: [40, 1.2, -150], value: 1000 },
+    { type: 'special', position: [0, 2.5, -160], value: 2500 },
   ],
   
   goals: [
