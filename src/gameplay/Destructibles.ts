@@ -1394,7 +1394,11 @@ export class DestructibleManager {
         this.testPlayerImpact(inst, dt, playerPos, playerVel);
       }
 
-      if (d2 > demote2 && (sleeping || !inst.disturbed)) {
+      // Drop back to a fixed proxy. The `lastHit` clause is load-bearing: a prop wedged
+      // against another prop can jitter forever and never satisfy Rapier's sleep threshold,
+      // and without it those bodies would stay dynamic and awake for the rest of the run
+      // no matter how far away the player skated.
+      if (d2 > demote2 && (sleeping || !inst.disturbed || this.time - inst.lastHit > 2)) {
         this.setStatic(inst);
       }
     }
