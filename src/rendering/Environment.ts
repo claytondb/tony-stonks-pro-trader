@@ -18,7 +18,7 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { MaterialLibrary } from '../materials/MaterialLibrary';
+import { MaterialLibrary, LIGHT_POOL_OFFICE } from '../materials/MaterialLibrary';
 
 export type EnvPreset =
   | 'officeInterior'
@@ -84,6 +84,21 @@ interface FogSpec {
   density?: number;
 }
 
+/**
+ * A camera-relative rim/back light. Yaw is measured from the camera's own forward
+ * vector (180 = directly behind the subject, pointing back at the lens), so the rim
+ * follows the player wherever the camera goes and always separates them from the
+ * floor. This is the single cheapest way to buy a hero silhouette.
+ */
+interface RimSpec {
+  color: number;
+  intensity: number;
+  /** Degrees around Y from the camera forward vector. ~140-160 reads as a back rim. */
+  yaw: number;
+  /** Degrees above the horizon. */
+  pitch: number;
+}
+
 interface ShadowSpec {
   /** Half-width of the ortho shadow frustum, in metres. */
   radius: number;
@@ -113,6 +128,8 @@ export interface PresetSpec {
   fill: LightSpec;
   /** Up-facing warm bounce that fakes light kicked off the floor. */
   bounce: LightSpec;
+  /** Camera-relative back/rim light. Omit for none. */
+  rim?: RimSpec;
   hemi: { sky: number; ground: number; intensity: number };
   ambient: { color: number; intensity: number };
   shadow: ShadowSpec;
@@ -123,13 +140,22 @@ export interface PresetSpec {
   clouds: number;
 }
 
+/**
+ * Indoors the interesting shadows are SHORT ones: the 1.2-1.6 m cubicle walls laying a
+ * band across the aisle, the desk pedestals, the chair casters. A 20 m frustum on a
+ * 2k map is 2 cm/texel, which is exactly the resolution at which a caster shadow
+ * dissolves and everything starts to hover. 15 m on a 4k map is 7 mm/texel — enough
+ * that the contact point under each wheel survives.
+ */
 const SHADOW_INDOOR: ShadowSpec = {
-  radius: 20,
+  radius: 15,
   distance: 45,
   castHeight: 8, // desks/cubicles/chairs cast; the ceiling slab above does not
-  mapSize: 2048,
-  bias: -0.0005,
-  normalBias: 0.02,
+  mapSize: 4096,
+  // Tightened along with the resolution: the old -0.0005 / 0.02 pair was set for a
+  // 2 cm texel and peter-pans the chair casters clean off their own contact shadow.
+  bias: -0.00022,
+  normalBias: 0.012,
 };
 const SHADOW_OUTDOOR: ShadowSpec = {
   radius: 36,
@@ -177,16 +203,29 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
       floor: 0x8f8271, // warm carpet
       floorEnergy: 0.18,
     },
-    sun: { color: 0xeef3ff, intensity: 3.6, dir: [0.3, 1.0, 0.24] },
-    fill: { color: 0x9fbcf0, intensity: 0.5, dir: [-0.65, 0.42, -0.75] },
+    // 41 degrees off the horizontal, NOT the old near-vertical 73. A 1.4 m cubicle
+    // wall now lays a 1.6 m shadow band across the aisle, which is the whole reason
+    // the floor reads as a surface instead of a texture.
+    sun: { color: 0xeef3ff, intensity: 3.5, dir: [0.62, 0.72, 0.34] },
+    // Raised 0.5 -> 0.85: the cool bounce has to actually land on the shaded face of
+    // every cubicle, or the warm/cool split exists only in the code comments.
+    fill: { color: 0x9fbcf0, intensity: 0.85, dir: [-0.65, 0.42, -0.75] },
     // Up-facing carpet bounce. Kept low: in a real floorplate the ceiling is a
     // huge surface, and anything above ~0.25 here paints the whole ceiling amber.
-    bounce: { color: 0xffc189, intensity: 0.12, dir: [0.1, -1.0, -0.25] },
+    bounce: { color: 0xffc189, intensity: 0.16, dir: [0.1, -1.0, -0.25] },
+    // Cool back rim so the near-black chair and the hero's shirt separate from the
+    // mid-tone carpet at follow-camera distance.
+    rim: { color: 0xcfe2ff, intensity: 1.15, yaw: 152, pitch: 26 },
     hemi: { sky: 0xdde7f5, ground: 0x8a6f52, intensity: 0.24 },
     ambient: { color: 0xb6c2d0, intensity: 0.08 },
     shadow: SHADOW_INDOOR,
-    fog: { kind: 'linear', color: 0x55534f, near: 16, far: 58 },
-    background: 0x15171b,
+    // Aerial perspective: haze must start INSIDE the playable corridor and its value
+    // must sit ABOVE the carpet, otherwise fog subtracts light instead of receding.
+    fog: { kind: 'linear', color: 0x7d786e, near: 11, far: 50 },
+    // Matched to the fog. Anything the camera sees past the room shell (an
+    // establishing shot above the ceiling plane, a gap at the wall cap) now reads as
+    // the same haze rather than a hard black void.
+    background: 0x7d786e,
     clouds: 0,
   },
 
@@ -220,11 +259,14 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     sun: { color: 0xdfeef0, intensity: 2.8, dir: [0.22, 1.0, 0.45] },
     fill: { color: 0x6f8fb5, intensity: 0.35, dir: [-0.8, 0.3, -0.5] },
     bounce: { color: 0xd9b98c, intensity: 0.22, dir: [0.0, -1.0, 0.15] },
+    rim: { color: 0xbcd6ff, intensity: 0.95, yaw: 150, pitch: 24 },
     hemi: { sky: 0xa8bccc, ground: 0x4a463f, intensity: 0.2 },
     ambient: { color: 0x8f9aa4, intensity: 0.08 },
     shadow: { ...SHADOW_INDOOR, radius: 18 },
-    fog: { kind: 'linear', color: 0x60625e, near: 14, far: 70 },
-    background: 0x0d0f10,
+    fog: { kind: 'linear', color: 0x60625e, near: 12, far: 60 },
+    // Background always matches the fog on an interior: any camera that clears the
+    // room shell then sees haze, never a black void.
+    background: 0x60625e,
     clouds: 0,
   },
 
@@ -258,11 +300,12 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     sun: { color: 0xe6ffe8, intensity: 2.9, dir: [0.15, 1.0, 0.1] },
     fill: { color: 0x7f9ec4, intensity: 0.3, dir: [-0.5, 0.5, -0.8] },
     bounce: { color: 0xbfd0a8, intensity: 0.18, dir: [0.0, -1.0, 0.0] },
+    rim: { color: 0xd6ffe0, intensity: 0.9, yaw: 148, pitch: 26 },
     hemi: { sky: 0xc9dfd2, ground: 0x4c4e47, intensity: 0.22 },
     ambient: { color: 0x93a09a, intensity: 0.08 },
     shadow: { ...SHADOW_INDOOR, radius: 13, distance: 30 },
     fog: { kind: 'linear', color: 0x5f625c, near: 9, far: 46 },
-    background: 0x101210,
+    background: 0x5f625c,
     clouds: 0,
   },
 
@@ -297,11 +340,12 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     sun: { color: 0xfff0d6, intensity: 3.4, dir: [0.85, 0.62, 0.35] },
     fill: { color: 0xa8c8ff, intensity: 0.6, dir: [-0.7, 0.45, -0.6] },
     bounce: { color: 0xffd8a8, intensity: 0.45, dir: [0.2, -1.0, -0.1] },
+    rim: { color: 0xdcebff, intensity: 0.85, yaw: 154, pitch: 22 },
     hemi: { sky: 0xe4f0ff, ground: 0xa08f76, intensity: 0.35 },
     ambient: { color: 0xcdd8e6, intensity: 0.1 },
     shadow: { ...SHADOW_INDOOR, radius: 26, distance: 55 },
-    fog: { kind: 'linear', color: 0xc9cfd6, near: 34, far: 150 },
-    background: 0x1a1e24,
+    fog: { kind: 'linear', color: 0xc9cfd6, near: 30, far: 130 },
+    background: 0xc9cfd6,
     clouds: 0,
   },
 
@@ -321,6 +365,7 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     sun: { color: 0xfff4e2, intensity: 3.4, dir: [0.55, 0.95, 0.35] },
     fill: { color: 0x9dc4ff, intensity: 0.55, dir: [-0.7, 0.4, -0.6] },
     bounce: { color: 0xbfae94, intensity: 0.3, dir: [0.0, -1.0, 0.2] },
+    rim: { color: 0xdcecff, intensity: 0.7, yaw: 150, pitch: 24 },
     hemi: { sky: 0x8fc0f5, ground: 0x6b6660, intensity: 0.3 },
     ambient: { color: 0xa9c4e0, intensity: 0.08 },
     shadow: SHADOW_OUTDOOR,
@@ -345,6 +390,7 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     sun: { color: 0xffa25a, intensity: 3.0, dir: [0.95, 0.24, -0.2] },
     fill: { color: 0x6a86d8, intensity: 0.55, dir: [-0.85, 0.35, 0.3] },
     bounce: { color: 0xd88a5a, intensity: 0.28, dir: [0.1, -1.0, 0.1] },
+    rim: { color: 0xffb377, intensity: 0.9, yaw: 150, pitch: 20 },
     hemi: { sky: 0x6577b8, ground: 0x4a3c34, intensity: 0.35 },
     ambient: { color: 0x6a6f96, intensity: 0.1 },
     shadow: { ...SHADOW_OUTDOOR, distance: 60 },
@@ -466,6 +512,7 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     sun: { color: 0xff9a4d, intensity: 3.6, dir: [1.0, 0.2, -0.15] },
     fill: { color: 0x7a86d8, intensity: 0.6, dir: [-0.9, 0.4, 0.25] },
     bounce: { color: 0xe89a62, intensity: 0.32, dir: [0.05, -1.0, 0.05] },
+    rim: { color: 0xffb072, intensity: 1.0, yaw: 150, pitch: 18 },
     hemi: { sky: 0x7d7ac0, ground: 0x5a463c, intensity: 0.35 },
     ambient: { color: 0x77719c, intensity: 0.1 },
     shadow: { ...SHADOW_OUTDOOR, distance: 60 },
@@ -689,6 +736,11 @@ export class EnvironmentRig {
   readonly fill: THREE.DirectionalLight;
   /** Warm up-facing bounce that fakes floor/carpet kick. No shadow. */
   readonly bounce: THREE.DirectionalLight;
+  /**
+   * Camera-relative back rim. Repositioned every frame from the camera's yaw so the
+   * player always carries an edge highlight that lifts them off the floor.
+   */
+  readonly rim: THREE.DirectionalLight;
   readonly hemi: THREE.HemisphereLight;
   readonly ambient: THREE.AmbientLight;
 
@@ -705,6 +757,10 @@ export class EnvironmentRig {
   private readonly lightGroup: THREE.Group;
   private readonly sunDir = new THREE.Vector3(0, 1, 0);
   private readonly sunUp = new THREE.Vector3(0, 1, 0);
+  private rimYaw = 0;
+  private rimPitch = 0;
+  private shadowScale = 1;
+  private readonly rimDir = new THREE.Vector3(0, 0, 1);
 
   private skyMesh: THREE.Mesh | null = null;
   private skyMat: THREE.ShaderMaterial | null = null;
@@ -747,6 +803,13 @@ export class EnvironmentRig {
     this.lightGroup.add(this.bounce);
     this.lightGroup.add(this.bounce.target);
 
+    this.rim = new THREE.DirectionalLight(0xffffff, 0.0);
+    this.rim.name = 'env-rim';
+    this.rim.castShadow = false;
+    this.rim.visible = false;
+    this.lightGroup.add(this.rim);
+    this.lightGroup.add(this.rim.target);
+
     this.hemi = new THREE.HemisphereLight(0xffffff, 0x888888, 0.5);
     this.hemi.name = 'env-hemi';
     this.lightGroup.add(this.hemi);
@@ -786,6 +849,11 @@ export class EnvironmentRig {
     this.scene.environment = env;
     MaterialLibrary.setEnvironment(env, spec.envIntensity);
 
+    // The troffer grid is baked into the IBL, which gets its colour right and its
+    // SHAPE completely wrong — a real fluorescent ceiling lays down pools, not a
+    // uniform wash. Switch the floor's world-space pool overlay on for interiors.
+    MaterialLibrary.setInteriorLightPool(spec.interior ? LIGHT_POOL_OFFICE : null);
+
     // ---- key light ----------------------------------------------------
     this.sunDir.set(spec.sun.dir[0], spec.sun.dir[1], spec.sun.dir[2]).normalize();
     this.sunUp.set(0, 1, 0);
@@ -795,8 +863,9 @@ export class EnvironmentRig {
     this.sun.intensity = spec.sun.intensity;
 
     const sh = spec.shadow;
-    if (this.sun.shadow.mapSize.x !== sh.mapSize) {
-      this.sun.shadow.mapSize.set(sh.mapSize, sh.mapSize);
+    const mapSize = this.resolveMapSize(sh.mapSize);
+    if (this.sun.shadow.mapSize.x !== mapSize) {
+      this.sun.shadow.mapSize.set(mapSize, mapSize);
       if (this.sun.shadow.map) {
         this.sun.shadow.map.dispose();
         this.sun.shadow.map = null;
@@ -816,6 +885,17 @@ export class EnvironmentRig {
     // ---- fill / bounce / hemi / ambient --------------------------------
     this.setDirLight(this.fill, spec.fill, 60);
     this.setDirLight(this.bounce, spec.bounce, 30);
+
+    if (spec.rim) {
+      this.rim.color.setHex(spec.rim.color, THREE.SRGBColorSpace);
+      this.rim.intensity = spec.rim.intensity;
+      this.rim.visible = true;
+      this.rimYaw = (spec.rim.yaw * Math.PI) / 180;
+      this.rimPitch = (spec.rim.pitch * Math.PI) / 180;
+    } else {
+      this.rim.intensity = 0;
+      this.rim.visible = false;
+    }
 
     this.hemi.color.setHex(spec.hemi.sky, THREE.SRGBColorSpace);
     this.hemi.groundColor.setHex(spec.hemi.ground, THREE.SRGBColorSpace);
@@ -874,6 +954,24 @@ export class EnvironmentRig {
     });
   }
 
+  /**
+   * Scale every preset's shadow-map resolution. 1.0 = the authored 4k indoor map
+   * (7 mm/texel, which is what makes contact shadows survive); 0.5 halves it for a
+   * weak GPU. Clamped to a power of two between 512 and 4096.
+   */
+  setShadowQuality(scale: number): void {
+    const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    if (s === this.shadowScale) return;
+    this.shadowScale = s;
+    if (this.preset) this.apply(this.preset);
+  }
+
+  private resolveMapSize(base: number): number {
+    const raw = base * this.shadowScale;
+    const p = Math.pow(2, Math.round(Math.log2(Math.max(1, raw))));
+    return Math.min(4096, Math.max(512, p));
+  }
+
   /** Apply `preset` only if it isn't already active. */
   setPreset(preset: EnvPreset): void {
     if (this.preset === preset) return;
@@ -884,16 +982,45 @@ export class EnvironmentRig {
    * Per-frame. `focus` is the point the shadow frustum should be centred on — the player.
    * The frustum centre is snapped to the shadow-map texel grid in light space so shadows
    * do not crawl/shimmer as the player moves.
+   *
+   * Pass `camera` to drive the camera-relative rim light. Without it the rim falls back
+   * to a fixed world direction, which still separates the hero but does not track.
    */
-  update(dt: number, focus: THREE.Vector3): void {
+  update(dt: number, focus: THREE.Vector3, camera?: THREE.Camera): void {
     if (this.disposed || !this.spec) return;
     const sh = this.spec.shadow;
+
+    // ---- camera-relative rim -------------------------------------------
+    if (this.rim.visible) {
+      // Camera forward projected onto the ground plane.
+      let fx = 0;
+      let fz = 1;
+      if (camera) {
+        camera.getWorldDirection(this.rimDir);
+        const len = Math.hypot(this.rimDir.x, this.rimDir.z);
+        if (len > 1e-4) {
+          fx = this.rimDir.x / len;
+          fz = this.rimDir.z / len;
+        }
+      }
+      const c = Math.cos(this.rimYaw);
+      const s = Math.sin(this.rimYaw);
+      const rx = fx * c - fz * s;
+      const rz = fx * s + fz * c;
+      const cp = Math.cos(this.rimPitch);
+      const sp = Math.sin(this.rimPitch);
+      // Position the light OPPOSITE the direction it should throw from, i.e. behind
+      // the subject relative to the lens.
+      this.rim.position.set(focus.x - rx * 22 * cp, focus.y + 22 * sp, focus.z - rz * 22 * cp);
+      this.rim.target.position.copy(focus);
+      this.rim.target.updateMatrixWorld();
+    }
 
     // Build a light-space rotation basis and snap the frustum centre to the texel grid.
     _mLight.lookAt(this.sunDir, _vOrigin, this.sunUp);
     _mLightInv.copy(_mLight).invert();
 
-    const texel = (sh.radius * 2) / sh.mapSize;
+    const texel = (sh.radius * 2) / this.resolveMapSize(sh.mapSize);
     _vTmp.copy(focus).applyMatrix4(_mLightInv);
     _vTmp.x = Math.round(_vTmp.x / texel) * texel;
     _vTmp.y = Math.round(_vTmp.y / texel) * texel;

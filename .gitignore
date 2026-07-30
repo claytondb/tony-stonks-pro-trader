@@ -53,3 +53,4 @@ electron/dist/
 shots/
 refs/
 *.local.*
+dist-fx/

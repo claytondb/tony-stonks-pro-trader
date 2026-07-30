@@ -78,8 +78,14 @@ interface TierSpec {
 
 const TIERS: Record<Exclude<PostQuality, 'off'>, TierSpec> = {
   low: { bloom: true, smaa: false, ao: false, bloomResScale: 0.5, aoSamples: 8, pdSamples: 8 },
-  medium: { bloom: true, smaa: true, ao: false, bloomResScale: 0.5, aoSamples: 8, pdSamples: 8 },
-  high: { bloom: true, smaa: true, ao: 'half', bloomResScale: 0.75, aoSamples: 12, pdSamples: 12 },
+  // 'medium' now gets half-res AO. A frame with NO contact darkening at all does not
+  // read as a cheaper frame, it reads as a broken one — everything hovers.
+  medium: { bloom: true, smaa: true, ao: 'half', bloomResScale: 0.5, aoSamples: 8, pdSamples: 8 },
+  // 'high' is the shipping default and is now full-res. At half res the GTAO buffer is
+  // mush on exactly the geometry that needs it most: the 25 mm cubicle panel edges, the
+  // desk/carpet junction, the chair's caster cluster. Sample count is trimmed to pay
+  // for the resolution, which is the right trade — AO wants precision, not samples.
+  high: { bloom: true, smaa: true, ao: 'full', bloomResScale: 0.75, aoSamples: 10, pdSamples: 12 },
   ultra: { bloom: true, smaa: true, ao: 'full', bloomResScale: 1.0, aoSamples: 16, pdSamples: 16 },
 };
 
@@ -165,8 +171,12 @@ vec3 sampleScene( vec2 uv, float jitter ) {
   float rad = length( dir );
   float edge = smoothstep( 0.08, 0.78, rad );
 
-  float blur = uSpeed * uSpeed * 0.095 * edge;
-  float ca = ( uChromaBase + uSpeed * 0.0085 ) * edge;
+  // The square term was the bug: at a realistic cruise (uSpeed ~0.4) it produced a
+  // 0.015 px displacement, i.e. nothing. A THPS still has to sell velocity on its own,
+  // so the curve is now slightly SUPERLINEAR-in-reverse — most of the effect arrives
+  // early, then saturates.
+  float blur = pow( uSpeed, 1.25 ) * 0.16 * edge;
+  float ca = ( uChromaBase + uSpeed * 0.020 ) * edge;
 
   if ( blur < 0.0009 ) {
     if ( ca < 0.00006 ) return texture2D( tDiffuse, uv ).rgb;
@@ -257,9 +267,13 @@ const GRADE_DEFAULTS = {
   // Retuned against the reference histograms after integration: the office
   // interior has no sky and no true blacks of its own, so the original lift of
   // 0.022 pushed p1 to 34/255 (refs sit at 6-9) and the whole frame read flat.
-  saturation: 1.26,
-  contrast: 1.22,
-  pivot: 0.42,
+  //
+  // pivot 0.42 -> 0.375: the contrast S-curve pivots around the office's own median,
+  // and at 0.42 the expansion was pushing the AO/shadow band UP instead of down —
+  // the ambient-occlusion term was being graded straight back out of the image.
+  saturation: 1.33,
+  contrast: 1.26,
+  pivot: 0.375,
   vignette: 0.26,
   grain: 0.028,
   split: 0.5,
@@ -333,7 +347,10 @@ export class PostFX {
     bloomStrength: BLOOM_DEFAULTS.strength,
     bloomRadius: BLOOM_DEFAULTS.radius,
     bloomThreshold: BLOOM_DEFAULTS.threshold,
-    aoIntensity: 1.0,
+    // > 1 deliberately: the grade's lift + pivot lift the AO term straight back out
+    // again, so the pass has to over-deliver for the contact darkening to survive to
+    // the frame.
+    aoIntensity: 1.3,
     chromaticBase: GRADE_DEFAULTS.chromaticBase,
   };
 
@@ -424,20 +441,26 @@ export class PostFX {
         const p = new GTAOPass(this.scene, this.camera, aw, ah);
         p.output = GTAOPass.OUTPUT.Default;
         p.blendIntensity = this.opts.aoIntensity;
+        // CONTACT occlusion, not mid-range room occlusion. A 1.3 m world radius with a
+        // linear distance falloff spreads the term so thinly that the place it matters
+        // most — the 2 cm where a cubicle partition meets the carpet — gets almost
+        // nothing. 0.45 m with a superlinear exponent puts the energy at the contact.
         p.updateGtaoMaterial({
-          radius: 1.3,
-          distanceExponent: 1.0,
-          thickness: 1.0,
+          radius: 0.45,
+          distanceExponent: 1.6,
+          thickness: 0.6,
           distanceFallOff: 1.0,
-          scale: 1.6,
+          scale: 2.2,
           samples: tier.aoSamples,
           screenSpaceRadius: false,
         });
+        // Tighter denoise radius to match the tighter AO radius: at 4 the poisson
+        // denoiser was smearing the contact term straight back out again.
         p.updatePdMaterial({
           lumaPhi: 10,
-          depthPhi: 2,
-          normalPhi: 3,
-          radius: 4,
+          depthPhi: 1.5,
+          normalPhi: 4,
+          radius: 2.5,
           radiusExponent: 1,
           rings: 2,
           samples: tier.pdSamples,

@@ -30,7 +30,12 @@ export type MaterialId =
   | 'drywall' | 'concreteFloor' | 'asphalt' | 'sidewalk' | 'brushedMetal' | 'chrome' | 'darkPlastic'
   | 'rubber' | 'glass' | 'whiteboard' | 'paper' | 'screenOn' | 'screenOff' | 'brick' | 'cardboard'
   | 'woodFloor' | 'fluorescentDiffuser' | 'grindMetal' | 'skinLight' | 'shirtWhite' | 'trousersCharcoal'
-  | 'tieRed' | 'hairBrown' | 'copNavy' | 'copBadgeGold' | 'shoeBlack' | 'plantGreen' | 'terracotta';
+  | 'tieRed' | 'hairBrown' | 'copNavy' | 'copBadgeGold' | 'shoeBlack' | 'plantGreen' | 'terracotta'
+  // Saturated set-dressing accents. The refs get their production value from a
+  // handful of high-chroma notes (red tie, orange sparks, gold coins, navy uniforms)
+  // punched into an otherwise neutral office. Use these on ~1 prop every 8 m of the
+  // skate line: folders, extinguishers, safety signage, a repainted filing cabinet.
+  | 'accentOrange' | 'accentRed' | 'accentTeal' | 'accentGold';
 
 export interface MaterialOptions {
   repeat?: [number, number];
@@ -50,6 +55,7 @@ export const MATERIAL_IDS: readonly MaterialId[] = [
   'rubber', 'glass', 'whiteboard', 'paper', 'screenOn', 'screenOff', 'brick', 'cardboard',
   'woodFloor', 'fluorescentDiffuser', 'grindMetal', 'skinLight', 'shirtWhite', 'trousersCharcoal',
   'tieRed', 'hairBrown', 'copNavy', 'copBadgeGold', 'shoeBlack', 'plantGreen', 'terracotta',
+  'accentOrange', 'accentRed', 'accentTeal', 'accentGold',
 ];
 
 // ---------------------------------------------------------------------------
@@ -85,6 +91,14 @@ interface MaterialSpec {
   /** Default texture repeat when the caller does not supply one. */
   repeat?: [number, number];
   /**
+   * Multiplier applied to whatever repeat is finally used — the spec's or the
+   * caller's. This is how texel density gets calibrated to gameplay scale WITHOUT
+   * every call site having to know the real-world size of one texture tile.
+   * Level code says "one tile per 2.6 m of floor"; the library says "and that tile
+   * is actually 0.9 m of carpet, because a 3 mm loop has to survive".
+   */
+  repeatScale?: number;
+  /**
    * Canvas size handed to ProceduralTextures. Left unset on every stock entry on purpose:
    * ProceduralTextures has its own per-surface tuned defaults (carpet/ceiling are 1024, the rest
    * 512) and its cache is keyed on `id|size`, so overriding the size here would silently
@@ -97,11 +111,27 @@ interface MaterialSpec {
   metalness: number;
   emissive?: number;
   emissiveIntensity?: number;
+  /**
+   * Hard ceiling on emissiveIntensity, INCLUDING caller overrides.
+   *
+   * The bloom threshold is 0.85 with a 0.6 radius; a single small sphere at
+   * emissiveIntensity 3.0 does not read as a brighter lamp, it reads as a
+   * rendering bug — a white hole with a bloom skirt sitting at a completely
+   * different exposure to every other fixture in the same room. Emissive tuning is
+   * this library's job, so the ceiling is enforced here rather than trusted to
+   * every prop author.
+   */
+  emissiveClamp?: number;
   /** Per-material scale on the global envMapIntensity set by setEnvironment(). */
   env?: number;
   normalScale?: number;
   aoIntensity?: number;
   flatShading?: boolean;
+  /**
+   * Opt this surface into the world-space interior light-pool + traffic-wear shader
+   * injection (see `setInteriorLightPool`). Only worth it on large floor planes.
+   */
+  lightPool?: boolean;
   side?: THREE.Side;
   transparent?: boolean;
   opacity?: number;
@@ -125,19 +155,27 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
   officeCarpet: {
     // The single largest surface on screen. Deliberately a desaturated greige so the warm key
     // light supplies the tan seen in the refs rather than the albedo double-counting it.
-    surface: 'officeCarpet', repeat: [16, 16],
+    //
+    // repeatScale 2.9: level code asks for one tile per 2.6 m, which put the loop pile at
+    // ~18 mm — visible 5-8 cm blobs on screen, i.e. terrazzo. 2.6 / 2.9 = one tile per
+    // 0.9 m, a real carpet module, which lands the loop at ~6 mm.
+    // normalScale doubled to compensate for the albedo contrast the generator gave up.
+    surface: 'officeCarpet', repeat: [16, 16], repeatScale: 2.9,
     color: 0xffffff, roughness: 0.95, metalness: 0.0,
-    env: 0.40, normalScale: 0.55, aoIntensity: 0.9,
+    env: 0.40, normalScale: 1.15, aoIntensity: 1.0, lightPool: true,
   },
   ceilingTile: {
     // A suspended ceiling only ever sees the floor bounce, which indoors is a dim
     // warm brown — left untouched the whole ceiling renders tan. Cool the albedo
     // and add a small self-emission so it reads as the bright neutral acoustic
     // tile of the refs. Kept well under the 0.85 bloom threshold.
-    surface: 'ceilingTile', repeat: [8, 8],
+    // repeatScale 2.0: the ceiling grid asks for one tile per ~2 m; acoustic tile is a
+    // 0.6 m module and its fissured surface is one of the most recognisable textures in
+    // an office. normalScale up so it actually catches the troffer grazing light.
+    surface: 'ceilingTile', repeat: [8, 8], repeatScale: 2.0,
     color: 0xd4dde6, roughness: 0.96, metalness: 0.0,
-    emissive: 0xbcc9d6, emissiveIntensity: 0.26,
-    env: 0.50, normalScale: 0.6, aoIntensity: 1.0,
+    emissive: 0xbcc9d6, emissiveIntensity: 0.26, emissiveClamp: 0.4,
+    env: 0.50, normalScale: 0.9, aoIntensity: 1.0,
   },
   ceilingGrid: {
     // Painted aluminium T-bar: paint is a dielectric, so this is NOT metalness 1.
@@ -151,21 +189,30 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     // rather than the desaturated slate-grey of the refs.
     // Kept as MeshStandardMaterial on purpose: it has the largest screen coverage of any
     // prop surface and sheen would cost more than it returns here.
-    surface: 'cubicleFabric', repeat: [4, 3],
-    color: 0xcfcdc6, roughness: 0.93, metalness: 0.0,
-    env: 0.45, normalScale: 0.9, aoIntensity: 1.0,
+    // normalScale 0.9 -> 0.22 and roughness 0.93 -> 0.975: at 0.9 every weave crown
+    // caught a specular and the panel read as corrugated plastic siding. Woven felt has
+    // essentially no gloss. flatShading so the chamfered panel hulls read as authored
+    // planes rather than smooth-shaded boxes.
+    surface: 'cubicleFabric', repeat: [4, 3], repeatScale: 2.2,
+    color: 0xcfcdc6, roughness: 0.975, metalness: 0.0,
+    env: 0.35, normalScale: 0.22, aoIntensity: 1.0, flatShading: true,
   },
   cubicleTrim: {
-    // The light cap rail the player grinds. Semi-gloss laminate over particle board.
-    surface: 'drywall', repeat: [6, 1],
-    color: 0xdfe1e5, roughness: 0.42, metalness: 0.0,
-    env: 0.75, normalScale: 0.3,
-    physical: { clearcoat: 0.25, clearcoatRoughness: 0.35 },
+    // The cap rail the player grinds — the primary skate surface in the level, so it
+    // gets a dedicated map with a polished contact stripe down the centre of V. That
+    // stripe is at roughness ~0.14 against ~0.52 shoulders, which makes it the one
+    // surface in the room that throws a bright specular streak under the troffers.
+    surface: 'grindCap', repeat: [6, 1],
+    color: 0xe4e2dc, roughness: 0.40, metalness: 0.0,
+    env: 0.85, normalScale: 0.55, aoIntensity: 1.0, flatShading: true,
+    physical: { clearcoat: 0.35, clearcoatRoughness: 0.22 },
   },
   deskLaminate: {
+    // Warmer and more saturated: the desks are the warm note that the cool cubicle
+    // fabric plays against, and at 0xf2deb5 they were washing out to bone.
     surface: 'deskLaminate', repeat: [3, 2],
-    color: 0xf2deb5, roughness: 0.35, metalness: 0.0,
-    env: 0.90, normalScale: 0.35,
+    color: 0xe8c98d, roughness: 0.35, metalness: 0.0,
+    env: 0.90, normalScale: 0.35, flatShading: true,
     physical: { clearcoat: 0.45, clearcoatRoughness: 0.22, ior: 1.5 },
   },
   drywall: {
@@ -173,7 +220,7 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     // clips against a 3.6-intensity key and destroys the read of the cubicle line.
     surface: 'drywall', repeat: [8, 4],
     color: 0xc8c4bc, roughness: 0.96, metalness: 0.0,
-    env: 0.50, normalScale: 0.45,
+    env: 0.50, normalScale: 0.45, flatShading: true,
   },
   concreteFloor: {
     surface: 'concreteFloor', repeat: [12, 12],
@@ -256,9 +303,15 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
   },
   paper: {
     // Thin planes — DoubleSide is mandatory or half the scattered sheets vanish.
+    //
+    // Albedo pulled well off white (0xf8f8f7 -> 0xd6d1c4) and env cut to 0.15. Against a
+    // 3.5-intensity key a near-white sheet with no thickness and no contact shadow
+    // clips to 255 and reads as a broken projected light decal on the carpet — three
+    // separate reviewers called the old scatter paper the loudest cheapness tell in the
+    // build. Real office paper sits around 0.72-0.78 reflectance, not 0.97.
     surface: 'paper', repeat: [1, 1],
-    color: 0xf8f8f7, roughness: 0.86, metalness: 0.0,
-    env: 0.50, normalScale: 0.3, side: THREE.DoubleSide,
+    color: 0xd6d1c4, roughness: 0.95, metalness: 0.0,
+    env: 0.15, normalScale: 0.3, side: THREE.DoubleSide,
   },
   cardboard: {
     surface: 'cardboard', repeat: [2, 2],
@@ -281,7 +334,7 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     // on the blue channel, under it on red, so it glows blue-white instead of clipping to a
     // white blob. Callers vary the tint per monitor via opts.emissive (refs show green + blue).
     color: 0x0f151c, roughness: 0.22, metalness: 0.0,
-    emissive: 0x6fa8d8, emissiveIntensity: 1.8,
+    emissive: 0x6fa8d8, emissiveIntensity: 1.8, emissiveClamp: 2.2,
     env: 0.30,
   },
   screenOff: {
@@ -292,8 +345,12 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
   fluorescentDiffuser: {
     // SAMPLED #f7e9d0 / #faead0 — warm white, not neutral. 2.6x lands it in bloom territory
     // while ACES still holds a hint of the panel's own colour instead of pure white.
+    // emissiveClamp: a lamp is not allowed to be brighter than a lamp. The 3.0 the
+    // pendant bulbs ask for lands them a full stop above every other fixture in the
+    // room and UnrealBloomPass turns them into a white hole; 2.2 keeps every fixture in
+    // the room inside one exposure family.
     color: 0xfff6e4, roughness: 0.60, metalness: 0.0,
-    emissive: 0xfff1d6, emissiveIntensity: 2.6,
+    emissive: 0xfff1d6, emissiveIntensity: 2.2, emissiveClamp: 2.2,
     env: 0.25,
   },
 
@@ -340,6 +397,36 @@ const SPECS: Record<MaterialId, MaterialSpec> = {
     color: 0x1e2023, roughness: 0.30, metalness: 0.0,
     env: 1.05,
   },
+
+  // ---- saturated accents ---------------------------------------------------
+  // These exist so that EVERY frame has at least one high-chroma note. The office
+  // itself is deliberately a narrow warm/cool neutral band; without accents that band
+  // is the whole palette and the frame reads as a beige call centre. Chroma is set a
+  // little below the target because ACES desaturates as it approaches the shoulder.
+  accentOrange: {
+    // Safety orange — cones, hazard signage, a repainted cabinet, box tape.
+    color: 0xc9581a, roughness: 0.50, metalness: 0.0,
+    env: 0.60, flatShading: true,
+  },
+  accentRed: {
+    // Fire extinguisher / emergency red. The single most useful accent indoors: one
+    // of these on a wall pins the eye and gives the neutrals something to be neutral
+    // against.
+    color: 0xa81f1c, roughness: 0.36, metalness: 0.0,
+    env: 0.80, flatShading: true,
+    physical: { clearcoat: 0.5, clearcoatRoughness: 0.2 },
+  },
+  accentTeal: {
+    // The cool counterweight — a repainted pod, a recycling bin, a locker bank.
+    color: 0x1f6270, roughness: 0.52, metalness: 0.0,
+    env: 0.65, flatShading: true,
+  },
+  accentGold: {
+    // Coin / star / reward language, matched to the HUD's warm gold. Metal, so it
+    // catches the troffers and reads as a pickup rather than a yellow box.
+    color: 0xd9a52c, roughness: 0.28, metalness: 1.0,
+    env: 1.25,
+  },
 };
 
 const FALLBACK_SPEC: MaterialSpec = {
@@ -382,8 +469,11 @@ function ensureColorSpace(tex: THREE.Texture | undefined, cs: THREE.ColorSpace):
 
 function loadTextures(spec: MaterialSpec, repeat: [number, number] | undefined): TextureSet | null {
   if (!spec.surface) return null;
+  let r = repeat ?? spec.repeat;
+  const s = spec.repeatScale;
+  if (r && s !== undefined && s !== 1) r = [r[0] * s, r[1] * s];
   try {
-    return getTextureSet(spec.surface, repeat ?? spec.repeat, spec.textureSize);
+    return getTextureSet(spec.surface, r, spec.textureSize);
   } catch (err) {
     // ProceduralTextures may not know this surface yet (parallel development). Degrade to an
     // untextured but correctly-tuned material rather than taking the whole level down.
@@ -392,6 +482,133 @@ function loadTextures(spec: MaterialSpec, repeat: [number, number] | undefined):
     }
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Interior light pools
+//
+// A fluorescent grid does NOT light a floor evenly — it lays down a repeating
+// pattern of soft-edged elliptical pools with dim gaps between them, and that
+// pattern is a huge part of why an office reads as an office. Baking the troffers
+// into the IBL (which is what EnvironmentRig does) gets the *colour* of that light
+// right and the *shape* of it completely wrong: the carpet comes out as a
+// perfectly uniform ambient wash with no falloff anywhere.
+//
+// Forty real PointLights would fix it and cost the frame. Instead this injects a
+// tiny world-space term into the floor shader that
+//   (a) modulates the indirect diffuse by a periodic pool function phase-locked to
+//       the real troffer grid, and
+//   (b) adds a low-frequency, NON-TILING traffic-wear term, so a floor tiled every
+//       0.9 m does not read as a 0.9 m blotch grid across a 68 m plate.
+//
+// All injected materials share one set of uniform objects, so `setInteriorLightPool`
+// retunes every floor in the scene without recompiling a single shader.
+// ---------------------------------------------------------------------------
+
+export interface LightPoolSpec {
+  /** World-space pitch of the fixture grid, in metres. */
+  pitch: number;
+  /** World-space XZ phase of the grid, in metres. */
+  offset: [number, number];
+  /** Normalised cell distance at which the pool starts to fall off (0 = centre). */
+  inner: number;
+  /** Normalised cell distance at which the pool has fully fallen off (~1.41 = corner). */
+  outer: number;
+  /** Floor multiplier midway between fixtures. 1 = no pooling at all. */
+  min: number;
+  /** Multiplier directly under a fixture. */
+  max: number;
+  /** sRGB tint of the pool centre. */
+  color: number;
+  /** Amplitude of the large-scale traffic-wear darkening, 0..1. */
+  wear: number;
+}
+
+/**
+ * Defaults are phase-locked to `OfficeLevel`'s troffer layout: pitch = TILE * 3 =
+ * 1.22 * 3 = 3.66 m, and because the grid has an even column count it is offset by
+ * half a pitch from the world origin.
+ */
+export const LIGHT_POOL_OFFICE: LightPoolSpec = {
+  pitch: 3.66,
+  offset: [1.83, 1.83],
+  inner: 0.12,
+  outer: 0.98,
+  min: 0.72,
+  max: 1.16,
+  color: 0xfff0d6,
+  wear: 0.13,
+};
+
+const LP_UNIFORMS = {
+  uLPPitch: { value: LIGHT_POOL_OFFICE.pitch },
+  uLPOffset: { value: new THREE.Vector2(LIGHT_POOL_OFFICE.offset[0], LIGHT_POOL_OFFICE.offset[1]) },
+  uLPInner: { value: LIGHT_POOL_OFFICE.inner },
+  uLPOuter: { value: LIGHT_POOL_OFFICE.outer },
+  uLPMin: { value: LIGHT_POOL_OFFICE.min },
+  uLPMax: { value: LIGHT_POOL_OFFICE.max },
+  uLPTint: { value: new THREE.Color().setHex(LIGHT_POOL_OFFICE.color, THREE.SRGBColorSpace) },
+  uLPWear: { value: LIGHT_POOL_OFFICE.wear },
+  uLPOn: { value: 1 },
+};
+
+const LP_FRAG_HEAD = /* glsl */ `
+varying vec3 vLPWorld;
+uniform float uLPPitch;
+uniform vec2  uLPOffset;
+uniform float uLPInner;
+uniform float uLPOuter;
+uniform float uLPMin;
+uniform float uLPMax;
+uniform vec3  uLPTint;
+uniform float uLPWear;
+uniform float uLPOn;
+`;
+
+const LP_FRAG_BODY = /* glsl */ `
+if ( uLPOn > 0.5 ) {
+  vec2 cell = ( vLPWorld.xz - uLPOffset ) / uLPPitch;
+  vec2 f = abs( fract( cell ) - 0.5 ) * 2.0;
+  float d = length( f );
+  float pool = 1.0 - smoothstep( uLPInner, uLPOuter, d );
+
+  // Two incommensurate low-frequency layers => no visible period at play scale.
+  float wear = 0.5 + 0.5 * (
+      0.62 * sin( vLPWorld.x * 0.191 + 1.7 ) * sin( vLPWorld.z * 0.133 - 0.6 )
+    + 0.38 * sin( vLPWorld.x * 0.061 - 2.1 ) * sin( vLPWorld.z * 0.083 + 1.1 )
+  );
+
+  float k = mix( uLPMin, uLPMax, pool ) * ( 1.0 - uLPWear * ( 1.0 - wear ) );
+  vec3 tint = mix( vec3( 1.0 ), uLPTint, pool * 0.8 );
+
+  // Indirect takes the full pool: the troffers ARE the ambient here. Direct only
+  // takes a third of it, so the key light's own shadows still read cleanly.
+  reflectedLight.indirectDiffuse *= k * tint;
+  reflectedLight.indirectSpecular *= mix( 1.0, k, 0.6 );
+  reflectedLight.directDiffuse *= mix( 1.0, k, 0.33 );
+}
+`;
+
+/**
+ * Shared across every light-pooled material on purpose: three derives a program
+ * cache key from `onBeforeCompile.toString()`, so one function identity means one
+ * compiled permutation for all of them.
+ */
+function injectLightPool(shader: {
+  uniforms: Record<string, { value: unknown }>;
+  vertexShader: string;
+  fragmentShader: string;
+}): void {
+  Object.assign(shader.uniforms, LP_UNIFORMS);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vLPWorld;')
+    .replace(
+      '#include <begin_vertex>',
+      '#include <begin_vertex>\nvLPWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;'
+    );
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>\n${LP_FRAG_HEAD}`)
+    .replace('#include <aomap_fragment>', `#include <aomap_fragment>\n${LP_FRAG_BODY}`);
 }
 
 export class MaterialLibrary {
@@ -429,7 +646,10 @@ export class MaterialLibrary {
     const emissive = opts?.emissive ?? spec.emissive;
     if (emissive !== undefined) {
       params.emissive = new THREE.Color(emissive);
-      params.emissiveIntensity = opts?.emissiveIntensity ?? spec.emissiveIntensity ?? 1.0;
+      const ei = opts?.emissiveIntensity ?? spec.emissiveIntensity ?? 1.0;
+      params.emissiveIntensity = spec.emissiveClamp !== undefined
+        ? Math.min(ei, spec.emissiveClamp)
+        : ei;
     }
 
     if (tex) {
@@ -480,12 +700,37 @@ export class MaterialLibrary {
       material.normalScale.set(spec.normalScale, spec.normalScale);
     }
 
+    if (spec.lightPool) {
+      material.onBeforeCompile = injectLightPool;
+    }
+
     const envScale = spec.env ?? 1.0;
     material.envMapIntensity = this.envIntensity * envScale;
     if (this.env) material.envMap = this.env;
 
     this.cache.set(key, { material, envScale });
     return material;
+  }
+
+  /**
+   * Retune (or disable, with `null`) the interior light-pool overlay. Affects every
+   * already-built floor material immediately — the uniforms are shared, so nothing
+   * recompiles.
+   */
+  static setInteriorLightPool(spec: LightPoolSpec | null): void {
+    if (!spec) {
+      LP_UNIFORMS.uLPOn.value = 0;
+      return;
+    }
+    LP_UNIFORMS.uLPOn.value = 1;
+    LP_UNIFORMS.uLPPitch.value = spec.pitch;
+    LP_UNIFORMS.uLPOffset.value.set(spec.offset[0], spec.offset[1]);
+    LP_UNIFORMS.uLPInner.value = spec.inner;
+    LP_UNIFORMS.uLPOuter.value = spec.outer;
+    LP_UNIFORMS.uLPMin.value = spec.min;
+    LP_UNIFORMS.uLPMax.value = spec.max;
+    LP_UNIFORMS.uLPTint.value.setHex(spec.color, THREE.SRGBColorSpace);
+    LP_UNIFORMS.uLPWear.value = spec.wear;
   }
 
   /**

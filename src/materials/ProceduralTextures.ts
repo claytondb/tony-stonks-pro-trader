@@ -35,7 +35,8 @@ import * as THREE from 'three';
 export type SurfaceId =
   | 'officeCarpet' | 'ceilingTile' | 'cubicleFabric' | 'deskLaminate' | 'drywall' | 'concreteFloor'
   | 'asphalt' | 'sidewalk' | 'brushedMetal' | 'darkPlastic' | 'rubber' | 'whiteboard' | 'paper'
-  | 'brick' | 'cardboard' | 'woodFloor' | 'ceilingGridMetal' | 'fabricSeat' | 'officeGlass' | 'noise';
+  | 'brick' | 'cardboard' | 'woodFloor' | 'ceilingGridMetal' | 'fabricSeat' | 'officeGlass'
+  | 'grindCap' | 'noise';
 
 export interface TextureSet {
   map: THREE.Texture;
@@ -50,7 +51,7 @@ export const SURFACE_IDS: readonly SurfaceId[] = [
   'officeCarpet', 'ceilingTile', 'cubicleFabric', 'deskLaminate', 'drywall',
   'concreteFloor', 'asphalt', 'sidewalk', 'brushedMetal', 'darkPlastic',
   'rubber', 'whiteboard', 'paper', 'brick', 'cardboard',
-  'woodFloor', 'ceilingGridMetal', 'fabricSeat', 'officeGlass', 'noise',
+  'woodFloor', 'ceilingGridMetal', 'fabricSeat', 'officeGlass', 'grindCap', 'noise',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -464,10 +465,16 @@ const genOfficeCarpet: SurfaceGenerator = (size, seed) => {
 
   // Light commercial grey-taupe. Keep the values high — under the warm/cool
   // interior rig this is the surface that sets the whole scene's key.
-  const cDark = rgbOf(0x716e68);
-  const cMid = rgbOf(0x8d8a82);
-  const cLight = rgbOf(0xa5a196);
-  const cWarm = rgbOf(0x93866d);
+  //
+  // ALBEDO CONTRAST IS DELIBERATELY LOW. Real loop pile has almost no base-colour
+  // variance between fibres; all the visible structure comes from the loops
+  // catching light. The previous spread (0x716e68 -> 0xa5a196, plus a saturated
+  // warm fleck) read as speckled terrazzo/cork at gameplay scale. The variance now
+  // lives in the height/normal and roughness maps, where it belongs.
+  const cDark = rgbOf(0x807d76);
+  const cMid = rgbOf(0x8b8880);
+  const cLight = rgbOf(0x969288);
+  const cWarm = rgbOf(0x8d8377);
 
   for (let y = 0; y < size; y++) {
     const rowBeat = 0.5 + 0.5 * Math.cos((y / rowPeriod) * Math.PI * 2);
@@ -497,8 +504,12 @@ const genOfficeCarpet: SurfaceGenerator = (size, seed) => {
       }
 
       // --- shading: loops catch light on top, go dark in the gaps between
-      const occl = 0.80 + 0.20 * Math.pow(height, 0.85);
-      const traffic = 0.95 + 0.11 * mottle[i] - 0.08 * soil[i];
+      const occl = 0.86 + 0.14 * Math.pow(height, 0.85);
+      // Low-frequency mottling is damped hard: at one texture tile per ~0.9 m of
+      // floor it would otherwise repeat as a visible 0.9 m blotch grid across the
+      // whole plate. Large-scale traffic wear is applied in world space by the
+      // MaterialLibrary light-pool injection instead, which does not tile.
+      const traffic = 0.98 + 0.035 * mottle[i] - 0.03 * soil[i];
       const k = occl * traffic;
 
       const p = i * 4;
@@ -509,11 +520,14 @@ const genOfficeCarpet: SurfaceGenerator = (size, seed) => {
 
       // --- roughness: carpet is basically fully rough; polished traffic lanes
       // are marginally smoother, which reads as a sheen under the strip lights
-      r[i] = clamp01(0.965 - 0.055 * soil[i] - 0.020 * fine[i] + 0.015 * dome);
-      ao[i] = clamp01(0.58 + 0.42 * Math.pow(height, 0.7));
+      // Roughness now carries the fibre variance the albedo gave up: the loop
+      // crowns polish slightly, the gaps stay matte, so the pile reads as a
+      // specular breakup under the troffers instead of a printed noise photo.
+      r[i] = clamp01(0.975 - 0.075 * soil[i] - 0.040 * fine[i] - 0.055 * dome);
+      ao[i] = clamp01(0.52 + 0.48 * Math.pow(height, 0.7));
     }
   }
-  return { albedo: a, height: h, rough: r, ao, normalStrength: 1.15 };
+  return { albedo: a, height: h, rough: r, ao, normalStrength: 1.55 };
 };
 
 // ---- ceilingTile ----------------------------------------------------------
@@ -619,16 +633,22 @@ const genCubicleFabric: SurfaceGenerator = (size, seed) => {
   const { a, h, r } = buffers(size);
   const ao = new Float32Array(size * size);
 
-  const threads = 68;                              // threads across the tile
+  // 68 threads over a tile that covers ~0.9 m of panel is a 13 mm "thread": that is
+  // corrugated barn siding, not acoustic felt. 128 over the same tile is ~7 mm on
+  // the map and sub-visible at gameplay distance once normalScale is sane.
+  const threads = 128;                             // threads across the tile
   const T = size / threads;
   const fuzz = fbm(size, size / 2.2, size / 2.2, 2, 0.5, seed + 7);
   const dye = fbm(size, 6, 6, 3, 0.55, seed + 9);
 
   // Reference cubicle panels are a light blue-grey, not a dark teal — leave
   // headroom so MaterialLibrary can tint downward with `color` if it wants.
-  const cBase = rgbOf(0x76858a);
-  const cLift = rgbOf(0x94a3a6);
-  const cDeep = rgbOf(0x5b6a6e);
+  // Genuinely COOL, not teal-grey. The whole warm/cool split of the office rests on
+  // this surface reading blue against the warm carpet; the old grey-teal sat inside
+  // the carpet's own hue band and the two collapsed into one greige field.
+  const cBase = rgbOf(0x828f9e);
+  const cLift = rgbOf(0x9aa7b6);
+  const cDeep = rgbOf(0x66717e);
 
   for (let y = 0; y < size; y++) {
     const wy = y / T;
@@ -671,11 +691,13 @@ const genCubicleFabric: SurfaceGenerator = (size, seed) => {
       a[p + 2] = cb * fuzzLift;
       a[p + 3] = 255;
 
-      r[i] = clamp01(0.90 - over * 0.07 + fuzz[i] * 0.05);
+      // Felt has no thread-crown specular worth speaking of; the old -0.07 term on
+      // the crowns is what produced a highlight on every "ridge".
+      r[i] = clamp01(0.965 - over * 0.02 + fuzz[i] * 0.03);
       ao[i] = clamp01(0.5 + 0.5 * Math.pow(height, 0.6));
     }
   }
-  return { albedo: a, height: h, rough: r, ao, normalStrength: 1.25 };
+  return { albedo: a, height: h, rough: r, ao, normalStrength: 0.55 };
 };
 
 // ---- deskLaminate ---------------------------------------------------------
@@ -1315,6 +1337,66 @@ const genOfficeGlass: SurfaceGenerator = (size, seed) => {
   return { albedo: a, height: h, rough: r, normalStrength: 0.10 };
 };
 
+// ---- grindCap -------------------------------------------------------------
+// The laminated cap rail along the top of every cubicle partition — i.e. the
+// primary grind ledge of the whole level. It has ONE job the fabric next to it
+// cannot do: say "skate here" from 20 m away.
+//
+// So: a warm off-white semi-gloss laminate, plus a worn contact stripe centred on
+// V where a thousand chair castors have polished the melamine. The stripe is a
+// touch darker and MUCH smoother than the untouched shoulders, so it picks up a
+// bright specular streak from the troffer grid that nothing else in the room
+// produces. That streak is the skate line, and it is free storytelling.
+const genGrindCap: SurfaceGenerator = (size, seed) => {
+  const { a, h, r } = buffers(size);
+  const ao = new Float32Array(size * size);
+
+  const grain = fbm(size, size / 3.0, 6, 2, 0.5, seed + 611);  // fine, runs along U
+  const blotch = fbm(size, 5, 5, 3, 0.55, seed + 612);
+  const scuff = fbm(size, size / 2.2, 3, 2, 0.45, seed + 613); // long directional scratches
+  const wearNoise = fbm(size, 9, 3, 3, 0.6, seed + 614);
+
+  const cBase = rgbOf(0xd9d5cb);   // warm off-white melamine
+  const cWorn = rgbOf(0xb3ada1);   // polished, slightly greyed contact strip
+  const cEdge = rgbOf(0xa79f92);   // the darker moulded edge return
+
+  for (let y = 0; y < size; y++) {
+    const v = (y + 0.5) / size;
+    // Contact strip: centred on V, ~34% wide, with a soft irregular boundary.
+    const dv = Math.abs(v - 0.5) / 0.17;
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const wobble = 1 + (wearNoise[i] - 0.5) * 0.55;
+      const wear = clamp01(1 - smoothstepR(0.55, 1.05, dv * wobble));
+      // Edge return darkening at the very top/bottom of V.
+      const edge = clamp01(smoothstepR(0.86, 1.0, Math.abs(v - 0.5) * 2));
+
+      const scratch = Math.pow(scuff[i], 2.2) * wear;
+      h[i] = clamp01(0.72 + grain[i] * 0.06 - wear * 0.05 - edge * 0.45 - scratch * 0.10);
+
+      const k = (0.97 + blotch[i] * 0.055) * (1 - scratch * 0.10);
+      const t = wear;
+      let cr = lerp(cBase[0], cWorn[0], t);
+      let cg = lerp(cBase[1], cWorn[1], t);
+      let cb = lerp(cBase[2], cWorn[2], t);
+      cr = lerp(cr, cEdge[0], edge);
+      cg = lerp(cg, cEdge[1], edge);
+      cb = lerp(cb, cEdge[2], edge);
+
+      const p = i * 4;
+      a[p] = cr * k;
+      a[p + 1] = cg * k;
+      a[p + 2] = cb * k;
+      a[p + 3] = 255;
+
+      // 0.52 untouched laminate -> 0.14 on the polished contact strip.
+      r[i] = clamp01(0.52 - wear * 0.38 + edge * 0.22 + blotch[i] * 0.05 - scratch * 0.04);
+      ao[i] = clamp01(1 - edge * 0.5 - scratch * 0.12);
+    }
+  }
+  return { albedo: a, height: h, rough: r, ao, normalStrength: 0.55 };
+};
+
 // ---- noise ----------------------------------------------------------------
 // Generic utility fBm. Handy as a detail/dirt layer or a mask.
 const genNoise: SurfaceGenerator = (size, seed) => {
@@ -1358,6 +1440,7 @@ const GENERATORS: Record<SurfaceId, SurfaceGenerator> = {
   ceilingGridMetal: genCeilingGridMetal,
   fabricSeat: genFabricSeat,
   officeGlass: genOfficeGlass,
+  grindCap: genGrindCap,
   noise: genNoise,
 };
 

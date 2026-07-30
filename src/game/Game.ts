@@ -396,7 +396,7 @@ export class Game {
       },
       onSpeedBoost: (amount) => {
         // Visual feedback for speed boost
-        this.speedLines.setIntensity(Math.min(1, amount / 10));
+        this.speedLines.setIntensity(Math.min(1, amount / 5));
       }
     });
   }
@@ -1834,10 +1834,15 @@ export class Game {
     // Textured PBR ground. The level's groundColor is now a tint over real
     // asphalt (albedo/normal/roughness/AO) instead of a flat untextured colour,
     // which is what made every non-office level read as a grey void.
+    // concreteFloor, not asphalt: the asphalt map is authored near-black, and
+    // `color` is a multiplicative tint (it can only darken further), so an
+    // asphalt ground reads as a void. Normalise the level's hex to a fixed
+    // brightness and let it tint a mid-value concrete instead.
     const tint = new THREE.Color(groundColor);
-    tint.multiplyScalar(1.9); // the map already carries the mid value
-    const groundMaterial = MaterialLibrary.get('asphalt', {
-      repeat: [size / 6, size / 6],
+    const level = Math.max(0.06, (tint.r + tint.g + tint.b) / 3);
+    tint.multiplyScalar(Math.min(1 / Math.max(tint.r, tint.g, tint.b, 0.001), 0.78 / level));
+    const groundMaterial = MaterialLibrary.get('concreteFloor', {
+      repeat: [size / 5, size / 5],
       color: tint.getHex(),
     });
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
@@ -2781,7 +2786,7 @@ export class Game {
     // Environment rig: recentre + texel-snap the shadow frustum on the player,
     // and keep the sky dome / clouds riding along with them. Must run every frame.
     if (this.envRig && this.chair) {
-      this.envRig.update(deltaTime, this.chair.position);
+      this.envRig.update(deltaTime, this.chair.position, this.camera);
     }
 
     // Speed-driven radial blur + chromatic aberration.

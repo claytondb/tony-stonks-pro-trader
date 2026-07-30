@@ -15,18 +15,47 @@ export class CameraController {
   private camera: THREE.PerspectiveCamera;
   private target: THREE.Object3D | null = null;
   
-  // Camera settings — locked tight behind player
-  private offset = new THREE.Vector3(0, 1.6, -3.2);  // Even closer and lower
+  // ---------------------------------------------------------------------------
+  // Framing
+  //
+  // The old rig was a one-point-perspective corridor shot: 80 deg VERTICAL fov (which
+  // in three means a ~110 deg horizontal fisheye), a look-at target a full metre above
+  // the chair, and a dead-centre vanishing point. That gave away ~40% of every frame
+  // to untextured ceiling tile, stretched the cubicle rows at the edges, and left the
+  // hero at roughly 4% of frame area.
+  //
+  // The framing below is built from three numbers:
+  //   - 58 deg vertical fov (~85 deg horizontal) — a skate-game lens, not a fisheye
+  //   - a look-at target 0.8 m BELOW the camera over a 3.4 m boom => ~13 deg of
+  //     downward pitch, which puts the ceiling line in the top ~15% of frame
+  //   - a lateral boom offset with a *smaller* matching look-at offset, so the
+  //     vanishing point sits off-centre and the mirror symmetry breaks
+  // ---------------------------------------------------------------------------
+  private offset = new THREE.Vector3(0, 1.7, -3.4);
+  /** Boom shifted off the player's centre line; the look-at follows only partly. */
+  private lateralOffset = 0.5;
+  private lookAtHeight = 0.9;
+  private lookAtLateral = 0.16;
   private lookAhead = 0.5;
   private smoothSpeed = 30;       // Near-instant position tracking
   private rotationSmooth = 25;    // Near-instant rotation follow
-  
+
   // Dynamic FOV settings
-  private baseFOV = 80;      // Slightly wider than before for speed feel
-  private maxFOV = 95;       // FOV at max speed
-  private currentFOV = 80;
-  private targetFOV = 80;
+  private baseFOV = 58;      // vertical; ~85 deg horizontal at 16:9
+  private maxFOV = 72;       // FOV at max speed
+  private currentFOV = 58;
+  private targetFOV = 58;
   private fovSmoothSpeed = 6;  // Faster FOV transitions
+
+  // ---- dutch roll -----------------------------------------------------------
+  // A still frame has to sell velocity on its own. Rolling the camera into turns by
+  // a few degrees is the cheapest, most legible speed cue there is, and it costs one
+  // euler write per frame.
+  private lastSpeed = 0;
+  private prevTargetYaw = 0;
+  private hasPrevYaw = false;
+  private rollCurrent = 0;
+  private readonly maxRoll = 0.075;   // ~4.3 degrees
   
   // Trick zoom settings (zoom out during air time for better visibility)
   private trickZoomAmount = 0.10;   // Subtler zoom during tricks
@@ -144,7 +173,7 @@ export class CameraController {
     // Calculate desired camera position (behind and above target)
     // Apply zoom multiplier (>1 = further away for trick visibility)
     const desiredOffset = new THREE.Vector3(
-      0,
+      this.lateralOffset,
       this.offset.y * this.currentZoomMultiplier,
       this.offset.z * this.currentZoomMultiplier
     );
@@ -196,18 +225,44 @@ export class CameraController {
       this.camera.position.add(this.shakeOffset);
     }
     
-    // Look at target with slight offset up and look-ahead
+    // Look at a point BELOW the camera height (downward pitch) and slightly to the
+    // side of the boom's own lateral offset, which is what pulls the vanishing point
+    // off the frame centre.
+    const targetRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.target.quaternion);
     const lookAheadOffset = targetForward.clone().multiplyScalar(this.lookAhead);
     const desiredLookAt = new THREE.Vector3()
       .copy(this.target.position)
-      .add(new THREE.Vector3(0, 1, 0))
+      .add(new THREE.Vector3(0, this.lookAtHeight, 0))
+      .addScaledVector(targetRight, this.lookAtLateral)
       .add(lookAheadOffset);
-    
+
     // Smooth look-at transition
     this.currentLookAt.lerp(desiredLookAt, this.smoothSpeed * dt);
-    
+
     this.camera.lookAt(this.currentLookAt);
-    
+
+    // ---- dutch roll into turns ---------------------------------------------
+    // Lateral acceleration ~ yaw rate * forward speed. Applied AFTER lookAt(), which
+    // has just overwritten the whole quaternion.
+    if (dt > 1e-5) {
+      let yawRate = 0;
+      if (this.hasPrevYaw) {
+        let d = targetRotationY - this.prevTargetYaw;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        yawRate = d / dt;
+      }
+      this.prevTargetYaw = targetRotationY;
+      this.hasPrevYaw = true;
+
+      const lateral = yawRate * Math.min(this.lastSpeed, 24);
+      const targetRoll = THREE.MathUtils.clamp(-lateral * 0.010, -this.maxRoll, this.maxRoll);
+      this.rollCurrent += (targetRoll - this.rollCurrent) * Math.min(1, 8 * dt);
+    }
+    if (Math.abs(this.rollCurrent) > 1e-4) {
+      this.camera.rotation.z = this.rollCurrent;
+    }
+
     // Update impact zoom decay
     this.updateImpactZoom(dt);
     
@@ -236,8 +291,10 @@ export class CameraController {
    * Zoom in/out
    */
   setZoom(zoom: number): void {
-    this.offset.z = -4.2 * zoom;
-    this.offset.y = 2.2 * zoom;
+    // Scaled from the same framing baseline as `offset`, not from the old 4.2/2.2
+    // pair, or calling setZoom(1) would silently undo the whole composition fix.
+    this.offset.z = -3.4 * zoom;
+    this.offset.y = 1.7 * zoom;
   }
   
   /**
@@ -247,12 +304,15 @@ export class CameraController {
    * @param maxSpeed - Speed at which FOV reaches maximum (e.g., 18)
    */
   updateFOVFromSpeed(speed: number, maxSpeed: number = 18): void {
+    this.lastSpeed = speed;
+
     // Calculate speed ratio (0 to 1)
     const speedRatio = Math.min(speed / maxSpeed, 1);
-    
-    // Use easing for smoother feel - starts slow, accelerates
-    const easedRatio = speedRatio * speedRatio;
-    
+
+    // Ease, but not as a pure square — squaring meant the FOV ramp, like the radial
+    // blur, only arrived at terminal velocity and was invisible at cruise.
+    const easedRatio = Math.pow(speedRatio, 1.35);
+
     // Interpolate between base and max FOV
     this.targetFOV = this.baseFOV + (this.maxFOV - this.baseFOV) * easedRatio;
   }

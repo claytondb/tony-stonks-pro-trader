@@ -71,6 +71,12 @@ export interface PropOptions {
    * hierarchy instead of merging by material. Only needed if you want to animate a sub-part.
    */
   merge?: boolean;
+  /**
+   * ADDITIVE: force this prop onto a saturated accent body colour instead of office beige.
+   * Used at roughly 1-in-6 density along the skate line so every frame carries one high-chroma
+   * note, which is what the refs have and the neutral-only build did not.
+   */
+  accent?: boolean;
 }
 
 /** A single physics box in prop-local space (base at y=0, centred on x/z). */
@@ -402,7 +408,15 @@ const MAT = {
   deskFrame: ['brushedMetal', { color: 0xa9aeb5, roughness: 0.42 }] as [MaterialId, MaterialOptions],
   pedestal: PAINT(0xb4b9bf, 0.52),
   panelFabric: ['cubicleFabric', undefined] as [MaterialId, MaterialOptions | undefined],
-  panelCap: ['cubicleTrim', undefined] as [MaterialId, MaterialOptions | undefined],
+  /**
+   * THE GRIND SURFACE. Deliberately overridden rather than left on the library default:
+   * this cap rail is the primary skate line in the whole level and it has to separate in
+   * VALUE and in SPECULAR from the fabric below it and the desks behind it, or the player
+   * cannot read where the line is. Warm off-white + semi-gloss laminate.
+   */
+  panelCap: ['cubicleTrim', { color: 0xefe8d8, roughness: 0.26 }] as [MaterialId, MaterialOptions],
+  /** The scuffed strip the casters have polished along the centre of every cap rail. */
+  capWear: ['cubicleTrim', { color: 0x9fa4a8, roughness: 0.14 }] as [MaterialId, MaterialOptions],
   plastic: ['darkPlastic', undefined] as [MaterialId, MaterialOptions | undefined],
   plasticLight: ['darkPlastic', { color: 0xb9c0c8 }] as [MaterialId, MaterialOptions],
   metal: ['brushedMetal', undefined] as [MaterialId, MaterialOptions | undefined],
@@ -420,7 +434,37 @@ const MAT = {
   plant: ['plantGreen', undefined] as [MaterialId, MaterialOptions | undefined],
   pot: ['terracotta', undefined] as [MaterialId, MaterialOptions | undefined],
   wood: ['woodFloor', { color: 0x7d6042, roughness: 0.55 }] as [MaterialId, MaterialOptions],
+  plywood: ['woodFloor', { color: 0xc79a5e, roughness: 0.62 }] as [MaterialId, MaterialOptions],
+
+  // ---- SATURATED ACCENT FAMILY ---------------------------------------------
+  // The refs get their production value from a handful of high-chroma notes against the
+  // neutral office (navy uniforms, red tie, orange sparks, gold coins). The greige office
+  // supplies the neutral; these supply the note. Used sparsely and on purpose — roughly one
+  // accent object every 8 m of skate line — never as a field colour.
+  accentRed: PAINT(0xc0392b, 0.40),
+  accentOrange: PAINT(0xe8722a, 0.46),
+  accentTeal: PAINT(0x2f6f7d, 0.48),
+  accentNavy: PAINT(0x2a3c68, 0.50),
+  accentYellow: PAINT(0xe7b428, 0.44),
 } as const;
+
+/** Accent tints applied to the odd filing cabinet / bin / box so the aisle has colour rhythm. */
+const ACCENT_BODIES: readonly MatRef[] = [
+  MAT.accentRed,
+  MAT.accentOrange,
+  MAT.accentTeal,
+  MAT.accentNavy,
+];
+
+/** Cool-slate cubicle fabric variants. Applied per POD, never per panel — see makeCubiclePod. */
+export const POD_FABRIC_TINTS: readonly number[] = [
+  0xb9c2cd, // the house slate
+  0xb9c2cd,
+  0xb9c2cd,
+  0x8fa6bd, // deeper cool
+  0x6f9aa2, // teal
+  0xb9846a, // rust
+];
 
 type MatRef = readonly [MaterialId, MaterialOptions | undefined];
 
@@ -429,7 +473,7 @@ function mat(ref: MatRef): THREE.MeshStandardMaterial {
 }
 
 /** Screen tints seen in the refs: cool blue, terminal green, and a warm amber spreadsheet. */
-const SCREEN_TINTS: readonly number[] = [0x6fa8d8, 0x63c07d, 0xd8a24f, 0x8fb8e8];
+const SCREEN_TINTS: readonly number[] = [0x4f9ee8, 0x3fcf78, 0xf0a02a, 0x7f6bf0];
 const STICKY_TINTS: readonly number[] = [0xffd34d, 0xff9a52, 0x7fd4f0, 0xf28fb0, 0xbfe986];
 
 // ---------------------------------------------------------------------------
@@ -724,20 +768,36 @@ export function makeDesk(o?: PropOptions): THREE.Group {
 // variant 0: 200 tris · variant 1: 112 tris · variant 2: 44 tris
 // ---------------------------------------------------------------------------
 
-const CUBE_WALL_H = 1.32;   // fabric panel height
+const CUBE_WALL_H = 1.32;   // default fabric panel height
 const CUBE_CAP_H = 0.08;    // cap rail thickness
 const CUBE_WALL_T = 0.075;  // panel thickness
-const CUBE_TOP = CUBE_WALL_H + CUBE_CAP_H; // 1.40 — grind height
+export const CUBE_TOP = CUBE_WALL_H + CUBE_CAP_H; // 1.40 — default grind height
 
-export function makeCubicleWall(lengthMetres: number, o?: PropOptions): THREE.Group {
+/** The three panel heights a real office floorplate mixes. Varying these is what stops the
+ *  cubicle field reading as a machine-regular lattice from the establishing shot. */
+export const PANEL_HEIGHTS: readonly number[] = [1.02, 1.32, 1.32, 1.60];
+
+export interface CubicleWallOptions extends PropOptions {
+  /** Fabric panel height. Grind edge lands at height + CUBE_CAP_H. */
+  height?: number;
+  /** Per-pod fabric tint (see POD_FABRIC_TINTS). Applied to the fabric only, never the cap. */
+  fabricTint?: number;
+  /** Author the polished caster-wear strip along the cap. On for hero/aisle runs only. */
+  wear?: boolean;
+}
+
+export function makeCubicleWall(lengthMetres: number, o?: CubicleWallOptions): THREE.Group {
   const ctx = begin('cubicleWall', o, 23);
   const L = Math.max(0.3, lengthMetres);
   const uv: [number, number] = [Math.max(1, Math.round(L / 1.6)), 1];
+  const wallH = o?.height ?? CUBE_WALL_H;
+  const top = wallH + CUBE_CAP_H;
+  const fabric: MatRef = o?.fabricTint ? ['cubicleFabric', { color: o.fabricTint }] : MAT.panelFabric;
 
   // Fabric panel
   ctx.root.add(
-    mesh(cbox(L, CUBE_WALL_H, CUBE_WALL_T, 0.012, uv), MAT.panelFabric, {
-      pos: [0, CUBE_WALL_H / 2, 0],
+    mesh(cbox(L, wallH, CUBE_WALL_T, 0.012, uv), fabric, {
+      pos: [0, wallH / 2, 0],
     }),
   );
 
@@ -745,16 +805,27 @@ export function makeCubicleWall(lengthMetres: number, o?: PropOptions): THREE.Gr
   // deliberately a low-roughness laminate so the grind sparks have something to bounce off.
   ctx.root.add(
     mesh(cbox(L + 0.02, CUBE_CAP_H, CUBE_WALL_T + 0.05, 0.02, uv), MAT.panelCap, {
-      pos: [0, CUBE_WALL_H + CUBE_CAP_H / 2, 0],
+      pos: [0, wallH + CUBE_CAP_H / 2, 0],
     }),
   );
+
+  // Caster-polished wear strip down the centre of the cap. Free storytelling and, more to
+  // the point, a bright specular line that tells the player at a glance where the rail is.
+  if (o?.wear) {
+    ctx.root.add(
+      mesh(sbox(L - 0.04, 0.006, 0.048), MAT.capWear, {
+        pos: [0, wallH + CUBE_CAP_H + 0.001, 0],
+        cast: false,
+      }),
+    );
+  }
 
   if (ctx.variant === 0) {
     // End posts + feet: what stops the wall reading as a floating slab.
     for (const s of [-1, 1]) {
       ctx.root.add(
-        mesh(cbox(0.055, CUBE_WALL_H, CUBE_WALL_T + 0.03, 0.012), MAT.pedestal, {
-          pos: [s * (L / 2 - 0.028), CUBE_WALL_H / 2, 0],
+        mesh(cbox(0.055, wallH, CUBE_WALL_T + 0.03, 0.012), MAT.pedestal, {
+          pos: [s * (L / 2 - 0.028), wallH / 2, 0],
         }),
       );
       ctx.root.add(
@@ -765,16 +836,16 @@ export function makeCubicleWall(lengthMetres: number, o?: PropOptions): THREE.Gr
     }
   } else if (ctx.variant === 1) {
     for (const s of [-1, 1]) {
-      ctx.root.add(mesh(sbox(0.055, CUBE_WALL_H, CUBE_WALL_T + 0.03), MAT.pedestal, {
-        pos: [s * (L / 2 - 0.028), CUBE_WALL_H / 2, 0],
+      ctx.root.add(mesh(sbox(0.055, wallH, CUBE_WALL_T + 0.03), MAT.pedestal, {
+        pos: [s * (L / 2 - 0.028), wallH / 2, 0],
       }));
     }
   }
 
-  ctx.grinds.push({ start: [-L / 2, CUBE_TOP, 0], end: [L / 2, CUBE_TOP, 0] });
-  collide(ctx, [L, CUBE_TOP, CUBE_WALL_T + 0.05], [0, CUBE_TOP / 2, 0]);
+  ctx.grinds.push({ start: [-L / 2, top, 0], end: [L / 2, top, 0] });
+  collide(ctx, [L, top, CUBE_WALL_T + 0.05], [0, top / 2, 0]);
 
-  return finish(ctx, o, { size: [L, CUBE_TOP, CUBE_WALL_T + 0.05], offset: [0, CUBE_TOP / 2, 0] });
+  return finish(ctx, o, { size: [L, top, CUBE_WALL_T + 0.05], offset: [0, top / 2, 0] });
 }
 
 // ---------------------------------------------------------------------------
@@ -960,7 +1031,11 @@ export function makeFilingCabinet(o?: PropOptions): THREE.Group {
   const drawerH = 0.32;
   const h = drawers * drawerH + 0.1;
 
-  const body = r.chance(0.55) ? MAT.cabinetBeige : MAT.cabinetGrey;
+  const body: MatRef = o?.accent
+    ? ACCENT_BODIES[r.int(0, ACCENT_BODIES.length - 1)]
+    : r.chance(0.55)
+      ? MAT.cabinetBeige
+      : MAT.cabinetGrey;
   ctx.root.add(mesh(cbox(w, h, d, 0.014), body, { pos: [0, h / 2, 0] }));
 
   if (ctx.variant < 2) {
@@ -1117,21 +1192,31 @@ export function makeCeilingTileGrid(width: number, depth: number, o?: PropOption
   ctx.root.add(tiles);
 
   if (ctx.variant < 2) {
+    // MAIN RUNNERS ONLY, on a 2-tile pitch.
+    //
+    // A 4 cm bar on every 1.22 m module converges into sub-pixel 1 px dark lines toward the
+    // vanishing point and shimmers — that moire was the single worst aliasing artifact in the
+    // gameplay camera. The cross-tee pattern belongs in the ceilingTile map (which carries it);
+    // what needs to exist as geometry is the primary runner grid, which is half as dense and
+    // deep enough to hold a shaded face. Halving the count also halves the instance cost.
+    const step = 2;
+    const barsX = Math.floor(nx / step);
+    const barsZ = Math.floor(nz / step);
     const barMat = mat(['ceilingGrid', { repeat: [4, 1] }]);
-    const barX = new THREE.InstancedMesh(sbox(0.04, 0.035, depth), barMat, nx + 1);
-    const barZ = new THREE.InstancedMesh(sbox(width, 0.035, 0.04), barMat, nz + 1);
+    const barX = new THREE.InstancedMesh(sbox(0.055, 0.05, depth), barMat, barsX + 1);
+    const barZ = new THREE.InstancedMesh(sbox(width, 0.05, 0.055), barMat, barsZ + 1);
     barX.castShadow = false;
     barX.receiveShadow = true;
     barZ.castShadow = false;
     barZ.receiveShadow = true;
 
     const m = new THREE.Matrix4();
-    for (let i = 0; i <= nx; i++) {
-      m.makeTranslation(-width / 2 + (i * width) / nx, 0, 0);
+    for (let i = 0; i <= barsX; i++) {
+      m.makeTranslation(-width / 2 + (i * width) / barsX, 0, 0);
       barX.setMatrixAt(i, m);
     }
-    for (let i = 0; i <= nz; i++) {
-      m.makeTranslation(0, 0, -depth / 2 + (i * depth) / nz);
+    for (let i = 0; i <= barsZ; i++) {
+      m.makeTranslation(0, 0, -depth / 2 + (i * depth) / barsZ);
       barZ.setMatrixAt(i, m);
     }
     barX.instanceMatrix.needsUpdate = true;
@@ -1203,10 +1288,16 @@ export function makePendantLamp(o?: PropOptions): THREE.Group {
       receive: false,
     }),
   );
-  // Bulb
+  // Bulb.
+  //
+  // This used to be emissiveIntensity 3.0 sitting at the open bottom rim of the shade, which
+  // put a single unclamped white blob at a completely different exposure to every other
+  // fixture in the room and gave it a huge bloom skirt in any wide shot. It is now (a) dimmer
+  // than the reflector cone it sits in and (b) recessed well up inside the shade, so it only
+  // reads from directly underneath — which is the only place a bulb in a shade should read.
   ctx.root.add(
-    mesh(blob(0.052), ['fluorescentDiffuser', { emissiveIntensity: 3.0 }], {
-      pos: [0, topY - shadeH + 0.05, 0],
+    mesh(blob(0.046), ['fluorescentDiffuser', { emissiveIntensity: 0.9 }], {
+      pos: [0, topY - shadeH * 0.52, 0],
       cast: false,
       receive: false,
     }),
@@ -1341,9 +1432,10 @@ export function makeTrashCan(o?: PropOptions): THREE.Group {
   const r = ctx.rng;
 
   const h = 0.4;
-  ctx.root.add(mesh(cyl(0.155, 0.115, h, 10, true), MAT.binDark, { pos: [0, h / 2, 0] }));
-  ctx.root.add(mesh(disc(0.115, 10), MAT.binDark, { pos: [0, 0.004, 0], cast: false }));
-  ctx.root.add(mesh(cyl(0.165, 0.165, 0.035, 10), MAT.binDark, { pos: [0, h - 0.017, 0] }));
+  const shell: MatRef = o?.accent ? MAT.accentTeal : MAT.binDark;
+  ctx.root.add(mesh(cyl(0.155, 0.115, h, 10, true), shell, { pos: [0, h / 2, 0] }));
+  ctx.root.add(mesh(disc(0.115, 10), shell, { pos: [0, 0.004, 0], cast: false }));
+  ctx.root.add(mesh(cyl(0.165, 0.165, 0.035, 10), shell, { pos: [0, h - 0.017, 0] }));
 
   if (ctx.variant === 0) {
     for (let i = 0; i < 2; i++) {
@@ -1365,15 +1457,61 @@ export function makeTrashCan(o?: PropOptions): THREE.Group {
 // Returns an InstancedMesh (an Object3D), per the contract.
 // ---------------------------------------------------------------------------
 
-export function makeScatterPaper(count: number, areaX: number, areaZ: number, o?: PropOptions): THREE.Object3D {
+export interface ScatterPaperOptions extends PropOptions {
+  /**
+   * Cluster seeds in world space. Paper does not fall uniformly across a 50 m floorplate —
+   * it piles where it was dropped: at the base of a cubicle run, at an aisle corner, at the
+   * foot of a ramp. Supply seeds and the sheets are drawn in a 1.2 m disc around each.
+   * Omit and the old uniform scatter is used (kept for other levels).
+   */
+  clusters?: readonly { x: number; z: number; radius?: number }[];
+}
+
+/**
+ * A single sheet of A4 with a shallow S-bend baked into it.
+ *
+ * A flat 2-triangle quad lit by a near-vertical key is a constant-value white rectangle with
+ * no contact shadow — which is exactly why 220 of them read as broken projected light decals
+ * rather than as paperwork. The bend gives every sheet two tonal values and a lifted corner
+ * that catches the key differently, and the geometry is thick enough in Z to throw a real
+ * contact shadow.
+ */
+function paperSheet(): THREE.BufferGeometry {
+  return cached('paperSheet', () => {
+    const g = new THREE.PlaneGeometry(0.21, 0.297, 3, 3);
+    const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      // ±8 mm of curl: one axis sine, the other a lifted-corner tilt.
+      pos.setZ(i, Math.sin((y / 0.297) * Math.PI * 1.15) * 0.008 + (x / 0.21) * (y / 0.297) * 0.010);
+    }
+    pos.needsUpdate = true;
+    return finalize(g, true);
+  });
+}
+
+export function makeScatterPaper(
+  count: number,
+  areaX: number,
+  areaZ: number,
+  o?: ScatterPaperOptions,
+): THREE.Object3D {
   const r = rngFrom(o?.seed, 163);
   const n = Math.max(0, Math.floor(count));
   const s = o?.scale ?? 1;
+  const clusters = o?.clusters ?? [];
 
-  const geo = quad(0.21, 0.297);
-  const im = new THREE.InstancedMesh(geo, mat(MAT.paper), Math.max(1, n));
+  const geo = paperSheet();
+  // Tinted DOWN from the library's near-white. A sheet of copier paper on a mid-brown carpet
+  // under a 3.6-intensity key clips to 255 white and out-reads the ceiling troffers; this
+  // lands it a stop and a half below the cap rails, which is where paper belongs.
+  const paperMat = MaterialLibrary.get('paper', { color: 0xd2cdbf, roughness: 0.95 });
+  const im = new THREE.InstancedMesh(geo, paperMat, Math.max(1, n));
   im.name = 'scatterPaper';
-  im.castShadow = false;   // a sheet of paper on the floor casts nothing worth a shadow texel
+  // A sheet with a visible contact shadow stops reading as a decal. This is the single
+  // cheapest fix for the loudest artifact in the gameplay camera.
+  im.castShadow = true;
   im.receiveShadow = true;
   im.frustumCulled = true;
 
@@ -1390,9 +1528,18 @@ export function makeScatterPaper(count: number, areaX: number, areaZ: number, o?
     // applied to the vector FIRST. The in-plane spin therefore has to go in Z (spin the quad
     // in its own plane) and the lay-flat in X. Putting the spin in Y stands every sheet on
     // its edge — which is exactly what the first version of this function did.
-    e.set(-Math.PI / 2 + r.range(-0.07, 0.07), r.range(-0.07, 0.07), r.range(0, Math.PI * 2), 'XYZ');
+    e.set(-Math.PI / 2 + r.range(-0.10, 0.10), r.range(-0.10, 0.10), r.range(0, Math.PI * 2), 'XYZ');
     q.setFromEuler(e);
-    p.set(r.range(-areaX / 2, areaX / 2), 0.004 + r.range(0, 0.006), r.range(-areaZ / 2, areaZ / 2));
+
+    if (clusters.length) {
+      const c = clusters[i % clusters.length];
+      const rad = (c.radius ?? 1.2) * Math.sqrt(r());
+      const a = r.range(0, Math.PI * 2);
+      p.set(c.x + Math.cos(a) * rad, 0.005 + r.range(0, 0.008), c.z + Math.sin(a) * rad);
+    } else {
+      p.set(r.range(-areaX / 2, areaX / 2), 0.005 + r.range(0, 0.008), r.range(-areaZ / 2, areaZ / 2));
+    }
+
     sc.setScalar(r.range(0.85, 1.15) * s);
     m.compose(p, q, sc);
     im.setMatrixAt(i, m);
@@ -1402,7 +1549,7 @@ export function makeScatterPaper(count: number, areaX: number, areaZ: number, o?
   im.computeBoundingSphere();
 
   im.userData.collider = { type: 'none', size: [0, 0, 0] };
-  im.userData.triangles = 2 * n;
+  im.userData.triangles = 18 * n;
   return im;
 }
 
@@ -1433,11 +1580,25 @@ function makeDeskPhone(): THREE.Group {
 
 const POD_HALF = 2.2;
 
-export function makeCubiclePod(o?: PropOptions): THREE.Group {
+export interface CubiclePodOptions extends PropOptions {
+  /** Fabric panel height for THIS pod. Mixing these across the floorplate is what gives the
+   *  cubicle field a skyline instead of a machine-regular lattice. Default 1.32. */
+  panelHeight?: number;
+  /** Per-pod cool-slate / teal / rust tint. See POD_FABRIC_TINTS. */
+  fabricTint?: number;
+  /** Author the caster-wear stripe on this pod's cap rails (aisle-facing pods only). */
+  wear?: boolean;
+  /** This pod has been cleared out: panels and boxes, no desks. ~1-in-20 in the real world. */
+  cleared?: boolean;
+}
+
+export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
   const ctx = begin('cubiclePod', o, 173);
   const r = ctx.rng;
   const v = ctx.variant;
   const seed = o?.seed ?? 1;
+  const panelH = o?.panelHeight ?? CUBE_WALL_H;
+  const podTop = panelH + CUBE_CAP_H;
 
   // --- panels ---------------------------------------------------------------
   // A cross (spine + divider) plus two perimeter runs, leaving the ±X sides open as aisles.
@@ -1457,7 +1618,14 @@ export function makeCubiclePod(o?: PropOptions): THREE.Group {
   if (v >= 2) wallSpecs.length = 4; // far LOD keeps the cross and the perimeter only
 
   for (const w of wallSpecs) {
-    const wall = makeCubicleWall(w.len, { variant: wallVariant, seed, merge: false });
+    const wall = makeCubicleWall(w.len, {
+      variant: wallVariant,
+      seed,
+      merge: false,
+      height: panelH,
+      fabricTint: o?.fabricTint,
+      wear: o?.wear,
+    });
     wall.position.set(w.pos[0], w.pos[1], w.pos[2]);
     wall.rotation.y = w.rotY;
     ctx.root.add(wall);
@@ -1467,15 +1635,33 @@ export function makeCubiclePod(o?: PropOptions): THREE.Group {
     const hx = (w.len / 2) * c;
     const hz = -(w.len / 2) * s;
     ctx.grinds.push({
-      start: [w.pos[0] - hx, CUBE_TOP, w.pos[2] - hz],
-      end: [w.pos[0] + hx, CUBE_TOP, w.pos[2] + hz],
+      start: [w.pos[0] - hx, podTop, w.pos[2] - hz],
+      end: [w.pos[0] + hx, podTop, w.pos[2] + hz],
     });
     collide(
       ctx,
-      [w.len, CUBE_TOP, CUBE_WALL_T + 0.05],
-      [w.pos[0], CUBE_TOP / 2, w.pos[2]],
+      [w.len, podTop, CUBE_WALL_T + 0.05],
+      [w.pos[0], podTop / 2, w.pos[2]],
       w.rotY || undefined,
     );
+  }
+
+  // A cleared-out pod: the panels are still up, the desks are gone, the contents are in
+  // boxes on the floor. One in twenty pods, and it is the single cheapest thing that stops
+  // the floorplate reading as a procedurally generated lattice.
+  if (o?.cleared) {
+    const stack = makeBoxStack({ seed: seed * 37, merge: false });
+    stack.position.set(r.range(-0.7, 0.7), 0, r.range(-0.7, 0.7));
+    ctx.root.add(stack);
+    for (const c of stack.userData.colliders as PropCollider[]) {
+      collide(ctx, c.size, [stack.position.x + c.offset[0], c.offset[1], stack.position.z + c.offset[2]]);
+    }
+    if (r.chance(0.7)) {
+      const chair = makeTrashCan({ variant: 1, seed: seed * 41, merge: false });
+      chair.position.set(r.range(-1.6, 1.6), 0, r.range(-1.6, 1.6));
+      ctx.root.add(chair);
+    }
+    return finish(ctx, o, { size: [POD_HALF * 2, podTop, POD_HALF * 2], offset: [0, podTop / 2, 0] });
   }
 
   if (v >= 2) {
@@ -1486,7 +1672,7 @@ export function makeCubiclePod(o?: PropOptions): THREE.Group {
         ctx.root.add(mesh(sbox(0.5, 0.34, 0.16), MAT.plastic, { pos: [sx * 1.1, DESK_TOP_Y + 0.2, sz * 0.55] }));
       }
     }
-    return finish(ctx, o, { size: [POD_HALF * 2, CUBE_TOP, POD_HALF * 2], offset: [0, CUBE_TOP / 2, 0] });
+    return finish(ctx, o, { size: [POD_HALF * 2, podTop, POD_HALF * 2], offset: [0, podTop / 2, 0] });
   }
 
   // --- four workstations ----------------------------------------------------
@@ -1594,5 +1780,529 @@ export function makeCubiclePod(o?: PropOptions): THREE.Group {
     }
   }
 
-  return finish(ctx, o, { size: [POD_HALF * 2, CUBE_TOP, POD_HALF * 2], offset: [0, CUBE_TOP / 2, 0] });
+  return finish(ctx, o, { size: [POD_HALF * 2, podTop, POD_HALF * 2], offset: [0, podTop / 2, 0] });
+}
+
+// ===========================================================================
+// SKATE FURNITURE
+//
+// These are the objects the player stares at for the whole duration of a trick, so they get
+// the most authoring attention in the library. The previous versions — a bare ExtrudeGeometry
+// wedge with 90-degree corners and a grey cylinder on two pins — were the most obviously
+// prototype-grade geometry in the level.
+// ===========================================================================
+
+/** A beveled triangular prism: flat edge at -Z, full height at +Z. */
+function wedge(w: number, d: number, h: number, bevel = 0.02): THREE.BufferGeometry {
+  return cached(`wg|${w}|${d}|${h}|${bevel}`, () => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-d / 2 + bevel, bevel);
+    shape.lineTo(d / 2 - bevel, bevel);
+    shape.lineTo(d / 2 - bevel, h - bevel);
+    shape.closePath();
+    const g = new THREE.ExtrudeGeometry(shape, {
+      depth: w - bevel * 2,
+      bevelEnabled: true,
+      bevelThickness: bevel,
+      bevelSize: bevel,
+      bevelSegments: 1,
+      steps: 1,
+    });
+    // Extrude runs along +Z with the profile in XY; rotate the profile into ZY and the
+    // extrusion into X so the ramp rises along +Z and is `w` wide along X.
+    g.rotateY(Math.PI / 2);
+    g.translate(0, 0, -(w - bevel * 2) / 2 - bevel);
+    return finalize(g);
+  });
+}
+
+export interface KickerOptions extends PropOptions {
+  width?: number;
+  depth?: number;
+  height?: number;
+}
+
+/**
+ * KICKER RAMP — plywood deck, steel coping lip, transition plate, ribs and bolts.
+ * Grind edge along the coping. ~420 tris at variant 0.
+ */
+export function makeKickerRamp(o?: KickerOptions): THREE.Group {
+  const ctx = begin('kickerRamp', o, 181);
+  const w = o?.width ?? 3.4;
+  const d = o?.depth ?? 1.8;
+  const h = o?.height ?? 0.85;
+  const slope = Math.atan2(h, d);
+  const surfaceY = (z: number) => (h * (z + d / 2)) / d;
+
+  // Deck
+  ctx.root.add(mesh(wedge(w, d, h, 0.022), MAT.plywood, { pos: [0, 0, 0] }));
+
+  // Side cheek plates, proud of the deck by 8 mm so the silhouette gets a stepped edge
+  // instead of a single unbroken triangle.
+  for (const s of [-1, 1]) {
+    const cheek = new THREE.Mesh(wedge(0.03, d - 0.08, h - 0.05, 0.008), mat(MAT.deskFrame));
+    cheek.position.set(s * (w / 2 + 0.006), 0.02, 0);
+    cheek.castShadow = true;
+    cheek.receiveShadow = true;
+    ctx.root.add(cheek);
+  }
+
+  // Transverse deck battens: the seams between plywood sheets, laid on the ride surface.
+  if (ctx.variant === 0) {
+    for (let i = 1; i <= 2; i++) {
+      const z = -d / 2 + (i * d) / 3;
+      ctx.root.add(
+        mesh(sbox(w - 0.1, 0.012, 0.035), MAT.deskFrame, {
+          pos: [0, surfaceY(z) + 0.008, z],
+          rot: [-slope, 0, 0],
+          cast: false,
+        }),
+      );
+    }
+    // Bolt heads along the coping.
+    for (let i = 0; i < 5; i++) {
+      ctx.root.add(
+        mesh(cyl(0.014, 0.014, 0.01, 6), MAT.chrome, {
+          pos: [-w / 2 + 0.28 + (i * (w - 0.56)) / 4, h + 0.012, d / 2 - 0.10],
+          cast: false,
+        }),
+      );
+    }
+  }
+
+  // Steel coping lip along the top edge — this is what the chair actually hits.
+  ctx.root.add(
+    mesh(cbox(w + 0.05, 0.055, 0.13, 0.018), ['grindMetal', { repeat: [10, 1] }], {
+      pos: [0, h - 0.012, d / 2 - 0.055],
+    }),
+  );
+
+  // Transition plate at the floor: a kicker with a hard 90-degree bottom edge reads as a
+  // block someone dropped, not as something you can ride onto.
+  ctx.root.add(
+    mesh(sbox(w, 0.012, 0.16), MAT.deskFrame, {
+      pos: [0, 0.006, -d / 2 - 0.07],
+      cast: false,
+    }),
+  );
+
+  ctx.grinds.push({ start: [-w / 2, h + 0.02, d / 2 - 0.055], end: [w / 2, h + 0.02, d / 2 - 0.055] });
+  // The collider is a thin slab lying ON the slope, not the whole prism: the chair rides the
+  // surface, it does not need the volume underneath.
+  collide(ctx, [w, 0.18, Math.hypot(d, h)], [0, h / 2, 0], undefined);
+  ctx.colliders[0].rotationY = undefined;
+  return finish(ctx, o, { size: [w, h, d], offset: [0, h / 2, 0] });
+}
+
+/**
+ * GRIND RAIL — round steel shaft with a polished contact strip, welded base plates and a
+ * mid-brace. `length` metres along X, top of the shaft at y = 0.80.
+ * ~340 tris.
+ */
+export function makeGrindRail(length: number, o?: PropOptions): THREE.Group {
+  const ctx = begin('grindRail', o, 191);
+  const L = Math.max(1, length);
+  const topY = 0.80;
+  const rad = 0.045;
+  const shaftY = topY - rad;
+
+  // Shaft: a duller steel than the contact strip, so the strip reads as worn.
+  const shaft = mesh(cyl(rad, rad, L, 10), ['brushedMetal', { color: 0xcdd2d8, roughness: 0.34 }], {
+    pos: [0, shaftY, 0],
+    rot: [0, 0, Math.PI / 2],
+  });
+  ctx.root.add(shaft);
+
+  // The strip the casters have polished mirror-bright. Free storytelling, and it is the only
+  // thing in the frame that tells the player this cylinder is a rail and not a pipe.
+  ctx.root.add(
+    mesh(sbox(L - 0.02, 0.004, 0.032), ['grindMetal', { repeat: [16, 1], roughness: 0.11 }], {
+      pos: [0, topY + 0.001, 0],
+      cast: false,
+    }),
+  );
+
+  // End caps so the shaft is not an open tube in the silhouette.
+  for (const s of [-1, 1]) {
+    ctx.root.add(mesh(disc(rad, 10), MAT.chrome, { pos: [s * L / 2, shaftY, 0], rot: [0, 0, s * Math.PI / 2], cast: false }));
+  }
+
+  // Legs + welded base plates. A rail on bare pins looks like it is floating; the plate is
+  // what plants it on the carpet.
+  const legs = L > 9 ? 3 : 2;
+  for (let i = 0; i < legs; i++) {
+    const lx = -L / 2 + 0.35 + (i * (L - 0.7)) / (legs - 1);
+    ctx.root.add(mesh(cyl(0.026, 0.032, shaftY, 8), MAT.metal, { pos: [lx, shaftY / 2, 0] }));
+    ctx.root.add(mesh(cbox(0.15, 0.022, 0.15, 0.006), MAT.deskFrame, { pos: [lx, 0.011, 0] }));
+    // Weld collar.
+    ctx.root.add(mesh(cyl(0.042, 0.05, 0.03, 8), MAT.metal, { pos: [lx, 0.036, 0], cast: false }));
+  }
+  if (legs > 2) {
+    ctx.root.add(mesh(sbox(L - 0.7, 0.03, 0.03), MAT.metal, { pos: [0, 0.22, 0] }));
+  }
+
+  ctx.grinds.push({ start: [-L / 2, topY, 0], end: [L / 2, topY, 0] });
+  collide(ctx, [L, 0.09, 0.12], [0, topY - 0.045, 0]);
+  return finish(ctx, o, { size: [L, topY, 0.2], offset: [0, topY / 2, 0] });
+}
+
+// ===========================================================================
+// SATURATED SET DRESSING
+// The refs carry navy, red and orange against the neutral office. These are the objects that
+// put a high-chroma note in frame, and they are placed at roughly one per 8 m of skate line.
+// ===========================================================================
+
+/** FIRE EXTINGUISHER — the cheapest pure-red note in an office. ~150 tris. */
+export function makeFireExtinguisher(o?: PropOptions): THREE.Group {
+  const ctx = begin('fireExtinguisher', o, 197);
+  const bodyH = 0.42;
+  const rad = 0.072;
+
+  ctx.root.add(mesh(cyl(rad, rad, bodyH, 10), MAT.accentRed, { pos: [0, 0.03 + bodyH / 2, 0] }));
+  ctx.root.add(mesh(cyl(rad * 0.96, rad * 0.5, 0.08, 10), MAT.accentRed, { pos: [0, 0.03 + bodyH + 0.04, 0] }));
+  ctx.root.add(mesh(cyl(rad, rad * 0.86, 0.035, 10), MAT.accentRed, { pos: [0, 0.016, 0], cast: false }));
+  // valve + handle + gauge
+  ctx.root.add(mesh(cyl(0.022, 0.022, 0.055, 6), MAT.metal, { pos: [0, 0.03 + bodyH + 0.10, 0] }));
+  ctx.root.add(mesh(sbox(0.03, 0.016, 0.11), MAT.plastic, { pos: [0, 0.03 + bodyH + 0.13, 0.03] }));
+  ctx.root.add(mesh(cyl(0.021, 0.021, 0.012, 8), MAT.chrome, { pos: [0.03, 0.03 + bodyH + 0.10, 0.035], rot: [Math.PI / 2, 0, 0], cast: false }));
+  // hose
+  ctx.root.add(mesh(cyl(0.009, 0.009, 0.26, 5), MAT.plastic, { pos: [rad + 0.012, 0.03 + bodyH * 0.55, 0.03], rot: [0.15, 0, 0.25] }));
+  // label
+  ctx.root.add(mesh(quad(0.085, 0.11), MAT.paper, { pos: [0, 0.03 + bodyH * 0.55, rad + 0.002], cast: false }));
+
+  const total = 0.03 + bodyH + 0.16;
+  collide(ctx, [rad * 2, total, rad * 2], [0, total / 2, 0]);
+  return finish(ctx, o, { size: [rad * 2.2, total, rad * 2.2], offset: [0, total / 2, 0] });
+}
+
+/**
+ * VENDING MACHINE — a 1.9 m landmark with a big saturated emissive front. Reads from across
+ * the floorplate, which is exactly what a level full of identical cubicles needs.
+ * ~380 tris.
+ */
+export function makeVendingMachine(o?: PropOptions): THREE.Group {
+  const ctx = begin('vendingMachine', o, 199);
+  const r = ctx.rng;
+  const w = 0.94;
+  const h = 1.9;
+  const d = 0.78;
+  const cold = r.chance(0.5);
+  const body: MatRef = cold ? MAT.accentNavy : MAT.accentRed;
+
+  ctx.root.add(mesh(cbox(w, h, d, 0.02), body, { pos: [0, h / 2, 0] }));
+  // Illuminated product window. Low emissive intensity on purpose — this is a lit panel in
+  // the room, not a light source, and it must not compete with the ceiling troffers.
+  ctx.root.add(
+    mesh(quad(w - 0.16, h - 0.62), ['screenOn', { emissive: cold ? 0x4f9ee8 : 0xf0a02a, emissiveIntensity: 0.85 }], {
+      pos: [0, h * 0.60, d / 2 + 0.006],
+      cast: false,
+      receive: false,
+    }),
+  );
+  // Shelf bars across the window so it is not a flat glowing rectangle.
+  for (let i = 0; i < 4; i++) {
+    ctx.root.add(
+      mesh(sbox(w - 0.18, 0.02, 0.02), MAT.plastic, {
+        pos: [0, h * 0.60 - (h - 0.62) / 2 + 0.1 + i * ((h - 0.82) / 4), d / 2 + 0.012],
+        cast: false,
+      }),
+    );
+  }
+  ctx.root.add(mesh(cbox(w - 0.16, 0.32, 0.06, 0.012), MAT.plastic, { pos: [0, 0.30, d / 2 + 0.008] }));
+  ctx.root.add(mesh(sbox(0.16, 0.5, 0.05), MAT.plastic, { pos: [w / 2 - 0.16, h * 0.62, d / 2 + 0.02] }));
+  ctx.root.add(mesh(sbox(w - 0.14, 0.06, d - 0.08), MAT.plastic, { pos: [0, 0.03, 0], cast: false }));
+
+  ctx.lights.push({ kind: 'point', offset: [0, h * 0.6, d / 2 + 0.45], color: cold ? 0x6fb4ee : 0xffb24a, intensity: 0.9, distance: 4.5 });
+  collide(ctx, [w, h, d], [0, h / 2, 0]);
+  return finish(ctx, o, { size: [w, h, d], offset: [0, h / 2, 0] });
+}
+
+/**
+ * COPIER — the big shared multifunction unit. Placed in threes as a landmark "copier bank".
+ * ~300 tris.
+ */
+export function makeCopier(o?: PropOptions): THREE.Group {
+  const ctx = begin('copier', o, 211);
+  const w = 0.82;
+  const h = 1.02;
+  const d = 0.72;
+
+  ctx.root.add(mesh(cbox(w, h * 0.62, d, 0.018), MAT.applianceGrey, { pos: [0, h * 0.31, 0] }));
+  ctx.root.add(mesh(cbox(w - 0.04, h * 0.30, d - 0.06, 0.018), MAT.plastic, { pos: [0, h * 0.62 + h * 0.15, -0.01] }));
+  // document feeder lid
+  ctx.root.add(mesh(cbox(w - 0.10, 0.08, d - 0.16, 0.014), MAT.applianceGrey, { pos: [0, h - 0.03, -0.02] }));
+  // output tray with a fanned stack
+  ctx.root.add(mesh(sbox(w - 0.18, 0.02, 0.24), MAT.plastic, { pos: [0, h * 0.62 + 0.02, d / 2 - 0.07] }));
+  ctx.root.add(mesh(sbox(0.21, 0.022, 0.29), MAT.paper, { pos: [0, h * 0.62 + 0.04, d / 2 - 0.09], rot: [0, 0.06, 0], cast: false }));
+  // paper drawers
+  for (let i = 0; i < 3; i++) {
+    ctx.root.add(mesh(sbox(w - 0.06, 0.15, 0.02), MAT.applianceGrey, { pos: [0, 0.10 + i * 0.18, d / 2 + 0.006] }));
+    ctx.root.add(mesh(sbox(0.24, 0.018, 0.022), MAT.chrome, { pos: [0, 0.16 + i * 0.18, d / 2 + 0.016], cast: false }));
+  }
+  // control panel, angled, with a live screen
+  ctx.root.add(mesh(cbox(0.30, 0.03, 0.20, 0.008), MAT.plastic, { pos: [0.20, h * 0.62 + 0.10, d / 2 - 0.20], rot: [-0.45, 0, 0] }));
+  ctx.root.add(
+    mesh(quad(0.20, 0.11), ['screenOn', { emissive: 0x3fcf78, emissiveIntensity: 1.1 }], {
+      pos: [0.20, h * 0.62 + 0.125, d / 2 - 0.175],
+      rot: [-2.02, 0, 0],
+      cast: false,
+    }),
+  );
+
+  collide(ctx, [w, h, d], [0, h / 2, 0]);
+  return finish(ctx, o, { size: [w, h, d], offset: [0, h / 2, 0] });
+}
+
+/**
+ * BOX STACK — the "this pod got cleared out" dressing. 4-7 cardboard boxes on a ~2 m
+ * footprint, stacked two high. ~350 tris.
+ */
+export function makeBoxStack(o?: PropOptions): THREE.Group {
+  const ctx = begin('boxStack', o, 223);
+  const r = ctx.rng;
+  const n = r.int(4, 7);
+  for (let i = 0; i < n; i++) {
+    const b = makeCardboardBox({ variant: 1, seed: (o?.seed ?? 1) * 31 + i, merge: false });
+    const second = i >= 3 && r.chance(0.55);
+    const x = r.range(-0.75, 0.75);
+    const z = r.range(-0.75, 0.75);
+    b.position.set(x, second ? 0.40 : 0, z);
+    b.rotation.y = r.range(0, Math.PI);
+    ctx.root.add(b);
+    if (!second) collide(ctx, [0.5, 0.4, 0.45], [x, 0.2, z]);
+  }
+  return finish(ctx, o, { size: [2.0, 0.8, 2.0], offset: [0, 0.4, 0] });
+}
+
+/**
+ * WHITEBOARD — wall prop, faces +Z. Frame, gloss board, marker tray, and a few saturated
+ * marker strokes so it is not a blank white rectangle. ~120 tris.
+ */
+export function makeWhiteboard(o?: PropOptions): THREE.Group {
+  const ctx = begin('whiteboard', o, 227);
+  ctx.root.userData.mount = 'wall';
+  const r = ctx.rng;
+  const w = 1.8;
+  const h = 1.05;
+
+  ctx.root.add(mesh(cbox(w, h, 0.05, 0.012), MAT.metal, { pos: [0, 0, 0] }));
+  ctx.root.add(mesh(quad(w - 0.08, h - 0.08), ['whiteboard', { color: 0xf6f7f8 }], { pos: [0, 0, 0.027], cast: false }));
+  ctx.root.add(mesh(sbox(w - 0.2, 0.03, 0.07), MAT.metal, { pos: [0, -h / 2 + 0.04, 0.05] }));
+
+  const inkTints: readonly number[] = [0xc0392b, 0x2a55a8, 0x2f8a4a];
+  for (let i = 0; i < 7; i++) {
+    const ink = MaterialLibrary.get('darkPlastic', { color: inkTints[r.int(0, 2)], roughness: 0.7 });
+    ctx.root.add(
+      mesh(quad(r.range(0.14, 0.55), 0.018), ink, {
+        pos: [r.range(-w / 2 + 0.35, w / 2 - 0.35), r.range(-h / 2 + 0.25, h / 2 - 0.16), 0.03],
+        rot: [0, 0, r.range(-0.06, 0.06)],
+        cast: false,
+      }),
+    );
+  }
+  // markers on the tray
+  for (let i = 0; i < 3; i++) {
+    const ink = MaterialLibrary.get('darkPlastic', { color: inkTints[i], roughness: 0.5 });
+    ctx.root.add(mesh(cyl(0.011, 0.011, 0.12, 6), ink, { pos: [-0.4 + i * 0.16, -h / 2 + 0.062, 0.062], rot: [0, 0, Math.PI / 2], cast: false }));
+  }
+
+  return finish(ctx, o, { size: [w, h, 0.09], offset: [0, 0, 0.045] });
+}
+
+/**
+ * CONFERENCE BOX — a glazed meeting room. THE landmark prop: it is the only transparent
+ * volume on the floorplate, so it reads instantly from any distance and gives the player
+ * something to navigate by. The 0.95 m solid base wall is grindable all the way round.
+ * ~1400 tris.
+ */
+export function makeConferenceBox(width = 5.2, depth = 4.2, o?: PropOptions): THREE.Group {
+  const ctx = begin('conferenceBox', o, 229);
+  const W = width;
+  const D = depth;
+  const baseH = 0.95;
+  const capH = 0.07;
+  const glassTop = 2.45;
+  const doorW = 1.1;
+
+  const sides: { len: number; cx: number; cz: number; rotY: number; door: boolean }[] = [
+    { len: W, cx: 0, cz: -D / 2, rotY: 0, door: false },
+    { len: W, cx: 0, cz: D / 2, rotY: 0, door: true },
+    { len: D, cx: -W / 2, cz: 0, rotY: Math.PI / 2, door: false },
+    { len: D, cx: W / 2, cz: 0, rotY: Math.PI / 2, door: false },
+  ];
+
+  for (const s of sides) {
+    // A doorway splits the run into two shorter segments.
+    const runs: { len: number; off: number }[] = s.door
+      ? [
+          { len: (s.len - doorW) / 2, off: -(s.len + doorW) / 4 },
+          { len: (s.len - doorW) / 2, off: (s.len + doorW) / 4 },
+        ]
+      : [{ len: s.len, off: 0 }];
+
+    for (const run of runs) {
+      const c = Math.cos(s.rotY);
+      const sn = Math.sin(s.rotY);
+      const px = s.cx + run.off * c;
+      const pz = s.cz - run.off * sn;
+
+      // Solid base + cap (the grind line)
+      const base = mesh(cbox(run.len, baseH, 0.09, 0.014, [Math.max(1, Math.round(run.len / 1.6)), 1]), MAT.panelFabric);
+      base.position.set(px, baseH / 2, pz);
+      base.rotation.y = s.rotY;
+      ctx.root.add(base);
+
+      const cap = mesh(cbox(run.len + 0.02, capH, 0.14, 0.018), MAT.panelCap);
+      cap.position.set(px, baseH + capH / 2, pz);
+      cap.rotation.y = s.rotY;
+      ctx.root.add(cap);
+
+      // Glazing above
+      const glass = mesh(cbox(run.len - 0.06, glassTop - baseH - capH, 0.02, 0.006), MAT.glass, {
+        cast: false,
+        receive: false,
+      });
+      glass.position.set(px, (baseH + capH + glassTop) / 2, pz);
+      glass.rotation.y = s.rotY;
+      glass.renderOrder = 2;
+      ctx.root.add(glass);
+
+      const hx = (run.len / 2) * c;
+      const hz = -(run.len / 2) * sn;
+      ctx.grinds.push({
+        start: [px - hx, baseH + capH, pz - hz],
+        end: [px + hx, baseH + capH, pz + hz],
+      });
+      collide(ctx, [run.len, glassTop, 0.14], [px, glassTop / 2, pz], s.rotY || undefined);
+    }
+  }
+
+  // Mullions at the corners and the head rail: what stops the glass reading as a floating pane.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      ctx.root.add(mesh(cbox(0.07, glassTop, 0.07, 0.01), MAT.metal, { pos: [sx * W / 2, glassTop / 2, sz * D / 2] }));
+    }
+  }
+  ctx.root.add(mesh(sbox(W + 0.07, 0.06, 0.07), MAT.metal, { pos: [0, glassTop, -D / 2] }));
+  ctx.root.add(mesh(sbox(W + 0.07, 0.06, 0.07), MAT.metal, { pos: [0, glassTop, D / 2] }));
+  ctx.root.add(mesh(sbox(0.07, 0.06, D), MAT.metal, { pos: [-W / 2, glassTop, 0] }));
+  ctx.root.add(mesh(sbox(0.07, 0.06, D), MAT.metal, { pos: [W / 2, glassTop, 0] }));
+
+  if (ctx.variant === 0) {
+    // Boardroom table + chairs, visible through the glazing.
+    const tw = Math.min(W - 1.6, 3.0);
+    const td = Math.min(D - 1.8, 1.3);
+    ctx.root.add(mesh(cbox(tw, 0.05, td, 0.012, [2, 1]), MAT.deskTop, { pos: [0, 0.735, 0] }));
+    ctx.root.add(mesh(cbox(0.5, 0.71, 0.5, 0.02), MAT.plastic, { pos: [0, 0.355, 0] }));
+    ctx.root.add(mesh(cyl(0.34, 0.36, 0.03, 10), MAT.metal, { pos: [0, 0.015, 0], cast: false }));
+    for (let i = 0; i < 6; i++) {
+      const side = i < 3 ? -1 : 1;
+      const cx = -tw / 2 + 0.45 + (i % 3) * (tw - 0.9) / 2;
+      const cz = side * (td / 2 + 0.42);
+      ctx.root.add(mesh(cbox(0.42, 0.05, 0.42, 0.012), MAT.plastic, { pos: [cx, 0.45, cz] }));
+      ctx.root.add(mesh(cbox(0.40, 0.42, 0.05, 0.012), MAT.panelFabric, { pos: [cx, 0.69, cz + side * 0.19] }));
+      ctx.root.add(mesh(cyl(0.03, 0.03, 0.42, 6), MAT.metal, { pos: [cx, 0.21, cz], cast: false }));
+      ctx.root.add(mesh(cyl(0.19, 0.19, 0.02, 8), MAT.metal, { pos: [cx, 0.01, cz], cast: false }));
+    }
+    // A projector screen / whiteboard on the far wall of the box.
+    ctx.root.add(mesh(quad(Math.min(W - 1.4, 2.4), 1.0), ['whiteboard', { color: 0xf6f7f8 }], {
+      pos: [0, 1.55, -D / 2 + 0.06],
+      cast: false,
+    }));
+  }
+
+  return finish(ctx, o, { size: [W, glassTop, D], offset: [0, glassTop / 2, 0] });
+}
+
+/**
+ * MANAGER OFFICE — a double-footprint hard-walled room dropped into the cubicle grid.
+ *
+ * Real offices are accreted, not generated: somebody got promoted and two pods became one
+ * room with a door. This is the prop that breaks the lattice. Walls are 1.98 m (well above
+ * the 1.40 m grind line, so it reads as a solid mass in the skyline) with a glazed clerestory
+ * strip, and it carries the only wood-topped desk on the floor.
+ * ~1600 tris.
+ */
+export function makeManagerOffice(width = 9.4, depth = 4.4, o?: PropOptions): THREE.Group {
+  const ctx = begin('managerOffice', o, 233);
+  const r = ctx.rng;
+  const W = width;
+  const D = depth;
+  const wallH = 1.98;
+  const glazeH = 0.52;
+  const doorW = 1.0;
+  const t = 0.11;
+
+  const runs: { len: number; cx: number; cz: number; rotY: number }[] = [];
+  const addSide = (len: number, cx: number, cz: number, rotY: number, door: boolean) => {
+    if (!door) {
+      runs.push({ len, cx, cz, rotY });
+      return;
+    }
+    const c = Math.cos(rotY);
+    const s = Math.sin(rotY);
+    const seg = (len - doorW) / 2;
+    for (const off of [-(len + doorW) / 4, (len + doorW) / 4]) {
+      runs.push({ len: seg, cx: cx + off * c, cz: cz - off * s, rotY });
+    }
+  };
+  addSide(W, 0, -D / 2, 0, false);
+  addSide(W, 0, D / 2, 0, true);          // door faces the aisle
+  addSide(D, -W / 2, 0, Math.PI / 2, false);
+  addSide(D, W / 2, 0, Math.PI / 2, false);
+
+  for (const run of runs) {
+    const uv: [number, number] = [Math.max(1, Math.round(run.len / 2.2)), 1];
+    const wall = mesh(cbox(run.len, wallH, t, 0.016, uv), ['drywall', { repeat: [3, 2] }]);
+    wall.position.set(run.cx, wallH / 2, run.cz);
+    wall.rotation.y = run.rotY;
+    ctx.root.add(wall);
+
+    // Clerestory glazing strip + head trim: this is what stops a 2 m drywall box reading as
+    // a shipping container.
+    const glaze = mesh(cbox(run.len - 0.08, glazeH, 0.02, 0.006), MAT.glass, { cast: false, receive: false });
+    glaze.position.set(run.cx, wallH + glazeH / 2, run.cz);
+    glaze.rotation.y = run.rotY;
+    glaze.renderOrder = 2;
+    ctx.root.add(glaze);
+
+    const trim = mesh(cbox(run.len + 0.03, 0.07, t + 0.05, 0.014), MAT.panelCap);
+    trim.position.set(run.cx, wallH + glazeH + 0.035, run.cz);
+    trim.rotation.y = run.rotY;
+    ctx.root.add(trim);
+
+    const skirt = mesh(sbox(run.len, 0.13, t + 0.04), MAT.panelCap);
+    skirt.position.set(run.cx, 0.065, run.cz);
+    skirt.rotation.y = run.rotY;
+    ctx.root.add(skirt);
+
+    collide(ctx, [run.len, wallH + glazeH, t + 0.06], [run.cx, (wallH + glazeH) / 2, run.cz], run.rotY || undefined);
+  }
+
+  if (ctx.variant === 0) {
+    // Contents, readable through the clerestory and the doorway.
+    const desk = makeDesk({ variant: 0, seed: (o?.seed ?? 1) * 7, merge: false });
+    desk.position.set(-W / 4, 0, -0.5);
+    desk.rotation.y = Math.PI;
+    ctx.root.add(desk);
+
+    const monitor = makeMonitor({ variant: 1, seed: (o?.seed ?? 1) * 11, merge: false });
+    monitor.position.set(-W / 4 + 0.2, DESK_TOP_Y, -0.1);
+    monitor.rotation.y = Math.PI + r.range(-0.2, 0.2);
+    ctx.root.add(monitor);
+
+    const cab = makeFilingCabinet({ variant: 1, seed: (o?.seed ?? 1) * 13, merge: false });
+    cab.position.set(W / 2 - 0.7, 0, -D / 2 + 0.5);
+    ctx.root.add(cab);
+
+    const plant = makePottedPlant({ variant: 0, seed: (o?.seed ?? 1) * 17, merge: false });
+    plant.position.set(W / 2 - 0.6, 0, D / 2 - 0.8);
+    ctx.root.add(plant);
+
+    const board = makeWhiteboard({ seed: (o?.seed ?? 1) * 19, merge: false });
+    board.position.set(W / 4, 1.35, -D / 2 + 0.09);
+    ctx.root.add(board);
+  }
+
+  return finish(ctx, o, { size: [W, wallH + glazeH, D], offset: [0, (wallH + glazeH) / 2, 0] });
 }
