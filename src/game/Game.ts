@@ -3369,7 +3369,7 @@ export class Game {
     }
   }
   
-  private applyMovement(input: ReturnType<InputManager['getState']>, _dt: number): void {
+  private applyMovement(input: ReturnType<InputManager['getState']>, dt: number): void {
     // Only allow full movement when mounted on chair
     if (!this.isMounted) {
       // When standing, only allow turning the chair to face it
@@ -3441,21 +3441,34 @@ export class Game {
       this.physics.setVelocity(this.chairBody, newVel);
     }
     
-    // TURNING (A/D) - Rotate left/right (direct angular velocity)
-    // THPS-style: instant, responsive turning
-    const turnSpeed = 4.5;  // Radians per second - snappy! (was 2.5)
-    const airTurnSpeed = 3.5;  // Tightened air control (was 2.5) - more responsive tricks
-    
-    if (input.turnLeft) {
-      const speed = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
-      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, speed, 0));
-    } else if (input.turnRight) {
-      const speed = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
-      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, -speed, 0));
-    } else {
-      // Stop rotation when not turning - instant stop for responsiveness
-      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
-    }
+    // TURNING (A/D)
+    //
+    // This used to be a step function: press A and the chair went from 0 to 4.5 rad/s
+    // (258 deg/s) on a single frame, release and it went straight back to 0. The camera
+    // yaw is derived from the chair yaw, so every tap whipped the whole view around at a
+    // quarter-turn per second with no ramp at either end. That is the disorientation.
+    //
+    // Real THPS turning has weight: angular velocity accelerates toward the target and
+    // decays when you let go. Same peak rate, but the ends are smooth, so the camera has
+    // something continuous to follow.
+    const turnSpeed = 3.6;      // rad/s, grounded
+    const airTurnSpeed = 3.0;   // rad/s, airborne
+    const TURN_ACCEL = 18;      // rad/s^2 toward the target rate
+    const TURN_DECAY = 14;      // rad/s^2 back to zero on release
+
+    const maxRate = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
+    const targetRate = input.turnLeft ? maxRate : input.turnRight ? -maxRate : 0;
+
+    const currentRate = this.physics.getAngularVelocity(this.chairBody).y;
+    const rateGap = targetRate - currentRate;
+    const accel = targetRate === 0 ? TURN_DECAY : TURN_ACCEL;
+    const maxDelta = accel * dt;
+    const newRate = currentRate + Math.max(-maxDelta, Math.min(maxDelta, rateGap));
+
+    this.physics.setAngularVelocity(
+      this.chairBody,
+      new THREE.Vector3(0, Math.abs(newRate) < 1e-3 ? 0 : newRate, 0)
+    );
     
     // JUMP (Space) - Ollie with coyote time + jump buffer
     // Coyote time: can jump briefly after leaving ground

@@ -5,6 +5,31 @@
 
 import * as THREE from 'three';
 
+/**
+ * Frame-rate-independent smoothing factor.
+ *
+ * Every smoothing term in this file used to be written `lerp(target, k * dt)`, which is
+ * only stable while `k * dt < 1`. At 60fps and k=30 that is 0.5 and looks fine — but a
+ * single long frame (level load, GC pause, a slower machine, a backgrounded tab) makes
+ * `k * dt` exceed 1, and lerp then OVERSHOOTS the target and oscillates. That is what
+ * made the camera swing when the chair turned.
+ *
+ * `1 - exp(-k * dt)` is the exact solution to the same exponential decay. It approaches 1
+ * but never reaches or exceeds it, so it cannot overshoot at any frame rate, and the
+ * perceived smoothing speed is identical regardless of dt.
+ */
+function damp(k: number, dt: number): number {
+  return 1 - Math.exp(-k * dt);
+}
+
+/** Shortest signed angular difference, wrapped to [-pi, pi]. */
+function angleDelta(to: number, from: number): number {
+  let d = to - from;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
 export class CameraController {
   /**
    * Set false to stop the controller writing to the camera at all, leaving an
@@ -37,8 +62,22 @@ export class CameraController {
   private lookAtHeight = 0.66;
   private lookAtLateral = 0.16;
   private lookAhead = 0.5;
-  private smoothSpeed = 30;       // Near-instant position tracking
-  private rotationSmooth = 25;    // Near-instant rotation follow
+  private smoothSpeed = 18;       // Position tracking
+  private rotationSmooth = 14;    // Boom swing follow
+
+  // ---- yaw trailing ---------------------------------------------------------
+  // The boom used to be rotated by the chair's yaw directly, so the camera was welded
+  // to the chair and inherited every bit of its angular velocity — turn the chair at
+  // 258 deg/s and the entire view rotated at 258 deg/s. THPS cameras TRAIL: the boom
+  // lags the board through a turn and catches up on the way out, which is what makes a
+  // fast turn readable instead of nauseating.
+  //
+  // `camYaw` is the boom's own yaw. It damps toward the chair's yaw and is hard-limited
+  // to `maxYawLag` radians behind it, so it always catches up but never snaps.
+  private camYaw = 0;
+  private hasCamYaw = false;
+  private yawFollow = 7;                    // how eagerly the boom chases chair yaw
+  private readonly maxYawLag = 0.60;        // ~34 deg of permitted trail
 
   // Dynamic FOV settings
   private baseFOV = 58;      // vertical; ~85 deg horizontal at 16:9
@@ -146,6 +185,11 @@ export class CameraController {
     if (target) {
       this.currentLookAt.copy(target.position);
       this.camera.position.copy(target.position).add(this.offset);
+      // Re-seed the trailing yaw on the next update rather than swinging round from
+      // whatever the previous target's heading was.
+      this.hasCamYaw = false;
+      this.hasPrevYaw = false;
+      this.rollCurrent = 0;
     }
   }
   
@@ -153,22 +197,28 @@ export class CameraController {
     if (!this.enabled) return;
     if (!this.target) return;
     
-    // Smoothly return orbit to default when not dragging
+    // Smoothly return orbit to default when not dragging.
+    // This was `*= (1 - orbitReturnSpeed * dt)`, which goes NEGATIVE once dt exceeds
+    // 1/orbitReturnSpeed (0.125s here) — flipping the sign of the orbit angle every
+    // frame and turning the return-to-centre into an oscillator. Exponential decay
+    // cannot change sign.
     if (!this.isDragging) {
-      this.targetOrbitX *= (1 - this.orbitReturnSpeed * dt);
-      this.targetOrbitY *= (1 - this.orbitReturnSpeed * dt);
+      const keep = Math.exp(-this.orbitReturnSpeed * dt);
+      this.targetOrbitX *= keep;
+      this.targetOrbitY *= keep;
     }
-    
+
     // Smooth orbit angle transitions
-    this.orbitAngleX += (this.targetOrbitX - this.orbitAngleX) * 5 * dt;
-    this.orbitAngleY += (this.targetOrbitY - this.orbitAngleY) * 5 * dt;
+    const orbitK = damp(5, dt);
+    this.orbitAngleX += (this.targetOrbitX - this.orbitAngleX) * orbitK;
+    this.orbitAngleY += (this.targetOrbitY - this.orbitAngleY) * orbitK;
     
     // Get target's forward direction
     const targetForward = new THREE.Vector3(0, 0, 1);
     targetForward.applyQuaternion(this.target.quaternion);
     
     // Smooth zoom multiplier transition
-    this.currentZoomMultiplier += (this.targetZoomMultiplier - this.currentZoomMultiplier) * this.zoomSmoothSpeed * dt;
+    this.currentZoomMultiplier += (this.targetZoomMultiplier - this.currentZoomMultiplier) * damp(this.zoomSmoothSpeed, dt);
     
     // Calculate desired camera position (behind and above target)
     // Apply zoom multiplier (>1 = further away for trick visibility)
@@ -178,9 +228,20 @@ export class CameraController {
       this.offset.z * this.currentZoomMultiplier
     );
     
-    // Rotate offset based on target rotation (only Y axis for now)
+    // Rotate offset based on target rotation (only Y axis for now).
+    // The boom follows `camYaw`, which TRAILS the chair's yaw — see the field comment.
     const targetRotationY = new THREE.Euler().setFromQuaternion(this.target.quaternion, 'YXZ').y;
-    desiredOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), targetRotationY);
+
+    if (!this.hasCamYaw) {
+      this.camYaw = targetRotationY;
+      this.hasCamYaw = true;
+    }
+    this.camYaw += angleDelta(targetRotationY, this.camYaw) * damp(this.yawFollow, dt);
+    const lag = angleDelta(targetRotationY, this.camYaw);
+    if (lag > this.maxYawLag) this.camYaw = targetRotationY - this.maxYawLag;
+    else if (lag < -this.maxYawLag) this.camYaw = targetRotationY + this.maxYawLag;
+
+    desiredOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.camYaw);
     
     // Apply mouse orbit rotation
     desiredOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.orbitAngleX);
@@ -196,7 +257,7 @@ export class CameraController {
     desiredOffset.applyAxisAngle(horizontalAxis, this.orbitAngleY);
     
     // Smooth offset transition
-    this.currentOffset.lerp(desiredOffset, this.rotationSmooth * dt);
+    this.currentOffset.lerp(desiredOffset, damp(this.rotationSmooth, dt));
     
     // Calculate camera position
     const desiredPosition = new THREE.Vector3()
@@ -204,7 +265,7 @@ export class CameraController {
       .add(this.currentOffset);
     
     // Smooth camera movement
-    this.camera.position.lerp(desiredPosition, this.smoothSpeed * dt);
+    this.camera.position.lerp(desiredPosition, damp(this.smoothSpeed, dt));
     
     // Apply camera shake
     if (this.shakeTimeRemaining > 0) {
@@ -237,7 +298,7 @@ export class CameraController {
       .add(lookAheadOffset);
 
     // Smooth look-at transition
-    this.currentLookAt.lerp(desiredLookAt, this.smoothSpeed * dt);
+    this.currentLookAt.lerp(desiredLookAt, damp(this.smoothSpeed, dt));
 
     this.camera.lookAt(this.currentLookAt);
 
@@ -257,7 +318,7 @@ export class CameraController {
 
       const lateral = yawRate * Math.min(this.lastSpeed, 24);
       const targetRoll = THREE.MathUtils.clamp(-lateral * 0.010, -this.maxRoll, this.maxRoll);
-      this.rollCurrent += (targetRoll - this.rollCurrent) * Math.min(1, 8 * dt);
+      this.rollCurrent += (targetRoll - this.rollCurrent) * damp(8, dt);
     }
     if (Math.abs(this.rollCurrent) > 1e-4) {
       this.camera.rotation.z = this.rollCurrent;
@@ -268,7 +329,7 @@ export class CameraController {
     
     // Smooth FOV transition (with impact zoom pulse subtracted)
     const effectiveFOV = this.targetFOV - this.impactZoomCurrent;
-    this.currentFOV += (effectiveFOV - this.currentFOV) * this.fovSmoothSpeed * dt;
+    this.currentFOV += (effectiveFOV - this.currentFOV) * damp(this.fovSmoothSpeed, dt);
     this.camera.fov = this.currentFOV;
     this.camera.updateProjectionMatrix();
   }
@@ -385,7 +446,7 @@ export class CameraController {
   updateImpactZoom(dt: number): void {
     // Decay the impact zoom effect
     if (this.impactZoomCurrent > 0.1) {
-      this.impactZoomCurrent -= this.impactZoomCurrent * this.impactZoomDecay * dt;
+      this.impactZoomCurrent -= this.impactZoomCurrent * damp(this.impactZoomDecay, dt);
     } else {
       this.impactZoomCurrent = 0;
     }
@@ -426,7 +487,7 @@ export class CameraController {
    */
   private updateGrindCamera(dt: number): void {
     // Smoothly transition grind camera angle
-    this.grindCameraAngle += (this.targetGrindAngle - this.grindCameraAngle) * this.grindAngleSmoothSpeed * dt;
+    this.grindCameraAngle += (this.targetGrindAngle - this.grindCameraAngle) * damp(this.grindAngleSmoothSpeed, dt);
     
     // Snap to zero when very close (avoid floating point drift)
     if (Math.abs(this.grindCameraAngle) < 0.001 && Math.abs(this.targetGrindAngle) < 0.001) {
