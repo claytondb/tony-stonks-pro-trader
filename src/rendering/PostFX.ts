@@ -141,6 +141,11 @@ vec3 rrtOdtFit( vec3 v ) {
   return a / b;
 }
 
+// three's own ACESFilmicToneMapping pre-scales by 1/0.6 before the fit. The
+// whole game is lit against that, so we match it exactly: uExposure keeps
+// the same meaning it has as renderer.toneMappingExposure today.
+const float ACES_EXPOSURE_SCALE = 1.0 / 0.6;
+
 vec3 tonemapACES( vec3 c ) {
   c = ACES_IN * c;
   c = rrtOdtFit( c );
@@ -160,7 +165,7 @@ vec3 sampleScene( vec2 uv, float jitter ) {
   float rad = length( dir );
   float edge = smoothstep( 0.08, 0.78, rad );
 
-  float blur = uSpeed * uSpeed * 0.075 * edge;
+  float blur = uSpeed * uSpeed * 0.095 * edge;
   float ca = ( uChromaBase + uSpeed * 0.0085 ) * edge;
 
   if ( blur < 0.0009 ) {
@@ -193,28 +198,31 @@ void main() {
 
   // pulse zoom punch (eased) --------------------------------------------
   float p = uPulse * uPulse;
-  vec2 uv = CENTER + ( vUv - CENTER ) * ( 1.0 - 0.038 * p );
+  vec2 uv = CENTER + ( vUv - CENTER ) * ( 1.0 - 0.048 * p );
 
   vec3 col = sampleScene( uv, noise );
 
   // exposure + filmic tone curve ----------------------------------------
-  col = tonemapACES( max( col, 0.0 ) * uExposure );
+  col = tonemapACES( max( col, 0.0 ) * uExposure * ACES_EXPOSURE_SCALE );
 
   // move to a gamma-2.2 working space; grading numbers behave like the
   // sRGB reference frames there.
   col = pow( col, vec3( 1.0 / 2.2 ) );
 
-  // lift / gamma / gain --------------------------------------------------
-  col = uLift + col * ( 1.0 - uLift );     // lift preserves white
+  // gain / gamma ---------------------------------------------------------
   col = col * uGain;
   col = pow( max( col, 0.0 ), uGammaInv );
 
   // contrast around a sub-0.5 pivot (refs sit at a ~0.37 median) ---------
   col = ( col - uPivot ) * uContrast + uPivot;
 
+  // lift LAST so the filmic toe survives the contrast S-curve. The refs
+  // never reach true black: their 1st-percentile luma is 6-9/255.
+  col = uLift + max( col, 0.0 ) * ( 1.0 - uLift );
+
   // warm highlight / cool shadow split tone ------------------------------
   float l = dot( clamp( col, 0.0, 1.0 ), LUMA );
-  vec3 tint = mix( uShadowTint, uHighlightTint, smoothstep( 0.12, 0.82, l ) );
+  vec3 tint = mix( uShadowTint, uHighlightTint, smoothstep( 0.06, 0.62, l ) );
   col *= mix( vec3( 1.0 ), tint, uSplit );
 
   // saturation -----------------------------------------------------------
@@ -222,7 +230,7 @@ void main() {
   col = mix( vec3( g ), col, uSaturation );
 
   // pulse white flash ----------------------------------------------------
-  col += p * vec3( 0.55, 0.52, 0.46 );
+  col += p * vec3( 0.22, 0.208, 0.185 );
 
   // vignette (aspect corrected, tightens slightly with speed) ------------
   float aspect = uResolution.x / max( uResolution.y, 1.0 );
@@ -249,15 +257,15 @@ const GRADE_DEFAULTS = {
   saturation: 1.16,
   contrast: 1.085,
   pivot: 0.44,
-  vignette: 0.26,
+  vignette: 0.22,
   grain: 0.028,
   split: 0.6,
   chromaticBase: 0.0011,
-  lift: new THREE.Vector3(0.014, 0.014, 0.019),
+  lift: new THREE.Vector3(0.022, 0.022, 0.031),
   gammaInv: new THREE.Vector3(1.0, 1.0, 1.0 / 1.02),
   gain: new THREE.Vector3(1.025, 1.015, 1.0),
-  shadowTint: new THREE.Vector3(0.9, 0.96, 1.12),
-  highlightTint: new THREE.Vector3(1.08, 1.0, 0.88),
+  shadowTint: new THREE.Vector3(0.88, 0.955, 1.145),
+  highlightTint: new THREE.Vector3(1.08, 1.0, 0.885),
 };
 
 const BLOOM_DEFAULTS = { strength: 0.35, radius: 0.6, threshold: 0.85 };
@@ -517,6 +525,8 @@ export class PostFX {
       if (this.smaaPass) composer.addPass(this.smaaPass);
     }
 
+    this.applyTierScales();
+
     // If the grade pass failed we have no tone mapping in the chain — hand it
     // back to OutputPass rather than shipping a raw linear image.
     if (this.gradePass) {
@@ -550,6 +560,7 @@ export class PostFX {
 
   private restoreToneMapping(): void {
     this.renderer.toneMapping = this.savedToneMapping;
+    this.renderer.info.autoReset = true;
   }
 
   // -------------------------------------------------------------------------
@@ -567,6 +578,16 @@ export class PostFX {
     this.composer.setPixelRatio(this.pixelRatio);
     this.composer.setSize(this.width, this.height);
 
+    this.applyTierScales();
+  }
+
+  /**
+   * Both `EffectComposer.addPass()` and `EffectComposer.setSize()` force every
+   * pass to the full drawing-buffer size, which would silently undo the
+   * half-res AO and the scaled bloom pyramid. Re-apply the tier's own scales
+   * afterwards — this must run after ANY addPass/setSize on the composer.
+   */
+  private applyTierScales(): void {
     const bw = Math.max(1, Math.round(this.width * this.pixelRatio));
     const bh = Math.max(1, Math.round(this.height * this.pixelRatio));
 
@@ -574,17 +595,17 @@ export class PostFX {
       (this.gradePass.uniforms['uResolution'].value as THREE.Vector2).set(bw, bh);
     }
 
-    // composer.setSize() has already pushed the full-res size into every pass;
-    // re-apply the AO tier's own scale on top of that.
     const tier = this.quality === 'off' ? null : TIERS[this.quality];
-    if (this.aoPass && tier && tier.ao === 'half') {
+    if (!tier) return;
+
+    if (this.aoPass && tier.ao === 'half') {
       try {
         this.aoPass.setSize(Math.max(8, Math.round(bw * 0.5)), Math.max(8, Math.round(bh * 0.5)));
       } catch {
         /* pass refused the resize; leave it at full res */
       }
     }
-    if (this.bloomPass && tier && tier.bloomResScale !== 1) {
+    if (this.bloomPass && tier.bloomResScale !== 1) {
       try {
         this.bloomPass.setSize(
           Math.max(8, Math.round(bw * tier.bloomResScale)),
@@ -650,6 +671,13 @@ export class PostFX {
       this.renderer.render(this.scene, this.camera);
       return;
     }
+
+    // Every Pass calls renderer.render() for its fullscreen quad, and with the
+    // default autoReset that wipes renderer.info on each one — tools/shoot.mjs
+    // would then report drawCalls: 1. Reset once per frame instead so the
+    // stats accumulate across the whole chain (which is the honest number).
+    this.renderer.info.autoReset = false;
+    this.renderer.info.reset();
 
     // Adopt any exposure change Game.ts made, then keep tone mapping ours.
     if (this.renderer.toneMappingExposure !== this.lastSeenExposure) {
