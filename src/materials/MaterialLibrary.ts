@@ -533,11 +533,11 @@ export const LIGHT_POOL_OFFICE: LightPoolSpec = {
   pitch: 3.66,
   offset: [1.83, 1.83],
   inner: 0.10,
-  outer: 1.00,
-  min: 0.60,
-  max: 1.26,
-  color: 0xfff0d6,
-  wear: 0.13,
+  outer: 1.02,
+  min: 0.80,
+  max: 1.13,
+  color: 0xfff4e2,
+  wear: 0.05,
 };
 
 const LP_UNIFORMS = {

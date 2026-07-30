@@ -271,10 +271,10 @@ const GRADE_DEFAULTS = {
   // pivot 0.42 -> 0.375: the contrast S-curve pivots around the office's own median,
   // and at 0.42 the expansion was pushing the AO/shadow band UP instead of down —
   // the ambient-occlusion term was being graded straight back out of the image.
-  saturation: 1.40,
+  saturation: 1.28,
   contrast: 1.30,
   pivot: 0.375,
-  vignette: 0.26,
+  vignette: 0.22,
   grain: 0.028,
   split: 0.5,
   chromaticBase: 0.0005,

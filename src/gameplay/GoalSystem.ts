@@ -289,9 +289,43 @@ export function zoneContains(zone: TrickZone, x: number, y: number, z: number): 
 
 /** Straight-line length of a gap, for HUD text ("Copier Gap — 14m"). */
 export function gapLength(gap: GapDef): number {
-  const dx = gap.to[0] - gap.from[0];
-  const dy = gap.to[1] - gap.from[1];
-  const dz = gap.to[2] - gap.from[2];
+  return distance3(gap.from, gap.to);
+}
+
+/** Trigger radius of a gap's takeoff/landing volumes. */
+export function gapTriggerRadius(gap: GapDef): number {
+  return gap.radius ?? DEFAULT_GAP_RADIUS;
+}
+
+/**
+ * Gap detection, ready to use: call it once on every landing with the position the player left the
+ * ground from and the position they touched down at. Returns the gap that was cleared (the longest
+ * one when several match), or null.
+ *
+ * Gaps are bi-directional — clearing the Fountain Gap from either side counts. Hand the result to
+ * `notifyGap(gap.id, gap.bonus)` and pay `gap.bonus` into the score system.
+ */
+export function matchGap(gaps: GapDef[], takeoff: Vec3, landing: Vec3): GapDef | null {
+  let best: GapDef | null = null;
+  let bestLength = -1;
+  for (const gap of gaps) {
+    const r = gapTriggerRadius(gap);
+    const forward = distance3(takeoff, gap.from) <= r && distance3(landing, gap.to) <= r;
+    const backward = distance3(takeoff, gap.to) <= r && distance3(landing, gap.from) <= r;
+    if (!forward && !backward) continue;
+    const len = gapLength(gap);
+    if (len > bestLength) {
+      bestLength = len;
+      best = gap;
+    }
+  }
+  return best;
+}
+
+function distance3(a: Vec3, b: Vec3): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const dz = b[2] - a[2];
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
@@ -708,13 +742,16 @@ export class GoalTracker {
   }
 
   /**
-   * S requires a clean sweep — every goal, including SICK SCORE. The A/B/C thresholds line up with
-   * the ones GameStateManager already uses so the two never disagree.
+   * S requires a clean sweep — every goal, including SICK SCORE. Deliberately computed from the raw
+   * completed/total count (not the reward weighting) so it agrees exactly with the rank
+   * GameStateManager derives from the (goalsCompleted, totalGoals) pair we hand to onLevelComplete.
    */
   get rank(): GoalRank {
-    if (this.totalCount === 0) return 'D';
-    if (this.completedCount >= this.totalCount) return 'S';
-    const p = this.weightedPercent;
+    const total = this.totalCount;
+    if (total === 0) return 'D';
+    const completed = this.completedCount;
+    if (completed >= total) return 'S';
+    const p = completed / total;
     if (p >= 0.75) return 'A';
     if (p >= 0.5) return 'B';
     if (p >= 0.25) return 'C';
@@ -2202,7 +2239,9 @@ export function fromLegacyGoals(
 //      trick lands                     -> this.goals.notifyTrickAt(trick.id, zone?.id ?? '')
 //      pickup touched                  -> this.goals.notifyCollect('letter' | 'cash' | 'hiddenItem', pickup.id)
 //      breakable destroyed             -> this.goals.notifySmash(prop.id)
-//      gap cleared                     -> this.goals.notifyGap(gap.id, gap.bonus)   (then addStonks(gap.bonus))
+//      landed after air                -> const gap = matchGap(this.goals.gaps, takeoffPos, landingPos);
+//                                         if (gap) { this.goals.notifyGap(gap.id, gap.bonus);
+//                                                    this.scoreSystem.addStonks(gap.bonus, gap.name); }
 //      exit trigger entered            -> this.goals.notifyZoneEntered(zone.id)     (this also calls notifyFinish)
 //
 // 4. Game.endLevel(success):
