@@ -484,6 +484,29 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     }
   }
 
+  // The spawn intersection is the one place in the level the player is guaranteed to look at,
+  // and with the corridor walls stopping short of the corner it was four bare carpet corners.
+  // Dress each one tight against the wall (never in the skate line) and make three of the four
+  // props a saturated accent, so the establishing frame always carries chroma.
+  const cornerProps: (() => THREE.Object3D)[] = [
+    () => makeFireExtinguisher({ seed: 811 }),
+    () => makeTrashCan({ variant: 0, seed: 813, accent: true }),
+    () => makePottedPlant({ variant: 0, seed: 815 }),
+    () => makeFilingCabinet({ variant: 0, seed: 817, accent: true }),
+  ];
+  let corner = 0;
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const cx = sx * (SPINE_HALF - 0.5);
+      const cz = sz * (CROSS_HALF + 1.4);
+      if (blocked(keepClear, cx, cz, 0.6, 0.6)) continue;
+      place(acc, cornerProps[corner % cornerProps.length](), cx, 0, cz, sx > 0 ? -Math.PI / 2 : Math.PI / 2, {
+        collide: true,
+      });
+      corner++;
+    }
+  }
+
   // ---------------------------------------------------------- cubicle farm ---
   // The pod field fills the four quadrants OUTSIDE the corridors. Columns are jittered per
   // column and pods jittered per pod, heights are mixed, and a fraction of the cells are

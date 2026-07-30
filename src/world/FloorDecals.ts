@@ -143,7 +143,7 @@ export function makeFloorWear(placements: readonly DecalPlacement[]): THREE.Inst
     map: wearTexture(),
     transparent: true,
     depthWrite: false,
-    opacity: 0.85,
+    opacity: 0.55,
     toneMapped: true,
     fog: true,
   });

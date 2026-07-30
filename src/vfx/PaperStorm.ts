@@ -135,22 +135,50 @@ const WAKE_FRONT = 0.55;           // metres of influence ahead of the player
 const WAKE_LEN_BASE = 1.3;         // metres behind, plus speed scaling
 const WAKE_LEN_PER_MS = 0.26;
 const WAKE_LEN_MAX = 4.6;
-const WAKE_HALF_BASE = 0.6;        // half-width, plus speed scaling
+const WAKE_HALF_BASE = 0.7;        // half-width, plus speed scaling
 const WAKE_HALF_PER_MS = 0.055;
 const WAKE_HALF_MAX = 1.5;
-const WAKE_BELOW = 2.0;            // vertical window below the player origin
-const WAKE_ABOVE = 1.0;            // ... and above
+/**
+ * Vertical window, measured from FLOOR level (the field is centred WAKE_DROP below the
+ * player origin, since the chair's origin sits about that far above the carpet). A sheet
+ * carried above WAKE_ABOVE leaves the airflow and falls back, which is what caps the storm
+ * at roughly chest height — exactly where the reference art puts it.
+ */
+const WAKE_DROP = 0.35;
+const WAKE_BELOW = 1.2;
+const WAKE_ABOVE = 1.5;
 
-const KICK_LIFT_BASE = 1.8;
-const KICK_LIFT_PER_MS = 0.35;
-const KICK_DRAG = 0.50;            // fraction of player speed imparted along travel
-const KICK_SWIRL = 0.22;
-const KICK_INDRAW = 0.08;
+/**
+ * THE WAKE IS A WIND FIELD, NOT A PUNCH — and this is the single most important decision in
+ * the file. The first version of this system handed disturbed sheets a velocity impulse, and
+ * a 9 m/s drive-through lifted litter a grand total of 14 cm: a flat sheet moving broadside
+ * at 5 m/s decelerates at ~80 m/s^2, so an impulse is gone in 60 ms. Paper does not fly
+ * because it was thrown, it flies because the air around it is moving — which is also why a
+ * sheet needs an updraft faster than its 1.4 m/s terminal velocity before it lifts at all.
+ * So these numbers are AIR VELOCITIES in the wake core (m/s), sustained for as long as the
+ * sheet is inside the box, and the same anisotropic drag that killed the impulse now works
+ * for us: a broadside sheet is snatched into the flow in about 30 ms.
+ */
+const KICK_LIFT_BASE = 2.6;
+const KICK_LIFT_PER_MS = 0.55;     // -> ~7.5 m/s updraft in the core at full speed
+const KICK_DRAG = 0.50;            // air behind the chair moves at ~half chair speed
+const KICK_SWIRL = 0.30;
+const KICK_INDRAW = 0.12;
 const KICK_SPIN_BASE = 6.0;
 const KICK_SPIN_PER_MS = 0.9;
 
-/** Airborne sheets already in the wake get the field as wind, at this fraction. */
-const WAKE_WIND_FRACTION = 0.42;
+/**
+ * A settled sheet still needs a small impulse to break contact with the floor and start
+ * tumbling; the wind does the actual lifting from there.
+ */
+const KICK_IMPULSE_FRACTION = 0.30;
+
+/**
+ * Wake strength below which a settled sheet is left alone. Deliberately low: at the fringe
+ * of the wake a sheet should twitch and skitter rather than sit dead still next to one that
+ * just took off, and a sheet that only hops costs a few frames of integration.
+ */
+const DISTURB_THRESHOLD = 0.03;
 
 /** Ceiling, relative to a sheet's rest plane, so nothing escapes the playfield. */
 const MAX_FLY_HEIGHT = 14;
@@ -315,12 +343,16 @@ export class PaperStorm {
    * Scatter settled sheets on the floor inside a disc. This is set dressing that becomes
    * gameplay the moment the player rides through it.
    *
+   * `centre.y` is also adopted as the default floor height for later bursts (unless a
+   * ground sampler is installed), so a level that only ever calls this method still gets
+   * bursts that settle on the right surface.
+   *
    * @param centre disc centre; `centre.y` is taken as the floor height for these sheets.
    * @param radius disc radius in metres.
    * @param count  how many sheets (clamped by the pool).
    */
   addFloorLitter(centre: THREE.Vector3, radius: number, count: number): void {
-    this.defaultGroundY = centre.y;
+    if (!this.groundSampler) this.defaultGroundY = centre.y;
     const n = Math.max(0, Math.floor(count));
     for (let k = 0; k < n; k++) {
       const i = this.allocate();
@@ -343,7 +375,7 @@ export class PaperStorm {
       this.age[i] = 0;
       this.writeMatrix(i);
     }
-    this.dirtyMatrix = true;
+    this.flush();
   }
 
   /**
@@ -414,7 +446,7 @@ export class PaperStorm {
       this.settleT[i] = 0;
       this.writeMatrix(i);
     }
-    this.dirtyMatrix = true;
+    this.flush();
   }
 
   /**
@@ -466,7 +498,8 @@ export class PaperStorm {
           const relx = this.px[i] - ppx;
           const rely = this.py[i] - ppy;
           const relz = this.pz[i] - ppz;
-          if (rely > -WAKE_BELOW && rely < WAKE_ABOVE) {
+          const dyc = rely + WAKE_DROP;                 // 0 at floor level
+          if (dyc > -WAKE_BELOW && dyc < WAKE_ABOVE) {
             const along = relx * fx + relz * fz;
             if (along < WAKE_FRONT && along > -wakeLen) {
               const side = relx * rx + relz * rz;
@@ -474,7 +507,7 @@ export class PaperStorm {
               if (aside < wakeHalf) {
                 const tA = along >= 0 ? 1 - along / WAKE_FRONT : 1 + along / wakeLen;
                 const tS = 1 - aside / wakeHalf;
-                const tU = 1 - Math.abs(rely + 0.35) / 1.7;
+                const tU = dyc >= 0 ? 1 - dyc / WAKE_ABOVE : 1 + dyc / WAKE_BELOW;
                 if (tU > 0) {
                   strength = tA * tS * tU * sf;
 
@@ -501,31 +534,43 @@ export class PaperStorm {
           }
         }
 
-        if (st === STATE_RESTING) {
-          // Settled sheets are out of the integrator: one distance test and done.
-          if (strength > 0.06) {
-            this.vx[i] = wkx;
-            this.vy[i] = wky;
-            this.vz[i] = wkz;
-            const spin = (KICK_SPIN_BASE + hs * KICK_SPIN_PER_MS) * strength;
-            this.wx[i] = rand(-spin, spin);
-            this.wy[i] = rand(-spin, spin) * 0.7;
-            this.wz[i] = rand(-spin, spin);
-            this.py[i] += 0.01;
-            this.state[i] = STATE_FLYING;
-            this.settleT[i] = 0;
-            this.age[i] = 0;
-            this.flying++;
-          }
-          continue;
+        // A settled sheet — or one halfway through flopping down — gets picked back up.
+        // Re-launching mid-settle matters: without it, paper that is 300 ms from resting
+        // visibly ignores a chair passing straight over it.
+        if ((st === STATE_RESTING || st === STATE_SETTLING) && strength > DISTURB_THRESHOLD) {
+          // Just enough to unstick it and set it tumbling — the wake wind does the lifting,
+          // starting on this very step now that the sheet is being integrated.
+          this.vx[i] += wkx * KICK_IMPULSE_FRACTION;
+          this.vy[i] += wky * KICK_IMPULSE_FRACTION;
+          this.vz[i] += wkz * KICK_IMPULSE_FRACTION;
+          const spin = (KICK_SPIN_BASE + hs * KICK_SPIN_PER_MS) * strength;
+          this.wx[i] = rand(-spin, spin);
+          this.wy[i] = rand(-spin, spin) * 0.7;
+          this.wz[i] = rand(-spin, spin);
+          this.py[i] += 0.01;
+          if (st === STATE_RESTING) this.flying++;
+          this.state[i] = STATE_FLYING;
+          this.settleT[i] = 0;
+          this.age[i] = 0;
         }
 
-        // Airborne sheets feel the wake as WIND, not as a punch, so they keep billowing.
-        const wf = WAKE_WIND_FRACTION;
-        this.integrate(i, h, gust, wkx * wf, wky * wf, wkz * wf);
+        // Settled sheets are out of the integrator entirely: one distance test and done.
+        if (this.state[i] === STATE_RESTING) continue;
+
+        // Airborne sheets feel the wake as WIND at full strength, so paper keeps billowing
+        // around the chair for as long as it stays in the flow.
+        this.integrate(i, h, gust, wkx, wky, wkz);
       }
     }
 
+    this.flush();
+  }
+
+  /**
+   * Upload whatever changed. Called at the end of `update()` and immediately after a spawn,
+   * so a level that scatters litter and renders before its first `update()` still draws it.
+   */
+  private flush(): void {
     if (this.dirtyMatrix) {
       this.mesh.instanceMatrix.needsUpdate = true;
       this.dirtyMatrix = false;
@@ -715,7 +760,6 @@ export class PaperStorm {
     }
 
     this.writeMatrix(i);
-    this.dirtyMatrix = true;
   }
 
   /**
@@ -756,7 +800,6 @@ export class PaperStorm {
       this.flying--;
     }
     this.writeMatrix(i);
-    this.dirtyMatrix = true;
   }
 
   /** Choose the flat pose this sheet will slerp onto, preserving its current facing. */
@@ -865,7 +908,10 @@ export class PaperStorm {
     return this.groundSampler ? this.groundSampler(x, z) : this.defaultGroundY;
   }
 
+  /** The ONLY place instance transforms are written; it marks the buffer dirty itself so no
+   *  caller can move a sheet and forget to upload it. */
   private writeMatrix(i: number): void {
+    this.dirtyMatrix = true;
     _p.set(this.px[i], this.py[i], this.pz[i]);
     _q.set(this.qx[i], this.qy[i], this.qz[i], this.qw[i]);
     const s = this.scale[i];

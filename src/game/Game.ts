@@ -2988,7 +2988,14 @@ export class Game {
     
     // Update player model animations
     if (this.playerModel && this.useGLBModel) {
-      this.playerModel.update(dt);
+      // The rig derives speed and turn rate from the chair's own motion; it only needs the
+      // gameplay booleans it cannot see for itself.
+      this.playerModel.update(dt, {
+        grounded: this.playerState.isGrounded,
+        grinding: this.playerState.isGrinding,
+        airborne: this.playerState.isAirborne,
+        airTime: this.playerState.airTime,
+      });
       this.updatePlayerAnimation(input);
     }
     

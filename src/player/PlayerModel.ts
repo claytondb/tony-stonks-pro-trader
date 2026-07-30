@@ -1,14 +1,32 @@
 /**
- * Player Model Loader
- * Loads the combined GLB character model with all animations
+ * PlayerModel — the hero rig.
+ *
+ * This used to be an FBX loader wrapped around a Meshy.ai mannequin with twenty clips, none of
+ * which matched their own names (the file's own comments recorded that "idle" played a
+ * breakdance and "slide" played a parkour push). The art panel's verdict on it was blunt: the
+ * hero was the weakest asset in the build, unreadable at gameplay distance, with no tie, no
+ * silhouette, no hand contact and a pose that never changed between the static and the moving
+ * screenshot.
+ *
+ * It is now a thin controller over `StonksCharacter`, a fully procedural faceted low-poly figure
+ * authored against refs/player.png. The public API is unchanged so Game.ts keeps working, but
+ * every "animation" is now a procedural pose blend rather than a clip lookup, which means:
+ *   - no clip can be mislabelled, because there are no clips
+ *   - the pose responds continuously to speed, turn rate, air time and grind state
+ *   - the hands are IK-pinned to the chair's armrest sockets
+ *
+ * `setMotion()` is the new entry point; it is optional, and the model degrades to a static
+ * cruise pose without it.
  */
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { loadSettings, PlayerSkin } from '../ui/GameStateManager';
+import {
+  StonksCharacter, STANDING_DROP,
+  type CharacterMotion, type CharacterPose, type CharacterSkin,
+} from './StonksCharacter';
 
-export type AnimationName = 
+export type AnimationName =
   | 'idle'        // Sitting idle (dozing)
   | 'push'        // Step forward and push
   | 'standtosit'  // Transition from standing to sitting
@@ -20,501 +38,180 @@ export type AnimationName =
   | 'slide'       // Slide under chair
   | 'crash';      // Angry throw (crash/fail)
 
-interface LoadedAnimation {
-  clip: THREE.AnimationClip;
-  action: THREE.AnimationAction;
-}
-
-// Per-skin animation mappings (FBX files have different/mislabeled animations)
-// Mapping based on visual inspection of what each clip ACTUALLY shows
-
-// Tony Stonks (player-combined.fbx) - heavily mislabeled from Meshy.ai
-const TONY_STONKS_ANIMATIONS: Record<AnimationName, string[]> = {
-  'idle': ['Breakdance_1990', 'breakdance 1990'],           // Actually shows: sitting idle ✓
-  'rolling': ['Breakdance_1990', 'breakdance 1990'],        // Actually shows: sitting idle ✓
-  'trick': ['Dozing_Elderly', 'dozing elderly'],            // Actually shows: backflip
-  'push': ['Bar_Hang_Idle', 'bar hang idle'],               // Actually shows: crouching/pushing
-  'standtosit': ['Bar_Hang_Idle', 'bar hang idle'],         // Use pushing pose as transition
-  'chairhold': ['slide_light', 'slide light'],              // Actually shows: victory/holding pose
-  'jump': ['Jump_Over_Obstacle', 'jump over obstacle'],     // Shows: parkour jump
-  'roll': ['Parkour_Vault', 'parkour vault'],               // Actually shows: breakdancing
-  'slide': ['Step_Forward_and_Push', 'step forward'],       // Actually shows: parkour push
-  'crash': ['falling_down', 'falling down', 'fall'],        // Correct ✓
+/** Every gameplay animation name resolves to one of the character's procedural poses. */
+const POSE_FOR: Record<AnimationName, CharacterPose> = {
+  idle: 'idle',
+  rolling: 'sit',
+  standtosit: 'sit',
+  push: 'push',
+  chairhold: 'air',
+  jump: 'air',
+  trick: 'trick',
+  roll: 'trick',
+  slide: 'grind',
+  crash: 'crash',
 };
 
-// Stonks Guy (player-stonks.fbx) - 20 animations, HEAVILY MISLABELED
-// Visual inspection results:
-// - Bar_Hang_Idle = sitting idle ← USE FOR IDLE/ROLLING
-// - slide_light = bar hang ← USE FOR CHAIRHOLD
-// - Step_Forward_and_Push = run forward pushing ✓
-// - Dozing_Elderly = victory pose
-// - falling_down = slide under chair
-// - Parkour_Vault_with_Roll = walking
-// - Jump_Over_Obstacle = stand to sit
-// - Backflip = slower stand to sit
-// - Stand_to_Sit_Transition = magic spell / throw chair
-// 
-// Unknown clips to test: Character_output, Look_Back_and_Sit, Cautious_Crouch_Walk,
-// Walking, Parkour_Vault_1, Charged_Spell_Cast_2, Idle_11, Running, Breakdance_1990, victory
-const STONKS_GUY_ANIMATIONS: Record<AnimationName, string[]> = {
-  'idle': ['Bar_Hang_Idle', 'bar hang idle'],                      // Actually shows: sitting idle ✓
-  'rolling': ['Bar_Hang_Idle', 'bar hang idle'],                   // Actually shows: sitting idle ✓
-  'push': ['Step_Forward_and_Push', 'step forward'],               // Correct: run forward pushing ✓
-  'chairhold': ['slide_light', 'slide light'],                     // Actually shows: bar hang
-  'trick': ['Breakdance_1990', 'breakdance'],                      // Try this - might be actual trick
-  'standtosit': ['Look_Back_and_Sit', 'look back'],                // Try this - short transition
-  'jump': ['Parkour_Vault_1', 'parkour vault 1'],                  // Try this - might be jump
-  'roll': ['Running', 'running'],                                   // Try running for roll animation
-  'slide': ['Cautious_Crouch_Walk', 'cautious crouch'],            // Try crouch for slide
-  'crash': ['Character_output', 'character output'],               // Try this - unknown, might be fall
-};
-
-// Get animation mapping for current skin
-function getAnimationMappings(skin: PlayerSkin): Record<AnimationName, string[]> {
-  switch (skin) {
-    case 'stonks_guy':
-      return STONKS_GUY_ANIMATIONS;
-    case 'tony_stonks':
-    default:
-      return TONY_STONKS_ANIMATIONS;
-  }
-}
+/**
+ * Local offsets, in CHAIR space. Game.ts drives the mount state through `setLocalPosition`
+ * using values authored for the old FBX (which had its origin between the feet and was
+ * offset sideways to compensate for the mannequin's off-centre pivot). Rather than make
+ * Game.ts care about the new rig, the two call sites are recognised here and remapped onto
+ * the character's own origin contract (root = seat top, centre, facing -Z).
+ *
+ * The chair group rides 0.70 m above the caster contact patch, and ChairModel tier 1 puts the
+ * seat top 0.56 m above it, so the seated origin is chair-local y = 0.56 - 0.70.
+ */
+const MOUNTED_OFFSET = new THREE.Vector3(0, -0.140, 0.012);
+const STANDING_OFFSET = new THREE.Vector3(0, -0.700 - STANDING_DROP, -1.05);
 
 export class PlayerModel {
-  private model: THREE.Group | null = null;
-  private mixer: THREE.AnimationMixer | null = null;
-  private animations: Map<AnimationName, LoadedAnimation> = new Map();
+  private character: StonksCharacter | null = null;
   private currentAnimation: AnimationName | null = null;
-  private gltfLoader: GLTFLoader;
-  private fbxLoader: FBXLoader;
   private currentSkin: PlayerSkin = 'tony_stonks';
-  
-  constructor() {
-    this.gltfLoader = new GLTFLoader();
-    this.fbxLoader = new FBXLoader();
-  }
-  
-  /**
-   * Get the model filename for a skin
-   */
-  private getSkinFileName(skin: PlayerSkin): string {
-    switch (skin) {
-      case 'stonks_guy':
-        return './models/player-stonks.fbx';
-      case 'tony_stonks':
-      default:
-        return './models/player-combined.fbx';
-    }
-  }
-  
-  /**
-   * Get current skin
-   */
+
+  private localPosition = STANDING_OFFSET.clone();
+  private mounted = false;
+
+  /** Set while a `playOnce` clip is "running", so `play` does not stomp it early. */
+  private oneShotUntil = 0;
+  private oneShotNext: AnimationName | null = null;
+
+  private grinding = false;
+
   getCurrentSkin(): PlayerSkin {
     return this.currentSkin;
   }
-  
-  /**
-   * Change skin (hot-swap)
-   */
-  async changeSkin(skin: PlayerSkin): Promise<void> {
-    if (skin === this.currentSkin && this.model) return;
-    
-    console.log(`Hot-swapping skin to: ${skin}`);
-    
-    // Store parent and local transform
-    const parent = this.model?.parent;
-    const localPos = this.localPosition.clone();
-    
-    // Remove old model from parent and dispose
-    if (this.model && parent) {
-      parent.remove(this.model);
-    }
-    
-    // Clear state completely
-    this.model = null;
-    this.animations.clear();
-    this.mixer = null;
-    this.currentAnimation = null;
-    
-    // Set new skin BEFORE loading
-    this.currentSkin = skin;
-    
-    // Load new model
-    const newModel = await this.loadSkin(skin);
-    
-    // Re-attach to parent
-    if (parent && newModel) {
-      parent.add(newModel);
-    }
-    
-    // Restore position
-    this.setLocalPosition(localPos.x, localPos.y, localPos.z);
-    
-    // Start idle animation
-    this.play('idle');
-    
-    console.log(`Skin changed to: ${skin}, model attached: ${!!parent}`);
-  }
-  
-  /**
-   * Load a specific skin (used by changeSkin and load)
-   */
-  private async loadSkin(skin: PlayerSkin): Promise<THREE.Group> {
-    const skinFile = this.getSkinFileName(skin);
-    console.log(`Loading skin file: ${skinFile}`);
-    
-    let model: THREE.Group | null = null;
-    let animations: THREE.AnimationClip[] = [];
-    let useFBX = false;
-    
-    // Try to load the skin's FBX file
-    try {
-      model = await this.fbxLoader.loadAsync(skinFile);
-      animations = model.animations || [];
-      useFBX = true;
-      console.log(`Successfully loaded FBX: ${skinFile} with ${animations.length} animations`);
-    } catch (fbxError) {
-      console.warn(`FBX not found: ${skinFile}, trying GLB fallbacks...`);
-      
-      // Try default combined FBX
-      try {
-        model = await this.fbxLoader.loadAsync('./models/player-combined.fbx');
-        animations = model.animations || [];
-        useFBX = true;
-        console.log('Loaded default player-combined.fbx');
-      } catch (defaultFbxError) {
-        console.warn('player-combined.fbx not found, trying GLB...');
-        
-        // Fall back to GLB
-        try {
-          const gltf = await this.gltfLoader.loadAsync('./models/player.glb');
-          model = gltf.scene;
-          animations = gltf.animations || [];
-          console.log('Loaded player.glb (GLB fallback)');
-        } catch (glbError) {
-          console.error('Failed to load any player model!', glbError);
-          throw glbError;
-        }
-      }
-    }
-    
-    this.model = model;
-    
-    // Scale and position - FBX needs smaller scale (centimeters vs meters)
-    const scale = useFBX ? 0.006 : 0.6;
-    this.model.scale.set(scale, scale, scale);
-    this.model.position.set(0, 0, 0);
-    
-    // Enable shadows
-    this.model.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-    
-    // Create animation mixer
-    this.mixer = new THREE.AnimationMixer(this.model);
-    
-    // Load animations - use combined if available, otherwise load separately
-    if (animations.length > 0) {
-      console.log(`Loading ${animations.length} animations from combined file`);
-      this.loadAnimationsFromCombined(animations);
-    }
-    
-    // If we don't have enough animations, load from separate files
-    if (this.animations.size < 3) {
-      console.log('Not enough animations from combined file, loading separately...');
-      await this.loadAnimationsSeparately();
-    }
-    
-    console.log(`Skin loaded with ${this.animations.size} animations`);
-    return this.model;
-  }
-  
-  /**
-   * Load the combined player model with all animations
-   */
+
   async load(): Promise<THREE.Group> {
-    // Use settings for initial load
     const settings = loadSettings();
     this.currentSkin = settings.playerSkin;
-    
-    console.log(`Initial load - skin from settings: ${this.currentSkin}`);
-    
-    return this.loadSkin(this.currentSkin);
+    return this.build(this.currentSkin);
   }
-  
-  /**
-   * Load animations from the combined GLB file
-   */
-  private loadAnimationsFromCombined(clips: THREE.AnimationClip[]): void {
-    // Log ALL clips with details so we can identify the correct animations
-    console.log(`=== ALL ${clips.length} ANIMATIONS IN FBX (skin: ${this.currentSkin}) ===`);
-    clips.forEach((clip, i) => {
-      console.log(`  [${i}] "${clip.name}" (${clip.duration.toFixed(2)}s, ${clip.tracks.length} tracks)`);
-    });
-    console.log(`=== END ANIMATION LIST ===`);
-    
-    // Get skin-specific animation mappings
-    const animationMappings = getAnimationMappings(this.currentSkin);
-    
-    // Debug: show what we're looking for
-    console.log(`=== ANIMATION MAPPINGS FOR ${this.currentSkin} ===`);
-    for (const [animName, possibleNames] of Object.entries(animationMappings)) {
-      console.log(`  ${animName}: looking for ${JSON.stringify(possibleNames)}`);
-    }
-    console.log('=== END MAPPINGS ===');
-    
-    // Map each of our animation names to available clips
-    for (const [animName, possibleNames] of Object.entries(animationMappings)) {
-      console.log(`\nSearching for: ${animName}...`);
-      const clip = this.findClip(clips, possibleNames, animName);
-      
-      if (clip) {
-        const action = this.mixer!.clipAction(clip);
-        this.animations.set(animName as AnimationName, { clip, action });
-        console.log(`✓ Mapped animation: ${animName} -> ${clip.name}`);
-      } else {
-        console.warn(`✗ Animation not found in combined file: ${animName} (looked for: ${possibleNames.join(', ')})`);
-      }
-    }
-    
-    // Debug: verify what's actually stored
-    console.log('=== FINAL ANIMATION MAP ===');
-    this.animations.forEach((anim, name) => {
-      console.log(`  ${name} -> "${anim.clip.name}" (${anim.clip.duration.toFixed(2)}s)`);
-    });
+
+  async changeSkin(skin: PlayerSkin): Promise<void> {
+    if (skin === this.currentSkin && this.character) return;
+
+    const parent = this.character?.root.parent ?? null;
+    const pose = this.character?.getPose() ?? 'sit';
+    if (this.character && parent) parent.remove(this.character.root);
+    this.character?.dispose();
+    this.character = null;
+
+    this.currentSkin = skin;
+    const root = this.build(skin);
+    this.character!.setPose(pose);
+    if (parent) parent.add(root);
+    this.applyLocal();
   }
-  
-  /**
-   * Normalize a string for matching (lowercase, underscores to spaces, remove suffixes)
-   */
-  private normalizeForMatch(str: string): string {
-    return str
-      .toLowerCase()
-      .replace(/_/g, ' ')           // underscores to spaces
-      .replace(/\.fbx$/i, '')       // remove .fbx suffix
-      .replace(/\.glb$/i, '')       // remove .glb suffix
-      .replace(/frame rate \d+/i, '') // remove "frame rate 60" etc
-      .replace(/\s+/g, ' ')         // collapse multiple spaces
-      .trim();
+
+  private build(skin: PlayerSkin): THREE.Group {
+    this.character = new StonksCharacter(skin as CharacterSkin);
+    this.character.setPose(this.mounted ? 'sit' : 'stand');
+    this.applyLocal();
+    return this.character.root;
   }
-  
-  /**
-   * Find a clip by checking multiple possible names
-   * Priority: exact raw match > exact normalized > prefix > contains
-   */
-  private findClip(clips: THREE.AnimationClip[], possibleNames: string[], debugName?: string): THREE.AnimationClip | null {
-    // First pass: exact raw match (case-insensitive, with or without .fbx)
-    for (const name of possibleNames) {
-      const nameLower = name.toLowerCase();
-      for (const clip of clips) {
-        const clipLower = clip.name.toLowerCase();
-        const clipNoExt = clipLower.replace(/\.fbx$/i, '');
-        if (clipLower === nameLower || clipNoExt === nameLower) {
-          if (debugName) console.log(`  [${debugName}] EXACT MATCH: "${name}" -> "${clip.name}"`);
-          return clip;
-        }
-      }
-    }
-    
-    // Second pass: exact matches (normalized)
-    for (const name of possibleNames) {
-      const nameNorm = this.normalizeForMatch(name);
-      for (const clip of clips) {
-        const clipNorm = this.normalizeForMatch(clip.name);
-        if (clipNorm === nameNorm) {
-          if (debugName) console.log(`  [${debugName}] NORMALIZED EXACT: "${nameNorm}" -> "${clip.name}"`);
-          return clip;
-        }
-      }
-    }
-    
-    // Third pass: clip name starts with our target name (normalized)
-    for (const name of possibleNames) {
-      const nameNorm = this.normalizeForMatch(name);
-      for (const clip of clips) {
-        const clipNorm = this.normalizeForMatch(clip.name);
-        if (clipNorm.startsWith(nameNorm)) {
-          if (debugName) console.log(`  [${debugName}] PREFIX MATCH: "${nameNorm}" -> "${clip.name}" (clip: "${clipNorm}")`);
-          return clip;
-        }
-      }
-    }
-    
-    // Fourth pass: our target name is contained in clip name (normalized)
-    for (const name of possibleNames) {
-      const nameNorm = this.normalizeForMatch(name);
-      for (const clip of clips) {
-        const clipNorm = this.normalizeForMatch(clip.name);
-        if (clipNorm.includes(nameNorm)) {
-          if (debugName) console.log(`  [${debugName}] CONTAINS MATCH: "${nameNorm}" in "${clip.name}" (clip: "${clipNorm}")`);
-          return clip;
-        }
-      }
-    }
-    
-    if (debugName) console.log(`  [${debugName}] NO MATCH FOUND`);
-    return null;
-  }
-  
-  /**
-   * Fallback: Load animations from separate files
-   */
-  private async loadAnimationsSeparately(): Promise<void> {
-    const animationFiles: { name: AnimationName; file: string }[] = [
-      { name: 'idle', file: './models/anim-sit-idle.glb' },
-      { name: 'push', file: './models/anim-push.glb' },
-      { name: 'standtosit', file: './models/anim-standtosit.glb' },
-      { name: 'rolling', file: './models/anim-rolling.glb' },
-      { name: 'chairhold', file: './models/anim-chairhold.glb' },
-      { name: 'trick', file: './models/anim-trick.glb' },
-      { name: 'jump', file: './models/anim-jump.glb' },
-      { name: 'roll', file: './models/anim-roll.glb' },
-      { name: 'slide', file: './models/anim-slide.glb' },
-      { name: 'crash', file: './models/anim-crash.glb' },
-    ];
-    
-    for (const anim of animationFiles) {
-      try {
-        const gltf = await this.gltfLoader.loadAsync(anim.file);
-        if (gltf.animations.length > 0) {
-          const clip = gltf.animations[0];
-          clip.name = anim.name;
-          
-          const action = this.mixer!.clipAction(clip);
-          this.animations.set(anim.name, { clip, action });
-          
-          console.log(`Loaded animation: ${anim.name}`);
-        }
-      } catch (error) {
-        console.warn(`Failed to load animation ${anim.name}:`, error);
-      }
-    }
-  }
-  
-  /**
-   * Play an animation (with fallback to idle if not found)
-   */
+
+  // -------------------------------------------------------------------------
+  // Pose control
+  // -------------------------------------------------------------------------
+
   play(name: AnimationName, options?: { loop?: boolean; fadeTime?: number }): void {
-    let anim = this.animations.get(name);
-    
-    // Fallback to idle if animation not found
-    if (!anim) {
-      console.warn(`Animation not found: ${name}, falling back to idle`);
-      if (name !== 'idle') {
-        anim = this.animations.get('idle');
-      }
-      if (!anim) {
-        console.warn('No animations available');
-        return;
-      }
-    }
-    
-    // Debug: log which clip is being played
-    console.log(`▶️ Playing "${name}" -> clip: "${anim.clip.name}" (duration: ${anim.clip.duration.toFixed(2)}s, tracks: ${anim.clip.tracks.length})`);
-    
-    // Don't restart same animation
-    if (this.currentAnimation === name && anim.action.isRunning()) {
-      return;
-    }
-    
-    const fadeTime = options?.fadeTime ?? 0.3;
+    if (!this.character) return;
     const loop = options?.loop ?? true;
-    
-    // Configure the action
-    anim.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
-    anim.action.clampWhenFinished = !loop;
-    
-    // Fade out current animation
-    if (this.currentAnimation && this.currentAnimation !== name) {
-      const current = this.animations.get(this.currentAnimation);
-      if (current) {
-        current.action.fadeOut(fadeTime);
-      }
-    }
-    
-    // Fade in new animation
-    anim.action.reset();
-    anim.action.fadeIn(fadeTime);
-    anim.action.play();
-    
+    const now = performance.now();
+
+    // A non-looping request behaves like the old `LoopOnce + clampWhenFinished`: it holds for
+    // a beat and then releases back to whatever the game asks for next.
+    if (!loop) this.oneShotUntil = now + 520;
+    else if (now < this.oneShotUntil && this.currentAnimation !== name) return;
+
+    if (this.currentAnimation === name) return;
     this.currentAnimation = name;
+    this.character.setPose(this.resolvePose(name));
   }
-  
-  /**
-   * Play animation once and then transition to another
-   */
+
   playOnce(name: AnimationName, thenPlay: AnimationName): void {
-    const anim = this.animations.get(name);
-    if (!anim) {
-      // If animation doesn't exist, just play the fallback
-      this.play(thenPlay);
-      return;
-    }
-    
+    this.oneShotNext = thenPlay;
     this.play(name, { loop: false });
-    
-    // Set up listener for when animation finishes
-    const onFinish = () => {
-      this.mixer?.removeEventListener('finished', onFinish);
-      this.play(thenPlay);
-    };
-    this.mixer?.addEventListener('finished', onFinish);
   }
-  
-  // Store the intended local position
-  private localPosition = new THREE.Vector3(-0.2, -0.1, 0);
-  
-  /**
-   * Set the local position offset for the model
-   */
-  setLocalPosition(x: number, y: number, z: number): void {
-    this.localPosition.set(x, y, z);
+
+  private resolvePose(name: AnimationName): CharacterPose {
+    const pose = POSE_FOR[name] ?? 'sit';
+    // Grinding overrides the cruise pose: the braced, knees-together, arms-locked shape is
+    // what makes a grind readable, and the gameplay layer never asks for it by name.
+    if (this.grinding && (pose === 'sit' || pose === 'idle')) return 'grind';
+    if (!this.mounted && (pose === 'sit' || pose === 'idle')) return 'stand';
+    return pose;
   }
-  
+
   /**
-   * Update animation mixer
+   * Feed the rig the frame's motion state. Optional — call it from the game loop to get the
+   * speed lean, turn roll, gait bob, tie flutter and grind bracing.
    */
-  update(deltaTime: number): void {
-    if (this.mixer) {
-      this.mixer.update(deltaTime);
+  setMotion(motion: Partial<CharacterMotion>): void {
+    if (motion.grinding !== undefined && motion.grinding !== this.grinding) {
+      this.grinding = motion.grinding;
+      if (this.currentAnimation) this.character?.setPose(this.resolvePose(this.currentAnimation));
     }
-    
-    // Reset position and rotation after animation update to prevent root motion drift
-    if (this.model) {
-      this.model.position.copy(this.localPosition);
-      this.model.rotation.set(0, 0, 0);  // Keep facing forward
+    this.character?.setMotion(motion);
+  }
+
+  // -------------------------------------------------------------------------
+  // Placement
+  // -------------------------------------------------------------------------
+
+  setLocalPosition(_x: number, _y: number, z: number): void {
+    // Game.ts only ever asks for two placements: seated on the chair, or standing 1.2 m behind
+    // it. Anything close to the chair's own centre line is the seated case.
+    this.mounted = Math.abs(z) < 0.6;
+    this.localPosition.copy(this.mounted ? MOUNTED_OFFSET : STANDING_OFFSET);
+    this.applyLocal();
+    if (this.character && this.currentAnimation) {
+      this.character.setPose(this.resolvePose(this.currentAnimation));
     }
   }
-  
-  /**
-   * Get the model group
-   */
+
+  private applyLocal(): void {
+    if (!this.character) return;
+    this.character.root.position.copy(this.localPosition);
+  }
+
+  update(deltaTime: number, motion?: Partial<CharacterMotion>): void {
+    if (!this.character) return;
+    if (motion) this.setMotion(motion);
+
+    if (this.oneShotNext && performance.now() >= this.oneShotUntil) {
+      const next = this.oneShotNext;
+      this.oneShotNext = null;
+      this.play(next);
+    }
+
+    this.character.update(deltaTime);
+    // The rig owns its own transform; Game.ts writes the chair transform and nothing else.
+    this.character.root.position.copy(this.localPosition);
+    this.character.root.rotation.set(0, 0, 0);
+  }
+
   getModel(): THREE.Group | null {
-    return this.model;
+    return this.character?.root ?? null;
   }
-  
-  /**
-   * Get current animation name
-   */
+
   getCurrentAnimation(): AnimationName | null {
     return this.currentAnimation;
   }
-  
-  /**
-   * Check if an animation is playing
-   */
+
   isPlaying(name: AnimationName): boolean {
     return this.currentAnimation === name;
   }
-  
-  /**
-   * Check if a specific animation was loaded
-   */
-  hasAnimation(name: AnimationName): boolean {
-    return this.animations.has(name);
+
+  hasAnimation(_name: AnimationName): boolean {
+    // Every name maps to a procedural pose, so they all exist by construction.
+    return true;
+  }
+
+  dispose(): void {
+    this.character?.dispose();
+    this.character = null;
   }
 }
