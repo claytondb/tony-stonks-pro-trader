@@ -1954,7 +1954,7 @@ export class Game {
         const width = (data.params?.width as number) || 6;
         const depth = (data.params?.depth as number) || 4;
         const height = (data.params?.height as number) || 0.8;
-        mesh = this.createFunBoxMesh(concreteMaterial, railMaterial, width, depth, height);
+        mesh = this.createFunBoxMesh(MaterialLibrary.get('deskLaminate', { repeat: [2.4, 1.4] }), railMaterial, width, depth, height);
         this.physics.createStaticBox(
           new THREE.Vector3(data.position[0], height / 2, data.position[2]),
           new THREE.Vector3(width / 2, height / 2, depth / 2)

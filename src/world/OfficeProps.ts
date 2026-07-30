@@ -409,14 +409,12 @@ const MAT = {
   pedestal: PAINT(0xb4b9bf, 0.52),
   panelFabric: ['cubicleFabric', undefined] as [MaterialId, MaterialOptions | undefined],
   /**
-   * THE GRIND SURFACE. Deliberately overridden rather than left on the library default:
-   * this cap rail is the primary skate line in the whole level and it has to separate in
-   * VALUE and in SPECULAR from the fabric below it and the desks behind it, or the player
-   * cannot read where the line is. Warm off-white + semi-gloss laminate.
+   * THE GRIND SURFACE — the primary skate line in the level. Left on the library default on
+   * purpose: `cubicleTrim` binds a dedicated `grindCap` surface whose map already carries the
+   * caster-polished stripe down the centre of V, at roughness ~0.14 against ~0.52 shoulders.
+   * Authoring that stripe as geometry here as well would double it and fight the UVs.
    */
-  panelCap: ['cubicleTrim', { color: 0xefe8d8, roughness: 0.26 }] as [MaterialId, MaterialOptions],
-  /** The scuffed strip the casters have polished along the centre of every cap rail. */
-  capWear: ['cubicleTrim', { color: 0x9fa4a8, roughness: 0.14 }] as [MaterialId, MaterialOptions],
+  panelCap: ['cubicleTrim', undefined] as [MaterialId, MaterialOptions | undefined],
   plastic: ['darkPlastic', undefined] as [MaterialId, MaterialOptions | undefined],
   plasticLight: ['darkPlastic', { color: 0xb9c0c8 }] as [MaterialId, MaterialOptions],
   metal: ['brushedMetal', undefined] as [MaterialId, MaterialOptions | undefined],
@@ -456,14 +454,21 @@ const ACCENT_BODIES: readonly MatRef[] = [
   MAT.accentNavy,
 ];
 
-/** Cool-slate cubicle fabric variants. Applied per POD, never per panel — see makeCubiclePod. */
+/**
+ * Per-POD fabric variation (never per panel — a pod is a unit, and mixing panel colours
+ * inside one pod reads as an error rather than as variety).
+ *
+ * These are TINTS OVER AN ALREADY-COOL MAP: MaterialLibrary's cubicleFabric surface is
+ * authored as a genuine blue-slate weave, so the job here is to vary VALUE and WARMTH, not to
+ * add more blue. Tinting cool over cool is what turns a slate office into a denim one.
+ */
 export const POD_FABRIC_TINTS: readonly number[] = [
-  0xb9c2cd, // the house slate
-  0xb9c2cd,
-  0xb9c2cd,
-  0x8fa6bd, // deeper cool
-  0x6f9aa2, // teal
-  0xb9846a, // rust
+  0xafaeac, // the house slate — matches the library default exactly
+  0xafaeac,
+  0xafaeac,
+  0x8e8d8b, // a darker, older run
+  0x9fb3a6, // the green-grey panels somebody ordered by mistake in 1998
+  0xc3ab8e, // the warm beige run — the value break that stops the field reading as one wall
 ];
 
 type MatRef = readonly [MaterialId, MaterialOptions | undefined];
@@ -473,7 +478,7 @@ function mat(ref: MatRef): THREE.MeshStandardMaterial {
 }
 
 /** Screen tints seen in the refs: cool blue, terminal green, and a warm amber spreadsheet. */
-const SCREEN_TINTS: readonly number[] = [0x4f9ee8, 0x3fcf78, 0xf0a02a, 0x7f6bf0];
+const SCREEN_TINTS: readonly number[] = [0x4f9ee8, 0x3fcf78, 0xf0a02a, 0x54c6d8];
 const STICKY_TINTS: readonly number[] = [0xffd34d, 0xff9a52, 0x7fd4f0, 0xf28fb0, 0xbfe986];
 
 // ---------------------------------------------------------------------------
@@ -782,8 +787,6 @@ export interface CubicleWallOptions extends PropOptions {
   height?: number;
   /** Per-pod fabric tint (see POD_FABRIC_TINTS). Applied to the fabric only, never the cap. */
   fabricTint?: number;
-  /** Author the polished caster-wear strip along the cap. On for hero/aisle runs only. */
-  wear?: boolean;
 }
 
 export function makeCubicleWall(lengthMetres: number, o?: CubicleWallOptions): THREE.Group {
@@ -808,17 +811,6 @@ export function makeCubicleWall(lengthMetres: number, o?: CubicleWallOptions): T
       pos: [0, wallH + CUBE_CAP_H / 2, 0],
     }),
   );
-
-  // Caster-polished wear strip down the centre of the cap. Free storytelling and, more to
-  // the point, a bright specular line that tells the player at a glance where the rail is.
-  if (o?.wear) {
-    ctx.root.add(
-      mesh(sbox(L - 0.04, 0.006, 0.048), MAT.capWear, {
-        pos: [0, wallH + CUBE_CAP_H + 0.001, 0],
-        cast: false,
-      }),
-    );
-  }
 
   if (ctx.variant === 0) {
     // End posts + feet: what stops the wall reading as a floating slab.
@@ -1506,7 +1498,7 @@ export function makeScatterPaper(
   // Tinted DOWN from the library's near-white. A sheet of copier paper on a mid-brown carpet
   // under a 3.6-intensity key clips to 255 white and out-reads the ceiling troffers; this
   // lands it a stop and a half below the cap rails, which is where paper belongs.
-  const paperMat = MaterialLibrary.get('paper', { color: 0xd2cdbf, roughness: 0.95 });
+  const paperMat = MaterialLibrary.get('paper', { color: 0xc7c1b1, roughness: 0.95 });
   const im = new THREE.InstancedMesh(geo, paperMat, Math.max(1, n));
   im.name = 'scatterPaper';
   // A sheet with a visible contact shadow stops reading as a decal. This is the single
@@ -1586,8 +1578,6 @@ export interface CubiclePodOptions extends PropOptions {
   panelHeight?: number;
   /** Per-pod cool-slate / teal / rust tint. See POD_FABRIC_TINTS. */
   fabricTint?: number;
-  /** Author the caster-wear stripe on this pod's cap rails (aisle-facing pods only). */
-  wear?: boolean;
   /** This pod has been cleared out: panels and boxes, no desks. ~1-in-20 in the real world. */
   cleared?: boolean;
 }
@@ -1624,7 +1614,6 @@ export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
       merge: false,
       height: panelH,
       fabricTint: o?.fabricTint,
-      wear: o?.wear,
     });
     wall.position.set(w.pos[0], w.pos[1], w.pos[2]);
     wall.rotation.y = w.rotY;

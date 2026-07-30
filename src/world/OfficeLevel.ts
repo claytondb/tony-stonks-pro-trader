@@ -443,8 +443,6 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
         variant: 1,
         seed: 900 + Math.round(x0 * 7 + z0 * 13 + i * 3),
         height,
-        fabricTint: POD_FABRIC_TINTS[0],
-        wear: true,
       });
       // grind:false — the run registers its own single rail below.
       place(acc, wall, x0 + dx * t, 0, z0 + dz * t, yaw, { collide: true, grind: false });
@@ -478,10 +476,10 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       acc.wear.push({
         x: sx * (SPINE_HALF - 1.2),
         z: sz * (CROSS_HALF - 1.2),
-        width: 3.0,
-        depth: 3.0,
+        width: 2.4,
+        depth: 2.4,
         rotation: rand(0, 3.14),
-        strength: 0.85,
+        strength: 0.5,
       });
     }
   }
@@ -561,7 +559,6 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
             // line stays legible; everything deeper mixes.
             panelHeight: ci === 0 ? 1.32 : pick(PANEL_HEIGHTS),
             fabricTint: pick(POD_FABRIC_TINTS),
-            wear: ci === 0,
             cleared,
           });
           podIndex++;
@@ -596,7 +593,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   place(acc, makeTrashCan({ variant: 0, seed: 711, accent: true }), crossEndX + 0.9, 0, 2.3, 0, { collide: true });
   place(acc, makeCardboardBox({ variant: 0, seed: 713 }), crossEndX + 0.7, 0, -2.4, 0.4, { collide: true });
   acc.paperSeeds.push({ x: crossEndX - 0.6, z: 0, radius: 1.6 });
-  acc.wear.push({ x: crossEndX - 1.2, z: 0, width: 4.5, depth: 3.4, strength: 0.9 });
+  acc.wear.push({ x: crossEndX - 1.2, z: 0, width: 3.6, depth: 2.8, strength: 0.55 });
 
   for (const vz of [-1.1, 1.1]) {
     place(acc, makeVendingMachine({ seed: 720 + Math.round(vz * 10) }), -crossEndX - 0.9, 0, vz, Math.PI / 2, {
@@ -605,7 +602,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     });
   }
   place(acc, makeFireExtinguisher({ seed: 731 }), -crossEndX - 0.9, 0, 2.6, 0, { collide: true });
-  acc.wear.push({ x: -crossEndX + 1.0, z: 0, width: 3.6, depth: 3.0, strength: 0.75 });
+  acc.wear.push({ x: -crossEndX + 1.0, z: 0, width: 3.0, depth: 2.6, strength: 0.45 });
 
   // ------------------------------------------------------- skate furniture ---
   // Paired kickers with a landing gap in each arm of the cross corridor. A wide shot has to
@@ -622,7 +619,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     const ramp = makeKickerRamp({ width: 2.9, depth: 1.7, height: 0.72, seed: Math.round(k.x * 7) });
     place(acc, ramp, k.x, 0, k.z, k.rotY, { collide: true, grind: true });
     acc.paperSeeds.push({ x: k.x, z: k.z - 1.6, radius: 1.0 });
-    acc.wear.push({ x: k.x, z: k.z - 1.4, width: 2.6, depth: 2.2, strength: 0.95 });
+    acc.wear.push({ x: k.x, z: k.z - 1.4, width: 2.2, depth: 1.9, strength: 0.6 });
   }
 
   // Aisle clutter so the spine itself isn't a bare carpet strip: boxes, bins
@@ -728,16 +725,16 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // Loose paperwork, CLUSTERED. 220 sheets scattered uniformly across the whole plate with
   // no contact shadow was the loudest cheapness tell in the build: it read as a broken decal
   // system, not as blown paperwork. Paper piles where it was dropped.
-  const paper = makeScatterPaper(88, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
+  const paper = makeScatterPaper(74, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
   place(acc, paper, 0, 0, 0, 0, { collide: false });
 
   // Traffic-lane wear down both corridors plus the point stains collected above.
   for (let z = -halfD + 5; z < halfD - 5; z += 5.4) {
-    acc.wear.push({ x: rand(-1.6, 1.6), z, width: 4.6, depth: 5.6, rotation: rand(0, 3.14), strength: 0.42 });
+    acc.wear.push({ x: rand(-1.8, 1.8), z, width: 3.4, depth: 4.2, rotation: rand(0, 3.14), strength: 0.22 });
   }
   for (let x = -halfW + 5; x < halfW - 5; x += 5.6) {
     if (Math.abs(x) < SPINE_HALF) continue;
-    acc.wear.push({ x, z: rand(-1.6, 1.6), width: 5.6, depth: 4.6, rotation: rand(0, 3.14), strength: 0.38 });
+    acc.wear.push({ x, z: rand(-1.8, 1.8), width: 4.2, depth: 3.4, rotation: rand(0, 3.14), strength: 0.20 });
   }
   for (let i = 0; i < 22; i++) {
     acc.wear.push({
@@ -746,7 +743,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       width: rand(0.5, 1.5),
       depth: rand(0.5, 1.5),
       rotation: rand(0, 3.14),
-      strength: rand(0.55, 1.0),
+      strength: rand(0.4, 0.8),
     });
   }
   const wearBatch = makeFloorWear(acc.wear);
