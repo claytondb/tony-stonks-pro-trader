@@ -54,3 +54,4 @@ shots/
 refs/
 *.local.*
 dist-fx/
+.fxtools/
