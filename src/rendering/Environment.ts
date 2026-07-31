@@ -183,7 +183,7 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     // ambient 0.08 -> 0.03). Same mid-tone placement, but now the mid tone is
     // carried by the KEY instead of by a uniform ambient wash, so the unlit side
     // of every form actually falls away.
-    exposure: 0.95,
+    exposure: 1.28,
     // The single biggest flattener in the old rig. A room IBL is a near-uniform
     // dome: every unit of envIntensity fills the shadow side of every object and
     // narrows the frame's tonal range. Dropping it and pushing the key up buys the
@@ -204,20 +204,20 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
       // grid, a vertical one catches cool bounce off the tile and the walls. It is
       // not physically what a 5000K troffer does; it is what the concept art does,
       // and the concept art is the target.
-      ceiling: 0xc9d6e8,
-      ceilingEnergy: 0.24,
-      panel: 0xfff0d4, // warm troffer — drives the amber highlight pools
-      panelEnergy: 7.0,
+      ceiling: 0xc4d3e8,
+      ceilingEnergy: 0.3,
+      panel: 0xfff3e2, // warm troffer — drives the amber highlight pools
+      panelEnergy: 4.6,
       panelCols: 8,
       panelRows: 4,
       panelW: 0.3,
       panelH: 0.26,
       // Cool slate walls at a third of the old energy. The old 0xbdb8ae @ 0.30 was
       // literally painting beige ambient onto every vertical surface in the level.
-      wall: 0x7d8798,
-      wallEnergy: 0.115,
-      floor: 0x6a5e50, // warm carpet, but barely any bounce energy
-      floorEnergy: 0.07,
+      wall: 0x77839a,
+      wallEnergy: 0.145,
+      floor: 0x5d5750, // warm carpet, but barely any bounce energy
+      floorEnergy: 0.06,
     },
     // 41 degrees off the horizontal, NOT the old near-vertical 73. A 1.4 m cubicle
     // wall now lays a 1.6 m shadow band across the aisle, which is the whole reason
@@ -226,18 +226,18 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     // Warm (0xffeed2) and much stronger. Warm key + cool fill + cool IBL is the
     // separation; doing it in the lights rather than only in the grade means the
     // hue split survives into the material response and the specular highlights.
-    sun: { color: 0xffeed2, intensity: 5.2, dir: [0.62, 0.72, 0.34] },
+    sun: { color: 0xfff2e0, intensity: 4.6, dir: [0.62, 0.72, 0.34] },
     // Saturated, not pastel: 0x9fbcf0 at 0.85 was a bright wash that filled the
     // shadow side back in. A deeper blue at 0.5 tints the shadow instead of lifting it.
-    fill: { color: 0x5f8ee0, intensity: 0.5, dir: [-0.65, 0.42, -0.75] },
+    fill: { color: 0x5f8ee0, intensity: 0.55, dir: [-0.65, 0.42, -0.75] },
     // Up-facing carpet bounce. Kept low: in a real floorplate the ceiling is a
     // huge surface, and anything above ~0.25 here paints the whole ceiling amber.
-    bounce: { color: 0xffb673, intensity: 0.1, dir: [0.1, -1.0, -0.25] },
+    bounce: { color: 0xffc79a, intensity: 0.06, dir: [0.1, -1.0, -0.25] },
     // Cool back rim so the near-black chair and the hero's shirt separate from the
     // mid-tone carpet at follow-camera distance. Pushed hard — with the ambient gone
     // the rim is now the ONLY thing drawing the hero's silhouette.
     rim: { color: 0x9ec6ff, intensity: 1.9, yaw: 152, pitch: 26 },
-    hemi: { sky: 0xa8c2e6, ground: 0x453d33, intensity: 0.12 },
+    hemi: { sky: 0xa8c2e6, ground: 0x3b4250, intensity: 0.14 },
     ambient: { color: 0x5c6c88, intensity: 0.03 },
     shadow: SHADOW_INDOOR,
     // Aerial perspective, rewritten. The old 0x7d786e / 13 / 56 pair fully saturated
@@ -248,7 +248,7 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     fog: { kind: 'linear', color: 0x475467, near: 24, far: 110 },
     // Deliberately DARKER than the fog. Any hole in the room shell now reads as a
     // deep-black void, which is a value the frame otherwise never reaches.
-    background: 0x1e242e,
+    background: 0x2f343c,
     clouds: 0,
   },
 

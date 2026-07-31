@@ -47,13 +47,16 @@ import {
   makeCorkBoard,
   makeCubiclePod,
   makeCubicleWall,
+  makeDeskChair,
   makeExitSign,
   makeFilingCabinet,
   makeFireExtinguisher,
   makeFluorescentPanel,
   makeKickerRamp,
+  makeLedgeBlock,
   makeManagerOffice,
   makePendantLamp,
+  makePlanterLedge,
   makePottedPlant,
   makePrinter,
   makeScatterPaper,
@@ -277,9 +280,23 @@ const WALL_SEG = 5.7;      // corridor-wall panel length
 // Main builder
 // ---------------------------------------------------------------------------
 
+/**
+ * Hard cap on the floorplate. The panel's note on the previous build was "a grey-beige archviz
+ * walkthrough of an EMPTY cubicle farm" — and the largest single contributor to that read was
+ * simply that the room is bigger than the level that has been designed into it. A 50 m plate
+ * puts 12 m of bare carpet between the outermost pod column and the wall, which no amount of
+ * dressing fixes because there is nothing out there to dress.
+ *
+ * 46 m keeps every level-data object (the funbox at z = -18, the stairs at z = 20, bounds at
+ * ±24) comfortably inside, while cutting the floor area by 15% and — because the pod pitch is
+ * unchanged — pushing the perimeter dressing up against the outer pod column where the camera
+ * can actually see it.
+ */
+const MAX_PLATE = 46;
+
 export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInterior {
-  const W = opts.width ?? 68;
-  const D = opts.depth ?? 68;
+  const W = Math.min(opts.width ?? 68, MAX_PLATE);
+  const D = Math.min(opts.depth ?? 68, MAX_PLATE);
   const H = opts.height ?? 3.25;
   const halfW = W / 2;
   const halfD = D / 2;
@@ -339,8 +356,23 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     ],
   });
 
-  // Walls: inward-facing planes (the camera is always inside) + a skirting board.
-  const wallMat = MaterialLibrary.get('drywall', { repeat: [W / 4, H / 2.6] });
+  // ------------------------------------------------------------- walls -----
+  // A THREE-BAND WALL, not one flat plane of drywall.
+  //
+  // "Grey-beige archviz" was the panel's word for it, and the wall was the biggest grey-beige
+  // surface in the frame after the carpet. Commercial interiors are banded — skirting, a
+  // saturated dado, a rail, painted plaster above — and that banding is free art direction:
+  // it puts a horizon line behind the cubicle field at a different height from the cap rails,
+  // it supplies the saturated navy the concept art gets its identity from, and it gives the
+  // room a dark value at floor level so the carpet is no longer the darkest thing in shot.
+  //
+  // The bands are pushed through `place()` into the merged static batch, so the whole wall
+  // assembly — 4 planes, 4 dados, 4 rails, 4 skirtings — costs three draw calls, not sixteen.
+  const DADO_H = 1.15;
+  const RAIL_H = 0.085;
+  const wallMat = MaterialLibrary.get('drywall', { repeat: [W / 4, H / 2.6], color: 0xd6cfc2 });
+  const dadoMat = MaterialLibrary.get('drywall', { repeat: [W / 3, 1], color: 0x33405c });
+  const railMat = MaterialLibrary.get('deskLaminate', { repeat: [W / 2, 1], color: 0xc9a877 });
   const skirtMat = MaterialLibrary.get('cubicleTrim', { repeat: [W / 2, 1] });
   const wallSpecs: { w: number; x: number; z: number; rotY: number }[] = [
     { w: W, x: 0, z: -halfD, rotY: 0 },            // faces +Z
@@ -349,27 +381,35 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     { w: D, x: halfW, z: 0, rotY: -Math.PI / 2 },  // faces -X
   ];
   for (const spec of wallSpecs) {
-    const wall = new THREE.Mesh(plane(spec.w, H), wallMat);
-    wall.position.set(spec.x, H / 2, spec.z);
-    wall.rotation.y = spec.rotY;
-    wall.receiveShadow = true;
-    wall.castShadow = false;
-    root.add(wall);
-
-    const skirt = new THREE.Mesh(box(spec.w, 0.14, 0.06), skirtMat);
-    skirt.position.set(
-      spec.x + Math.sin(spec.rotY) * 0.03,
-      0.07,
-      spec.z + Math.cos(spec.rotY) * 0.03,
-    );
-    skirt.rotation.y = spec.rotY;
-    skirt.receiveShadow = true;
-    skirt.castShadow = false;
-    root.add(skirt);
-
-    // Solid wall collider just inside the visible plane.
     const nx = Math.sin(spec.rotY);
     const nz = Math.cos(spec.rotY);
+    const inX = spec.x + nx * 0.0;
+    const inZ = spec.z + nz * 0.0;
+
+    // Painted plaster above the rail.
+    const upper = new THREE.Mesh(plane(spec.w, H - DADO_H - RAIL_H), wallMat);
+    upper.receiveShadow = true;
+    upper.castShadow = false;
+    place(acc, upper, inX, (H + DADO_H + RAIL_H) / 2, inZ, spec.rotY, { collide: false });
+
+    // Saturated dado. Proud of the plaster by 25 mm so the rail throws a real shadow line.
+    const dado = new THREE.Mesh(box(spec.w, DADO_H, 0.05), dadoMat);
+    dado.receiveShadow = true;
+    dado.castShadow = false;
+    place(acc, dado, inX + nx * 0.025, DADO_H / 2, inZ + nz * 0.025, spec.rotY, { collide: false });
+
+    // Timber chair rail — the warm note, and the horizon the cubicle skyline reads against.
+    const rail = new THREE.Mesh(box(spec.w, RAIL_H, 0.085), railMat);
+    rail.receiveShadow = true;
+    rail.castShadow = true;
+    place(acc, rail, inX + nx * 0.042, DADO_H + RAIL_H / 2, inZ + nz * 0.042, spec.rotY, { collide: false });
+
+    const skirt = new THREE.Mesh(box(spec.w, 0.14, 0.075), skirtMat);
+    skirt.receiveShadow = true;
+    skirt.castShadow = false;
+    place(acc, skirt, inX + nx * 0.038, 0.07, inZ + nz * 0.038, spec.rotY, { collide: false });
+
+    // Solid wall collider just inside the visible plane.
     acc.colliders.push({
       position: new THREE.Vector3(spec.x - nx * 0.3, H / 2 + 1.0, spec.z - nz * 0.3),
       halfExtents: new THREE.Vector3(spec.w / 2, H / 2 + 1.0, 0.3),
@@ -401,9 +441,9 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     // aerial perspective instead of like a hole in the world. Far under the bloom threshold.
     MaterialLibrary.get('drywall', {
       repeat: [6, 3],
-      color: 0xcfc9bd,
-      emissive: 0x8a8479,
-      emissiveIntensity: 0.55,
+      color: 0xb3ad9f,
+      emissive: 0x6f6a60,
+      emissiveIntensity: 0.5,
     }),
   );
   shell.material.side = THREE.BackSide;
@@ -412,6 +452,27 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   shell.castShadow = false;
   shell.receiveShadow = false;
   root.add(shell);
+
+  // -------------------------------------------------------- upper wall band ---
+  // The far wall used to terminate at the ceiling line and hand straight over to the shell,
+  // which is the "flat void" the panel called out: two flat beiges meeting on a hard horizon
+  // with nothing in between.
+  //
+  // The fix is a dark parapet band above the ceiling line. It gives the wall/shell junction a
+  // VALUE step and a real edge instead of a tonal seam, and — because it is the darkest thing
+  // in the upper third — it frames the floorplate the way the concept art frames its scenes
+  // with deep shadow at the top of the composition.
+  //
+  // Deliberately NOT modelled as beams and ductwork: everything above the ceiling plane is
+  // between the cutaway camera and the floor, so overhead structure does not add depth to the
+  // establishing shot, it stripes it out. A vertical band at the perimeter never occludes.
+  const parapetMat = MaterialLibrary.get('drywall', { repeat: [W / 5, 1], color: 0x5a5348 });
+  for (const spec of wallSpecs) {
+    const band = new THREE.Mesh(plane(spec.w, 1.9), parapetMat);
+    band.castShadow = false;
+    band.receiveShadow = false;
+    place(acc, band, spec.x, H + 0.9, spec.z, spec.rotY, { collide: false });
+  }
 
   // -------------------------------------------------------------- ceiling ---
   const ceiling = makeCeilingTileGrid(W, D);
@@ -588,24 +649,70 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
 
           // Detail falls off with distance from the corridor, not from the origin:
           // the column the player skates past is always hero detail.
-          const variant = ci === 0 ? 0 : ci === 1 ? 1 : 2;
-          const cleared = ci > 0 && chance(0.09);
+          //
+          // The OUTER column used to drop to variant 2 — panels plus four featureless slabs —
+          // and from any establishing camera that column is a third of the floorplate reading
+          // as empty navy boxes. Triangles are not the constraint here (draw calls are, and
+          // the whole field is one merge), so the outer column now gets real desks, monitors
+          // and chairs; only its collider and grind sets stay cheap.
+          const variant = ci === 0 ? 0 : 1;
+          const cleared = ci > 0 && chance(0.12);
+
+          // ---- PER-POD CHARACTER ------------------------------------------
+          // The floorplate used to roll the same dressing distribution for every pod, which is
+          // the mathematically reliable way to make thirty pods look like one pod stamped
+          // thirty times. Instead, give each pod ONE personality roll and let it drive
+          // everything downstream. The distribution is deliberately barbelled — a real office
+          // has genuinely pristine desks and genuinely feral ones, and very few average ones,
+          // and it is the CONTRAST between neighbours that reads as authorship.
+          const roll = rng();
+          const mess =
+            roll < 0.22 ? rand(0.0, 0.18)   // the tidy desk nobody uses
+              : roll < 0.55 ? rand(0.3, 0.55) // normal
+                : roll < 0.85 ? rand(0.6, 0.82) // busy
+                  : rand(0.85, 1.0);            // feral
+
+          // Fabric runs in BLOCKS, not per pod: real floorplates were fitted out one bay at a
+          // time, so colour changes on a bay boundary. Blocking the tint by (quadrant, column)
+          // gives the wide shot large legible colour masses instead of confetti.
+          const tintIndex = (ci * 2 + (sx > 0 ? 1 : 0) + (sz > 0 ? 3 : 0) + Math.floor(ri / 2)) % POD_FABRIC_TINTS.length;
+
           const pod = makeCubiclePod({
             variant: cleared ? 1 : variant,
             seed: 101 + podIndex * 7,
             // Aisle-facing pods keep the house height so the skyline behind the hero grind
             // line stays legible; everything deeper mixes.
             panelHeight: ci === 0 ? 1.32 : pick(PANEL_HEIGHTS),
-            fabricTint: pick(POD_FABRIC_TINTS),
+            fabricTint: POD_FABRIC_TINTS[tintIndex],
             cleared,
+            mess,
+            chairs: true,
           });
           podIndex++;
+
+          // A feral pod leaks: paper on the aisle carpet outside it, and a chair somebody
+          // shoved out of the way.
+          if (mess > 0.72) {
+            acc.paperSeeds.push({ x: x - sx * (POD_SIZE / 2 + 0.6), z: z + rand(-1.6, 1.6), radius: 1.2 });
+            if (chance(0.45)) {
+              const stray = makeDeskChair({
+                variant: 1,
+                seed: 4100 + podIndex,
+                knocked: chance(0.45),
+              });
+              // OUTBOARD, into the service gap between pod columns — never into the corridor,
+              // which is the skate line and stays clean.
+              place(acc, stray, x + sx * (POD_SIZE / 2 + 0.62), 0, z + rand(-1.5, 1.5), rand(0, Math.PI * 2), {
+                collide: 1,
+              });
+            }
+          }
 
           // Full desk colliders only in the corridor-facing column; outer pods get
           // just the panel boxes, which is all the player can ever touch.
           const collide = variant === 0 ? true : 8;
           // Pod tops are a secondary grind line — register the two near columns.
-          const grind = variant <= 1 && !cleared;
+          const grind = ci <= 1 && !cleared;
 
           place(acc, pod, x, 0, z, (ci + ri) % 2 === 0 ? rand(-0.02, 0.02) : Math.PI / 2 + rand(-0.02, 0.02), {
             collide,
@@ -660,10 +767,80 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     acc.wear.push({ x: k.x, z: k.z - 1.4, width: 2.2, depth: 1.9, strength: 0.6 });
   }
 
-  // Aisle clutter so the spine itself isn't a bare carpet strip: boxes, bins
-  // and plants tucked against the corridor wall, never in the skate line.
+  // ============================================================ THE PLAZA ====
+  // THIS IS THE FIX FOR "TOO BIG AND TOO EMPTY IN THE MIDDLE".
+  //
+  // The intersection and the two arms of the cross corridor were 10 m of unbroken carpet in
+  // every establishing shot — a car park with cubicles around it. A skate plaza is not an open
+  // floor with obstacles pushed to the edges; it is an ISLAND CHAIN you can link end to end
+  // without ever putting a wheel on flat ground. So: a pair of hero ledges flanking the spawn,
+  // planters on the intersection corners, and a ledge / planter / hubba sequence threaded down
+  // each arm between the existing kickers.
+  //
+  // Every position here is checked against what the level data already owns:
+  //   spine    kickers at x = ±2.4 (z = ±8.5, ±13), floor rails at x = ±4.0 (|z| > 5.5)
+  //   +X arm   floor rail at z = -2.6 (x 7.5 … 18.5), kickers at x = 10.2 / 15.8
+  //   -X arm   floor rail at z = +2.6, kickers at x = -10.2 / -15.8
+  // so the plaza takes the OPPOSITE side of each arm and the gaps between the kickers.
+  const ACCENT_ORANGE = 0xe8722a;
+  const ACCENT_TEAL = 0x2f6f7d;
+
+  // --- hero pair at the spawn ------------------------------------------------
+  // Two ledges either side of the spawn point, running along the spine. The player lands on
+  // the floor between them and has a grind within two metres in either direction, which is
+  // what an opening shot of a skate level is supposed to promise.
+  for (const sx of [-1, 1]) {
+    const lx = sx * 3.45;
+    if (blocked(keepClear, lx, 0, 0.55, 2.7)) continue;
+    const ledge = makeLedgeBlock({
+      width: 5.2,
+      depth: 0.95,
+      height: 0.4,
+      seed: 3300 + sx,
+      stripe: sx > 0 ? ACCENT_ORANGE : ACCENT_TEAL,
+    });
+    place(acc, ledge, lx, 0, 0, Math.PI / 2, { collide: true, grind: true });
+    acc.wear.push({ x: lx, z: sx * 3.2, width: 2.2, depth: 2.6, strength: 0.5 });
+  }
+
+  // --- intersection corners --------------------------------------------------
+  for (const sx of [-1, 1]) {
+    const px = sx * 4.05;
+    const pz = -sx * 3.55;
+    if (blocked(keepClear, px, pz, 1.3, 0.7)) continue;
+    place(acc, makePlanterLedge({ width: 2.3, depth: 0.9, height: 0.46, seed: 3400 + sx }), px, 0, pz, 0, {
+      collide: true,
+      grind: true,
+    });
+  }
+
+  // --- the arms --------------------------------------------------------------
+  // Sequence per arm, mirrored: ledge → planter → hubba, all on the side of the arm the
+  // level's floor rail does not use, so the two lines run parallel and can be transferred
+  // between rather than fighting each other.
+  for (const sx of [-1, 1]) {
+    const lane = sx > 0 ? 3.05 : -3.05;
+    const items: { x: number; build: () => THREE.Object3D }[] = [
+      { x: 7.3, build: () => makeLedgeBlock({ width: 3.6, depth: 0.9, height: 0.4, seed: 3500 + sx, stripe: ACCENT_TEAL }) },
+      { x: 13.0, build: () => makePlanterLedge({ width: 3.4, depth: 1.0, height: 0.5, seed: 3600 + sx }) },
+      { x: 19.0, build: () => makeLedgeBlock({ width: 3.4, depth: 1.0, height: 0.62, seed: 3700 + sx, stripe: ACCENT_ORANGE }) },
+    ];
+    for (const it of items) {
+      const px = sx * it.x;
+      if (Math.abs(px) + 1.9 > halfW - 1.2) continue;
+      if (blocked(keepClear, px, lane, 2.0, 0.7)) continue;
+      place(acc, it.build(), px, 0, lane, 0, { collide: true, grind: true });
+      acc.wear.push({ x: px, z: lane - Math.sign(lane) * 1.5, width: 3.0, depth: 2.2, strength: 0.4 });
+      acc.paperSeeds.push({ x: px + rand(-1.2, 1.2), z: lane - Math.sign(lane) * 1.3, radius: 1.0 });
+    }
+  }
+
+  // Aisle clutter so the spine itself isn't a bare carpet strip: boxes, bins, plants and the
+  // chairs somebody rolled out of the way, tucked against the corridor wall, never in the
+  // skate line. Twice the previous density: the refs are MESSY, and one prop every six metres
+  // of a 46 m corridor is not messy, it is tidy.
   const aisleEdge = SPINE_HALF - 0.5;
-  for (let z = -halfD + 6; z < halfD - 6; z += rand(3.4, 7.5)) {
+  for (let z = -halfD + 4; z < halfD - 4; z += rand(2.4, 4.6)) {
     if (Math.abs(z) < CROSS_HALF + 1.2) continue;
     const sx = chance(0.5) ? 1 : -1;
     const x = sx * aisleEdge;
@@ -671,13 +848,15 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     const roll = rng();
     const accent = chance(0.22);
     let prop: THREE.Object3D;
-    if (roll < 0.28) prop = makeCardboardBox({ variant: 1, seed: Math.round(z * 3) + 61 });
-    else if (roll < 0.5) prop = makeTrashCan({ variant: 1, seed: Math.round(z * 7) + 67, accent });
-    else if (roll < 0.7) prop = makePottedPlant({ variant: 0, seed: Math.round(z * 11) + 71 });
-    else if (roll < 0.86) prop = makePrinter({ variant: 1, seed: Math.round(z * 13) + 73 });
-    else prop = makeFireExtinguisher({ seed: Math.round(z * 17) + 79 });
-    place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: true });
-    if (chance(0.35)) acc.paperSeeds.push({ x: x - sx * 0.9, z: z + rand(-1.2, 1.2), radius: 0.9 });
+    if (roll < 0.20) prop = makeCardboardBox({ variant: 1, seed: Math.round(z * 3) + 61 });
+    else if (roll < 0.36) prop = makeTrashCan({ variant: 1, seed: Math.round(z * 7) + 67, accent });
+    else if (roll < 0.50) prop = makePottedPlant({ variant: 0, seed: Math.round(z * 11) + 71 });
+    else if (roll < 0.62) prop = makePrinter({ variant: 1, seed: Math.round(z * 13) + 73 });
+    else if (roll < 0.70) prop = makeFireExtinguisher({ seed: Math.round(z * 17) + 79 });
+    else if (roll < 0.82) prop = makeBoxStack({ seed: Math.round(z * 19) + 83 });
+    else prop = makeDeskChair({ variant: 1, seed: Math.round(z * 23) + 89, knocked: roll > 0.91 });
+    place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: 2 });
+    if (chance(0.5)) acc.paperSeeds.push({ x: x - sx * 0.9, z: z + rand(-1.2, 1.2), radius: 0.9 });
   }
 
   // ------------------------------------------------------- perimeter dress ---
@@ -763,7 +942,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // Loose paperwork, CLUSTERED. 220 sheets scattered uniformly across the whole plate with
   // no contact shadow was the loudest cheapness tell in the build: it read as a broken decal
   // system, not as blown paperwork. Paper piles where it was dropped.
-  const paper = makeScatterPaper(74, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
+  const paper = makeScatterPaper(160, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
   place(acc, paper, 0, 0, 0, 0, { collide: false });
 
   // Traffic-lane wear down both corridors plus the point stains collected above.

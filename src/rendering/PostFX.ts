@@ -15,9 +15,12 @@
  *     matrices, not the cheap Narkowicz approximation — the matrices are what
  *     keep saturated orange grind sparks from clipping to white)
  *   - lift / gamma / gain colour grading, done in a gamma-2.2 working space
+ *   - black-point re-anchor
+ *   - a real contrast S-curve around a sub-0.5 pivot (paired power curves, C1 at
+ *     the pivot, bijective on [0,1] — so it has a toe and a shoulder and can be
+ *     pushed hard without clipping either end)
  *   - warm-highlight / cool-shadow split tone
- *   - contrast S-curve around a sub-0.5 pivot
- *   - saturation boost
+ *   - vibrance (chroma-humped saturation, not a flat multiply)
  *   - vignette
  *   - film grain (shadow weighted) + dither
  *
@@ -259,18 +262,24 @@ void main() {
 
   // warm highlight / cool shadow split tone ------------------------------
   float l = dot( clamp( col, 0.0, 1.0 ), LUMA );
-  vec3 tint = mix( uShadowTint, uHighlightTint, smoothstep( 0.04, 0.66, l ) );
+  vec3 tint = mix( uShadowTint, uHighlightTint, smoothstep( 0.02, 0.72, l ) );
   col *= mix( vec3( 1.0 ), tint, uSplit );
 
   // saturation, vibrance-weighted ----------------------------------------
-  // A flat multiply on an already-neutral frame just amplifies grade noise in
-  // the greys while leaving the accents (navy panel, red tie, orange ramp)
-  // barely moved. Weighting the boost by how UNsaturated a pixel already is
-  // pushes the accents hardest and leaves the carpet alone.
+  // A flat multiply does the wrong thing at both ends of the chroma range: it
+  // amplifies grade noise in the near-neutral greys, and it drives the already
+  // heavily-saturated navy cubicle panels into a flat electric blue. This is a
+  // proper vibrance hump instead — barely any boost on the neutrals, maximum
+  // boost through the middle where the red tie, the orange ramps and the desk
+  // wood live, and a rolloff again at the top so the deepest navy holds its shape.
   float g = dot( clamp( col, 0.0, 1.0 ), LUMA );
   vec3 dev = col - vec3( g );
   float chroma = length( dev ) * 1.4142;
-  float vib = 1.0 + ( uSaturation - 1.0 ) * ( 0.55 + 0.9 * smoothstep( 0.02, 0.34, chroma ) );
+  float vib = 1.0 + ( uSaturation - 1.0 ) * (
+      0.5
+    + 1.0 * smoothstep( 0.02, 0.22, chroma )
+    - 0.75 * smoothstep( 0.34, 0.78, chroma )
+  );
   col = vec3( g ) + dev * vib;
 
   // pulse white flash ----------------------------------------------------
@@ -311,15 +320,18 @@ const GRADE_DEFAULTS = {
   // above 200. i.e. the grade was not producing a narrow band because it lacked
   // gain, it was producing one because the linear contrast had to stay timid to
   // avoid clipping. With the real S-curve it can be pushed.
-  saturation: 1.36,
-  contrast: 1.46, // slope at the pivot; a true S-curve, so this does not clip
-  pivot: 0.36,
-  black: 0.03,
+  saturation: 1.14,
+  contrast: 1.55, // slope at the pivot; a true S-curve, so this does not clip
+  pivot: 0.33,
+  // The office IBL floors the frame at a mid grey; without re-anchoring the black
+  // point, p25 lands at 77/255 against the refs' 50-59 and the picture has no
+  // shadow core anywhere, only degrees of "lit".
+  black: 0.034,
   vignette: 0.3,
   grain: 0.026,
-  // 0.5 -> 0.66. Measured shadow R/B was 0.86 against the refs' 0.70-0.81 — the
+  // 0.5 -> 0.70. Measured shadow R/B was 0.86 against the refs' 0.70-0.81 — the
   // shadows were not cool, they were neutral with a story about being cool.
-  split: 0.66,
+  split: 0.7,
   chromaticBase: 0.0005,
   lift: new THREE.Vector3(0.003, 0.004, 0.011),
   gammaInv: new THREE.Vector3(1.0, 1.0, 1.0 / 1.03),
@@ -327,8 +339,8 @@ const GRADE_DEFAULTS = {
   // shadows, which is a large part of how the whole frame came out beige. Warmth
   // now lives only in the highlight end of the split tone, where it belongs.
   gain: new THREE.Vector3(1.0, 1.0, 1.0),
-  shadowTint: new THREE.Vector3(0.8, 0.935, 1.225),
-  highlightTint: new THREE.Vector3(1.11, 1.0, 0.855),
+  shadowTint: new THREE.Vector3(0.79, 0.945, 1.215),
+  highlightTint: new THREE.Vector3(1.115, 1.0, 0.865),
 };
 
 // threshold 0.85 linear was above everything in the scene EXCEPT the emissive
@@ -337,7 +349,7 @@ const GRADE_DEFAULTS = {
 // a brightly-lit ceiling/desk near 0.6, so 0.55 lets the lit surfaces themselves
 // halate — the fixtures stop being uniquely special — while the lower strength
 // and wider radius turn the fixture from a hard white quad into a soft pool.
-const BLOOM_DEFAULTS = { strength: 0.42, radius: 0.9, threshold: 0.55 };
+const BLOOM_DEFAULTS = { strength: 0.34, radius: 0.75, threshold: 0.62 };
 
 /** Wrap an addon constructor so a broken/absent pass degrades instead of throwing. */
 function tryMake<T>(label: string, factory: () => T): T | null {

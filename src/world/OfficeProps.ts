@@ -397,16 +397,32 @@ function ring(r: number, tube: number, rSeg = 5, tSeg = 8): THREE.BufferGeometry
 // `drywall`'s and `paper`'s are near-white). Tinting a dark map upward produces mud.
 // ---------------------------------------------------------------------------
 
-/** Painted sheet metal / moulded office beige — filing cabinets, printers, coolers, pedestals. */
-const PAINT = (color: number, roughness = 0.5): [MaterialId, MaterialOptions] => [
+/**
+ * Painted sheet metal / moulded office beige — filing cabinets, printers, coolers, pedestals,
+ * chair shells, accents.
+ *
+ * THE ROUGHNESS IS DELIBERATELY FIXED. Every painted-metal object in the office used to pick
+ * its own roughness (0.34 … 0.60), which meant thirteen tints became THIRTEEN DISTINCT
+ * MATERIALS and therefore thirteen draw calls that no merge could ever collapse. The visual
+ * difference between semi-gloss 0.42 and semi-gloss 0.55 on a 30 cm prop is nil; the cost is
+ * a quarter of the draw-call budget. One roughness means one family, and `mergeGroup` folds
+ * all thirteen tints into a single vertex-coloured mesh. Colour variety is free; material
+ * variety is not.
+ */
+const PAINT_ROUGHNESS = 0.48;
+const PAINT = (color: number): [MaterialId, MaterialOptions] => [
   'ceilingGrid',
-  { color, roughness },
+  { color, roughness: PAINT_ROUGHNESS },
 ];
+
+/** Paper stock — sticky notes, folders, forms. Same fixed-roughness rule as PAINT. */
+const PAPER_ROUGHNESS = 0.95; // = the library spec, so MAT.paper joins the same family
+const PAPER = (color: number): [MaterialId, MaterialOptions] => ['paper', { color, roughness: PAPER_ROUGHNESS }];
 
 const MAT = {
   deskTop: ['deskLaminate', undefined] as [MaterialId, MaterialOptions | undefined],
   deskFrame: ['brushedMetal', { color: 0xa9aeb5, roughness: 0.42 }] as [MaterialId, MaterialOptions],
-  pedestal: PAINT(0xb4b9bf, 0.52),
+  pedestal: PAINT(0xb4b9bf),
   panelFabric: ['cubicleFabric', undefined] as [MaterialId, MaterialOptions | undefined],
   /**
    * THE GRIND SURFACE — the primary skate line in the level. Left on the library default on
@@ -419,14 +435,14 @@ const MAT = {
   plasticLight: ['darkPlastic', { color: 0xb9c0c8 }] as [MaterialId, MaterialOptions],
   metal: ['brushedMetal', undefined] as [MaterialId, MaterialOptions | undefined],
   chrome: ['chrome', undefined] as [MaterialId, MaterialOptions | undefined],
-  cabinetBeige: PAINT(0xd6ccb4, 0.48),
-  cabinetGrey: PAINT(0xc3c7cb, 0.48),
-  applianceGrey: PAINT(0xdedbd4, 0.42),
-  lampShade: PAINT(0x2c3646, 0.55),
-  binDark: PAINT(0x4a5059, 0.6),
+  cabinetBeige: PAINT(0xd6ccb4),
+  cabinetGrey: PAINT(0xc3c7cb),
+  applianceGrey: PAINT(0xdedbd4),
+  lampShade: PAINT(0x2c3646),
+  binDark: PAINT(0x4a5059),
   ceramic: ['whiteboard', { color: 0xf2f0ec, roughness: 0.18 }] as [MaterialId, MaterialOptions],
   paper: ['paper', undefined] as [MaterialId, MaterialOptions | undefined],
-  cork: ['cardboard', { color: 0xa89070, roughness: 0.95 }] as [MaterialId, MaterialOptions],
+  cork: ['cardboard', { color: 0xa89070 }] as [MaterialId, MaterialOptions],
   cardboard: ['cardboard', undefined] as [MaterialId, MaterialOptions | undefined],
   glass: ['glass', undefined] as [MaterialId, MaterialOptions | undefined],
   plant: ['plantGreen', undefined] as [MaterialId, MaterialOptions | undefined],
@@ -445,18 +461,30 @@ const MAT = {
    * nothing but a dark IBL to reflect, so bare-metal rails render as black bars. The polished
    * caster strip on top is the only true metal on the prop, and it is the brighter for it.
    */
-  railSteel: PAINT(0xc6ccd2, 0.34),
+  railSteel: PAINT(0xc6ccd2),
 
   // ---- SATURATED ACCENT FAMILY ---------------------------------------------
   // The refs get their production value from a handful of high-chroma notes against the
   // neutral office (navy uniforms, red tie, orange sparks, gold coins). The greige office
   // supplies the neutral; these supply the note. Used sparsely and on purpose — roughly one
   // accent object every 8 m of skate line — never as a field colour.
-  accentRed: PAINT(0xc0392b, 0.40),
-  accentOrange: PAINT(0xe8722a, 0.46),
-  accentTeal: PAINT(0x2f6f7d, 0.48),
-  accentNavy: PAINT(0x2a3c68, 0.50),
-  accentYellow: PAINT(0xe7b428, 0.44),
+  accentRed: PAINT(0xc0392b),
+  accentOrange: PAINT(0xe8722a),
+  accentTeal: PAINT(0x2f6f7d),
+  accentNavy: PAINT(0x2a3c68),
+  accentYellow: PAINT(0xe7b428),
+
+  // ---- task chairs / plaza architecture -------------------------------------
+  /** Moulded nylon chair shell, base and column. Near-black: the refs stage every chair as a
+   *  dark silhouette against the light panels, and the level had no true darks at all. */
+  chairShell: PAINT(0x24272d),
+  /** Chair seat/back mesh. cubicleFabric with a deep tint — same weave as the panels, read
+   *  three stops down, which is what glues the chairs into the set. */
+  chairMesh: ['cubicleFabric', { color: 0x4e5a72 }] as [MaterialId, MaterialOptions],
+  /** Precast plaza ledge. Cooler and lighter than the carpet so ledges read as architecture. */
+  ledgeStone: ['concreteFloor', { color: 0xb6b2aa, roughness: 0.72, repeat: [2, 1] }] as [MaterialId, MaterialOptions],
+  /** Planter soil. */
+  soil: ['cardboard', { color: 0x4b3a2a }] as [MaterialId, MaterialOptions],
 } as const;
 
 /** Accent tints applied to the odd filing cabinet / bin / box so the aisle has colour rhythm. */
@@ -476,12 +504,13 @@ const ACCENT_BODIES: readonly MatRef[] = [
  * add more blue. Tinting cool over cool is what turns a slate office into a denim one.
  */
 export const POD_FABRIC_TINTS: readonly number[] = [
-  0xafaeac, // the house slate — matches the library default exactly
-  0xafaeac,
-  0xafaeac,
-  0x8e8d8b, // a darker, older run
-  0x9fb3a6, // the green-grey panels somebody ordered by mistake in 1998
-  0xc3ab8e, // the warm beige run — the value break that stops the field reading as one wall
+  0x9db0d2, // the house NAVY — the map is a blue-slate weave, so a blue tint saturates it
+  0x93a7cb,
+  0x8296bd,
+  0x6f82a8, // the deep run, two stops down — this is what supplies the darks
+  0x93b1ab, // the teal run somebody ordered by mistake in 1998
+  0xc7a882, // the warm ochre run — the temperature break that stops the field reading flat
+  0xb08b6d,
 ];
 
 type MatRef = readonly [MaterialId, MaterialOptions | undefined];
@@ -528,15 +557,106 @@ function countTriangles(root: THREE.Object3D): number {
   return n;
 }
 
+// ---------------------------------------------------------------------------
+// MATERIAL FAMILY CONSOLIDATION
+//
+// The office is dressed almost entirely in TINTS of a handful of library surfaces: thirteen
+// painted-metal colours, seven cubicle fabrics, five sticky-note colours. Merging by material
+// identity therefore bottoms out at one draw call per TINT, which is how a fully-merged
+// floorplate still cost ~40 of them. Colour variety was buying itself with the draw-call
+// budget, which is exactly backwards — the level needs MORE colour variety, not less.
+//
+// Two materials that differ only in `.color` are the same shader. So: bucket them together,
+// bake each source material's colour into a vertex-colour attribute, and draw the whole family
+// with ONE white vertex-coloured clone. Thirteen painted tints become one mesh, and every new
+// accent colour after that is free.
+//
+// SAFETY: the family key covers every property that changes the shader or the shading result,
+// so anything that is not purely a tint stays in its own bucket. Materials carrying an
+// `onBeforeCompile` (the light-pooled floors) are excluded outright — `Material.clone()` does
+// not carry the hook. And because MaterialLibrary hands out its cached materials and later
+// mutates their `envMap` from `setEnvironment()`, the clone re-syncs its envMap from its
+// source in `onBeforeRender`; without that, consolidated props would silently lose their IBL
+// whenever the environment is (re)built after the level.
+// ---------------------------------------------------------------------------
+
+const familyCache = new Map<string, THREE.MeshStandardMaterial>();
+
+function familyKey(m: THREE.Material): string | null {
+  if (m.onBeforeCompile && m.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile) return null;
+  const s = m as THREE.MeshPhysicalMaterial;
+  if (!(s as unknown as { isMeshStandardMaterial?: boolean }).isMeshStandardMaterial) return null;
+  return [
+    m.type,
+    s.map?.uuid ?? '-', s.normalMap?.uuid ?? '-', s.roughnessMap?.uuid ?? '-',
+    s.aoMap?.uuid ?? '-', s.metalnessMap?.uuid ?? '-', s.alphaMap?.uuid ?? '-',
+    s.emissiveMap?.uuid ?? '-', s.lightMap?.uuid ?? '-',
+    s.roughness, s.metalness, s.flatShading, s.side, s.transparent, s.opacity, s.depthWrite,
+    s.emissive?.getHexString() ?? '-', s.emissiveIntensity,
+    s.envMapIntensity, s.aoMapIntensity, s.normalScale?.x,
+    s.clearcoat ?? '-', s.clearcoatRoughness ?? '-', s.ior ?? '-',
+    s.sheen ?? '-', s.sheenRoughness ?? '-', s.transmission ?? '-', s.specularIntensity ?? '-',
+  ].join('|');
+}
+
+function familyMaterial(key: string, src: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
+  const hit = familyCache.get(key);
+  if (hit) return hit;
+  const m = src.clone();
+  m.name = `${src.name || src.type}~family`;
+  m.vertexColors = true;
+  m.color.setRGB(1, 1, 1);
+  m.envMap = src.envMap;
+  m.envMapIntensity = src.envMapIntensity;
+  m.userData.familySource = src;
+  familyCache.set(key, m);
+  return m;
+}
+
+function isFamilyClone(m: THREE.Material): boolean {
+  return !!(m.userData && m.userData.familySource);
+}
+
+/** Keep a consolidated clone in step with MaterialLibrary.setEnvironment(). */
+function syncFamilyEnv(m: THREE.MeshStandardMaterial): void {
+  const src = m.userData.familySource as THREE.MeshStandardMaterial | undefined;
+  if (!src || m.envMap === src.envMap) return;
+  const had = m.envMap !== null;
+  m.envMap = src.envMap;
+  m.envMapIntensity = src.envMapIntensity;
+  if (had !== (src.envMap !== null)) m.needsUpdate = true;
+}
+
+/** Paint every vertex of `g` with `c`. Required for a geometry entering a family bucket. */
+function bakeVertexColor(g: THREE.BufferGeometry, c: THREE.Color): void {
+  const n = g.getAttribute('position').count;
+  const arr = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    arr[i * 3] = c.r;
+    arr[i * 3 + 1] = c.g;
+    arr[i * 3 + 2] = c.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+}
+
+interface MergeBucket {
+  geos: THREE.BufferGeometry[];
+  mats: THREE.Material[];
+  cast: boolean;
+  receive: boolean;
+  family: string | null;
+}
+
 /**
- * Collapse a hierarchy into one mesh per material, baking local transforms into the
- * vertices. InstancedMeshes are re-parented untouched (they are already one draw call).
+ * Collapse a hierarchy into one mesh per material FAMILY, baking local transforms into the
+ * vertices and per-material tints into vertex colours. InstancedMeshes are re-parented
+ * untouched (they are already one draw call).
  */
 function mergeGroup(root: THREE.Group): THREE.Group {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
 
-  const buckets = new Map<THREE.Material, { geos: THREE.BufferGeometry[]; cast: boolean; receive: boolean }>();
+  const buckets = new Map<string, MergeBucket>();
   const keep: { obj: THREE.Object3D; rel: THREE.Matrix4 }[] = [];
 
   root.traverse((o) => {
@@ -548,14 +668,17 @@ function mergeGroup(root: THREE.Group): THREE.Group {
     }
     if (!m.isMesh || Array.isArray(m.material) || !m.geometry) return;
     const material = m.material as THREE.Material;
+    const family = familyKey(material);
+    const key = family ?? `id:${material.uuid}`;
     const g = m.geometry.clone();
     g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
-    let bucket = buckets.get(material);
+    let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { geos: [], cast: false, receive: false };
-      buckets.set(material, bucket);
+      bucket = { geos: [], mats: [], cast: false, receive: false, family };
+      buckets.set(key, bucket);
     }
     bucket.geos.push(g);
+    bucket.mats.push(material);
     bucket.cast = bucket.cast || m.castShadow;
     bucket.receive = bucket.receive || m.receiveShadow;
   });
@@ -564,12 +687,42 @@ function mergeGroup(root: THREE.Group): THREE.Group {
   out.name = root.name;
   out.userData = root.userData;
 
-  for (const [material, bucket] of buckets) {
+  const WHITE = new THREE.Color(1, 1, 1);
+  for (const [key, bucket] of buckets) {
+    // One tint in the family? Draw it with the original material and skip the attribute.
+    // Note the second condition: mergeGroup runs TWICE on everything (once inside each prop,
+    // once over the whole floorplate), so a bucket may already contain consolidated geometry
+    // whose tints live in a colour attribute. Those must never be re-baked.
+    let material: THREE.Material = bucket.mats[0];
+    const alreadyFamily = isFamilyClone(bucket.mats[0]);
+    const needsVC =
+      bucket.family !== null && (alreadyFamily || bucket.mats.some((x) => x !== bucket.mats[0]));
+
+    if (needsVC) {
+      const rep = bucket.mats.find((x) => !isFamilyClone(x)) ?? bucket.mats[0];
+      const src = (isFamilyClone(rep)
+        ? (rep.userData.familySource as THREE.MeshStandardMaterial)
+        : (rep as THREE.MeshStandardMaterial));
+      bucket.geos.forEach((g, i) => {
+        const m = bucket.mats[i];
+        if (isFamilyClone(m)) {
+          if (!g.getAttribute('color')) bakeVertexColor(g, WHITE);
+        } else {
+          bakeVertexColor(g, (m as THREE.MeshStandardMaterial).color);
+        }
+      });
+      material = familyMaterial(key, src);
+    }
+
     const merged = bucket.geos.length === 1 ? bucket.geos[0] : mergeGeometries(bucket.geos, false);
     if (!merged) continue;
     if (bucket.geos.length > 1) for (const g of bucket.geos) g.dispose();
     merged.computeBoundingSphere();
     const me = new THREE.Mesh(merged, material);
+    if (needsVC) {
+      const fam = material as THREE.MeshStandardMaterial;
+      me.onBeforeRender = () => syncFamilyEnv(fam);
+    }
     me.name = material.name || 'merged';
     me.castShadow = bucket.cast;
     me.receiveShadow = bucket.receive;
@@ -613,6 +766,9 @@ export function mergePropsByMaterial(objects: readonly THREE.Object3D[]): THREE.
 export function disposePropCache(): void {
   for (const g of geoCache.values()) g.dispose();
   geoCache.clear();
+  // The consolidated family clones are ours, not MaterialLibrary's, so nothing else frees them.
+  for (const m of familyCache.values()) m.dispose();
+  familyCache.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -966,7 +1122,7 @@ export function makeMug(o?: PropOptions): THREE.Group {
   const h = 0.095;
   ctx.root.add(mesh(cyl(rad, rad * 0.92, h, 10), body, { pos: [0, h / 2, 0] }));
   ctx.root.add(
-    mesh(disc(rad - 0.006, 10), MaterialLibrary.get('darkPlastic', { color: 0x7a5334, roughness: 0.25 }), {
+    mesh(disc(rad - 0.006, 10), mat(['darkPlastic', { color: 0x7a5334 }]), {
       pos: [0, h - 0.012, 0],
       cast: false,
     }),
@@ -1088,7 +1244,7 @@ export function makeCardboardBox(o?: PropOptions): THREE.Group {
   } else {
     // Packing tape down the seam.
     ctx.root.add(
-      mesh(quad(0.075, d - 0.02), MaterialLibrary.get('paper', { color: 0xd9c69b, roughness: 0.4 }), {
+      mesh(quad(0.075, d - 0.02), mat(PAPER(0xd9c69b)), {
         pos: [0, h + 0.002, 0],
         rot: [-Math.PI / 2, 0, 0],
         cast: false,
@@ -1378,7 +1534,7 @@ export function makeCorkBoard(o?: PropOptions): THREE.Group {
       const sw = sticky ? r.range(0.09, 0.12) : r.range(0.13, 0.18);
       const sh = sticky ? sw : sw * 1.35;
       const m = sticky
-        ? MaterialLibrary.get('paper', { color: STICKY_TINTS[r.int(0, STICKY_TINTS.length - 1)] })
+        ? mat(PAPER(STICKY_TINTS[r.int(0, STICKY_TINTS.length - 1)]))
         : mat(MAT.paper);
       ctx.root.add(
         mesh(quad(sw, sh), m, {
@@ -1511,7 +1667,7 @@ export function makeScatterPaper(
   // Tinted DOWN from the library's near-white. A sheet of copier paper on a mid-brown carpet
   // under a 3.6-intensity key clips to 255 white and out-reads the ceiling troffers; this
   // lands it a stop and a half below the cap rails, which is where paper belongs.
-  const paperMat = MaterialLibrary.get('paper', { color: 0xc7c1b1, roughness: 0.95 });
+  const paperMat = mat(PAPER(0xc7c1b1));
   const im = new THREE.InstancedMesh(geo, paperMat, Math.max(1, n));
   im.name = 'scatterPaper';
   // A sheet with a visible contact shadow stops reading as a decal. This is the single
@@ -1574,6 +1730,267 @@ function makeDeskPhone(): THREE.Group {
 }
 
 // ---------------------------------------------------------------------------
+// TASK CHAIR  —  THE PROP THE BUILD WAS MISSING ENTIRELY.
+//
+// Every office reference is wall-to-wall task chairs: they are the darkest objects in the
+// room, they break the horizontal of the desk line, and a KNOCKED-OVER one is the single
+// cheapest way to say "something just happened here" — which is the entire premise of a game
+// about escaping the SEC on an office chair. A floorplate of desks with no chairs reads as a
+// furniture showroom before delivery, which is precisely what the panel said.
+//
+// variant 0: ~230 tris (hero) · variant 1: ~140 · variant 2: ~50 (silhouette)
+// ---------------------------------------------------------------------------
+
+export interface DeskChairOptions extends PropOptions {
+  /** Lying on its side with the casters out. Staged in aisles and in chaotic pods. */
+  knocked?: boolean;
+  /** Seat/back mesh tint. Defaults to the house charcoal-navy. */
+  tint?: number;
+  /** Yaw of the seat relative to the base — a chair nobody pushed in. */
+  swivel?: number;
+}
+
+export function makeDeskChair(o?: DeskChairOptions): THREE.Group {
+  const ctx = begin('deskChair', o, 211);
+  const r = ctx.rng;
+  const lod = ctx.variant;
+  const seatY = 0.46;
+
+  // Everything hangs off `body` so the knocked-over pose is one transform, not a re-author.
+  const body = new THREE.Group();
+  ctx.root.add(body);
+
+  const meshMat: MatRef = o?.tint ? ['cubicleFabric', { color: o.tint }] : MAT.chairMesh;
+
+  // --- five-star base -------------------------------------------------------
+  const spokes = lod >= 2 ? 0 : 5;
+  for (let i = 0; i < spokes; i++) {
+    const a = (i / spokes) * Math.PI * 2 + 0.35;
+    body.add(
+      mesh(cbox(0.32, 0.05, 0.08, 0.012), MAT.chairShell, {
+        pos: [Math.cos(a) * 0.17, 0.085, Math.sin(a) * 0.17],
+        rot: [0, -a, 0],
+      }),
+    );
+    if (lod === 0) {
+      body.add(
+        mesh(blob(0.036), MAT.plastic, {
+          pos: [Math.cos(a) * 0.315, 0.04, Math.sin(a) * 0.315],
+          cast: false,
+        }),
+      );
+    }
+  }
+
+  // --- gas lift -------------------------------------------------------------
+  body.add(mesh(cyl(0.036, 0.055, seatY - 0.11, 8), MAT.chairShell, { pos: [0, 0.11 + (seatY - 0.11) / 2, 0] }));
+  if (lod === 0) body.add(mesh(cyl(0.046, 0.046, 0.06, 8), MAT.chrome, { pos: [0, seatY - 0.10, 0], cast: false }));
+
+  // --- seat + back ----------------------------------------------------------
+  // A sub-group so `swivel` turns the seat without turning the base, which is what a chair
+  // somebody stood up out of actually looks like.
+  const top = new THREE.Group();
+  top.rotation.y = o?.swivel ?? r.range(-0.6, 0.6);
+  top.position.y = seatY;
+  body.add(top);
+
+  top.add(mesh(cbox(0.47, 0.055, 0.45, 0.022), MAT.chairShell, { pos: [0, -0.03, 0] }));
+  top.add(mesh(cbox(0.44, 0.075, 0.42, 0.03), meshMat, { pos: [0, 0.03, 0] }));
+
+  const back = new THREE.Group();
+  back.position.set(0, 0.06, -0.20);
+  back.rotation.x = -0.20;
+  top.add(back);
+  back.add(mesh(cbox(0.075, 0.24, 0.075, 0.02), MAT.chairShell, { pos: [0, 0.11, 0.01] }));
+  back.add(mesh(cbox(0.43, 0.46, 0.07, 0.03), meshMat, { pos: [0, 0.42, -0.005] }));
+  if (lod === 0) {
+    // Lumbar bar: the one bit of a task chair that reads at 10 m.
+    back.add(mesh(cbox(0.45, 0.05, 0.09, 0.018), MAT.chairShell, { pos: [0, 0.24, -0.01], cast: false }));
+  }
+
+  // --- armrests -------------------------------------------------------------
+  if (lod === 0) {
+    for (const s of [-1, 1]) {
+      top.add(mesh(cbox(0.05, 0.19, 0.05, 0.014), MAT.chairShell, { pos: [s * 0.255, 0.14, -0.06] }));
+      top.add(mesh(cbox(0.07, 0.045, 0.26, 0.018), MAT.plastic, { pos: [s * 0.255, 0.25, 0.0] }));
+    }
+  }
+
+  // --- knocked over ---------------------------------------------------------
+  if (o?.knocked) {
+    const dir = r.chance(0.5) ? 1 : -1;
+    body.rotation.set(0, r.range(0, Math.PI * 2), dir * (Math.PI / 2 + r.range(-0.22, 0.22)), 'YXZ');
+    body.position.y = 0.29;
+    collide(ctx, [0.72, 0.5, 0.72], [0, 0.25, 0]);
+    return finish(ctx, o, { size: [0.72, 0.5, 0.72], offset: [0, 0.25, 0] });
+  }
+
+  collide(ctx, [0.5, 0.44, 0.5], [0, 0.24, 0]);
+  collide(ctx, [0.5, 0.5, 0.16], [0, 0.72, -0.19]);
+  return finish(ctx, o, { size: [0.62, 1.05, 0.62], offset: [0, 0.52, 0] });
+}
+
+// ---------------------------------------------------------------------------
+// DESK PAPERWORK  —  stacked trays, a leaning manila pile, an open drawer.
+// Small props, but they are what separates "a desk" from "somebody's desk".
+// ---------------------------------------------------------------------------
+
+const FOLDER_TINTS: readonly number[] = [0xd8b878, 0xcfa96a, 0xdcc79a, 0xc98f57];
+
+/** Two stacking letter trays with paper in them. ~70 tris. */
+export function makePaperTray(o?: PropOptions): THREE.Group {
+  const ctx = begin('paperTray', o, 223);
+  const r = ctx.rng;
+  const tiers = r.int(1, 3);
+  for (let i = 0; i < tiers; i++) {
+    const y = i * 0.075;
+    ctx.root.add(mesh(sbox(0.30, 0.012, 0.24), MAT.plasticLight, { pos: [0, y + 0.006, 0] }));
+    for (const s of [-1, 1]) {
+      ctx.root.add(mesh(sbox(0.012, 0.062, 0.24), MAT.plasticLight, { pos: [s * 0.145, y + 0.037, 0], cast: false }));
+    }
+    if (r.chance(0.75)) {
+      ctx.root.add(
+        mesh(sbox(0.26, 0.022, 0.2), MAT.paper, { pos: [r.range(-0.012, 0.012), y + 0.023, r.range(-0.01, 0.01)], cast: false }),
+      );
+    }
+  }
+  const h = tiers * 0.075 + 0.02;
+  collide(ctx, [0.3, h, 0.24], [0, h / 2, 0]);
+  return finish(ctx, o, { size: [0.3, h, 0.24], offset: [0, h / 2, 0] });
+}
+
+/** A leaning stack of manila folders. Warm chroma on a cool desk. ~40 tris. */
+export function makeFolderStack(o?: PropOptions): THREE.Group {
+  const ctx = begin('folderStack', o, 227);
+  const r = ctx.rng;
+  const n = r.int(3, 7);
+  let y = 0;
+  for (let i = 0; i < n; i++) {
+    const t = 0.016 + r.range(0, 0.01);
+    ctx.root.add(
+      mesh(sbox(0.235, t, 0.31), PAPER(FOLDER_TINTS[r.int(0, FOLDER_TINTS.length - 1)]), {
+        pos: [r.range(-0.022, 0.022), y + t / 2, r.range(-0.02, 0.02)],
+        rot: [0, r.range(-0.14, 0.14), 0],
+        cast: i === n - 1,
+      }),
+    );
+    y += t;
+  }
+  collide(ctx, [0.25, y, 0.32], [0, y / 2, 0]);
+  return finish(ctx, o, { size: [0.25, y, 0.32], offset: [0, y / 2, 0] });
+}
+
+/** A pedestal drawer left hanging open with files in it. Reads instantly as "ransacked". */
+function makeOpenDrawer(seed: number): THREE.Group {
+  const g = new THREE.Group();
+  const r = rngFrom(seed, 229);
+  const out = r.range(0.14, 0.24);
+  g.add(mesh(cbox(0.36, 0.19, 0.42, 0.012), MAT.pedestal, { pos: [0, 0, out] }));
+  g.add(mesh(sbox(0.32, 0.13, 0.36), PAPER(0xd3b986), { pos: [0, 0.02, out], cast: false }));
+  g.add(mesh(sbox(0.14, 0.016, 0.018), MAT.chrome, { pos: [0, 0.05, out + 0.22], cast: false }));
+  return g;
+}
+
+// ===========================================================================
+// PLAZA ARCHITECTURE  —  the skateable furniture that fills the dead middle.
+//
+// A Tony Hawk plaza is not an empty floor with ramps around the edges; it is a dense island
+// chain of ledges, banks and planters that you can link without ever touching flat ground.
+// These are the pieces that turn the office's central intersection from a car park into a
+// designed line. Both are box-collided and grind-edged, so they are honest to the physics.
+// ===========================================================================
+
+export interface LedgeOptions extends PropOptions {
+  width?: number;
+  depth?: number;
+  height?: number;
+  /** Saturated stripe down the long face. This is a chroma note, use it sparingly. */
+  stripe?: number;
+}
+
+/**
+ * LEDGE / MANUAL PAD — a precast plaza block with steel angle-iron on both top edges.
+ * Grindable down both long sides, rideable across the top. ~120 tris.
+ */
+export function makeLedgeBlock(o?: LedgeOptions): THREE.Group {
+  const w = o?.width ?? 3.6;
+  const d = o?.depth ?? 0.9;
+  const h = o?.height ?? 0.42;
+  const ctx = begin('ledgeBlock', o, 233);
+
+  ctx.root.add(mesh(cbox(w, h, d, 0.02, [Math.max(1, Math.round(w / 2)), 1]), MAT.ledgeStone, { pos: [0, h / 2, 0] }));
+  // Angle iron — the grind surface, and the only bright specular on the prop.
+  for (const s of [-1, 1]) {
+    ctx.root.add(
+      mesh(sbox(w + 0.02, 0.035, 0.075), ['grindMetal', { repeat: [Math.max(2, Math.round(w)), 1] }], {
+        pos: [0, h - 0.016, s * (d / 2 - 0.03)],
+        cast: false,
+      }),
+    );
+  }
+  if (o?.stripe !== undefined) {
+    for (const s of [-1, 1]) {
+      ctx.root.add(mesh(quad(w - 0.1, 0.11), PAINT(o.stripe), {
+        pos: [0, h * 0.42, s * (d / 2 + 0.004)],
+        rot: [0, s > 0 ? 0 : Math.PI, 0],
+        cast: false,
+      }));
+    }
+  }
+  // Base shadow gap: a ledge sitting flush on carpet reads as a decal.
+  ctx.root.add(mesh(sbox(w - 0.12, 0.05, d - 0.12), MAT.plastic, { pos: [0, 0.025, 0], cast: false }));
+
+  ctx.grinds.push({ start: [-w / 2, h + 0.02, d / 2 - 0.03], end: [w / 2, h + 0.02, d / 2 - 0.03] });
+  ctx.grinds.push({ start: [-w / 2, h + 0.02, -d / 2 + 0.03], end: [w / 2, h + 0.02, -d / 2 + 0.03] });
+  collide(ctx, [w, h, d], [0, h / 2, 0]);
+  return finish(ctx, o, { size: [w, h, d], offset: [0, h / 2, 0] });
+}
+
+export interface PlanterOptions extends PropOptions {
+  width?: number;
+  depth?: number;
+  height?: number;
+}
+
+/**
+ * PLANTER LEDGE — the office-lobby planter every real plaza gets waxed. Painted body, timber
+ * cap rail (grindable), soil and three low-poly shrub masses. This is the only piece of the
+ * floorplate that carries real green, which is why it is worth its triangles. ~260 tris.
+ */
+export function makePlanterLedge(o?: PlanterOptions): THREE.Group {
+  const w = o?.width ?? 3.2;
+  const d = o?.depth ?? 1.0;
+  const h = o?.height ?? 0.5;
+  const ctx = begin('planterLedge', o, 239);
+  const r = ctx.rng;
+
+  ctx.root.add(mesh(cbox(w, h, d, 0.02, [Math.max(1, Math.round(w / 1.6)), 1]), MAT.wood, { pos: [0, h / 2, 0] }));
+  // Timber cap — reads warm against the navy panels and is the grind edge.
+  ctx.root.add(mesh(cbox(w + 0.08, 0.07, d + 0.08, 0.014, [Math.max(2, Math.round(w)), 1]), MAT.deskTop, { pos: [0, h + 0.035, 0] }));
+  ctx.root.add(mesh(sbox(w - 0.16, 0.04, d - 0.16), MAT.soil, { pos: [0, h + 0.05, 0], cast: false }));
+
+  const shrubs = ctx.variant >= 1 ? 2 : Math.max(2, Math.round(w / 1.1));
+  for (let i = 0; i < shrubs; i++) {
+    const px = -w / 2 + 0.42 + (i * (w - 0.84)) / Math.max(1, shrubs - 1);
+    const rad = r.range(0.24, 0.36);
+    ctx.root.add(
+      mesh(blob(rad, ctx.variant >= 1 ? 0 : 1), MAT.plant, {
+        pos: [px + r.range(-0.06, 0.06), h + 0.06 + rad * 0.62, r.range(-0.08, 0.08)],
+      }),
+    );
+    if (ctx.variant === 0 && r.chance(0.6)) {
+      ctx.root.add(mesh(blob(rad * 0.62), MAT.plant, { pos: [px + r.range(-0.2, 0.2), h + 0.06 + rad * 1.1, r.range(-0.12, 0.12)], cast: false }));
+    }
+  }
+
+  const top = h + 0.07;
+  ctx.grinds.push({ start: [-w / 2 - 0.04, top + 0.01, d / 2 + 0.01], end: [w / 2 + 0.04, top + 0.01, d / 2 + 0.01] });
+  ctx.grinds.push({ start: [-w / 2 - 0.04, top + 0.01, -d / 2 - 0.01], end: [w / 2 + 0.04, top + 0.01, -d / 2 - 0.01] });
+  collide(ctx, [w + 0.08, top, d + 0.08], [0, top / 2, 0]);
+  return finish(ctx, o, { size: [w + 0.08, top, d + 0.08], offset: [0, top / 2, 0] });
+}
+
+// ---------------------------------------------------------------------------
 // CUBICLE POD  —  THE HERO PROP. Four workstations, back-to-back around a cross of
 // panels, with a perimeter wall on two sides. 4.4 × 4.4 m footprint, grind edges on
 // every panel top at y = 1.40.
@@ -1593,6 +2010,19 @@ export interface CubiclePodOptions extends PropOptions {
   fabricTint?: number;
   /** This pod has been cleared out: panels and boxes, no desks. ~1-in-20 in the real world. */
   cleared?: boolean;
+  /**
+   * 0 = showroom tidy, 1 = the desk of somebody who stopped caring in 2019.
+   *
+   * THIS IS THE VARIATION AXIS THE FLOORPLATE WAS MISSING. Every pod used to roll the same
+   * dressing from the same distribution, so thirty pods averaged out to thirty identical
+   * pods. Driving paper count, mug count, tray/folder/box presence, monitor skew, sticky-note
+   * density and whether a chair is on its side off ONE per-pod scalar is what makes some pods
+   * read as tidy and others as ransacked — which is the difference between a stamped grid and
+   * an office. Default 0.45.
+   */
+  mess?: number;
+  /** Put task chairs at the workstations. The single biggest silhouette win in the pod. */
+  chairs?: boolean;
 }
 
 export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
@@ -1600,6 +2030,8 @@ export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
   const r = ctx.rng;
   const v = ctx.variant;
   const seed = o?.seed ?? 1;
+  const mess = Math.max(0, Math.min(1, o?.mess ?? 0.45));
+  const wantChairs = o?.chairs ?? true;
   const panelH = o?.panelHeight ?? CUBE_WALL_H;
   const podTop = panelH + CUBE_CAP_H;
 
@@ -1659,19 +2091,34 @@ export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
       collide(ctx, c.size, [stack.position.x + c.offset[0], c.offset[1], stack.position.z + c.offset[2]]);
     }
     if (r.chance(0.7)) {
-      const chair = makeTrashCan({ variant: 1, seed: seed * 41, merge: false });
-      chair.position.set(r.range(-1.6, 1.6), 0, r.range(-1.6, 1.6));
-      ctx.root.add(chair);
+      const bin = makeTrashCan({ variant: 1, seed: seed * 41, merge: false });
+      bin.position.set(r.range(-1.6, 1.6), 0, r.range(-1.6, 1.6));
+      ctx.root.add(bin);
+    }
+    // The chairs are the last thing out of a cleared pod, so one is always still lying in it.
+    if (wantChairs) {
+      const dumped = makeDeskChair({ variant: v >= 2 ? 2 : 1, seed: seed * 43, knocked: r.chance(0.55), merge: false });
+      dumped.position.set(r.range(-1.5, 1.5), 0, r.range(-1.5, 1.5));
+      dumped.rotation.y = r.range(0, Math.PI * 2);
+      ctx.root.add(dumped);
     }
     return finish(ctx, o, { size: [POD_HALF * 2, podTop, POD_HALF * 2], offset: [0, podTop / 2, 0] });
   }
 
   if (v >= 2) {
-    // Far LOD: panels plus four desk-sized slabs and four monitor blocks. Silhouette only.
+    // Far LOD: panels plus four desk-sized slabs, four monitor blocks and four chair
+    // silhouettes. The chairs matter even here — they are the dark note that stops the far
+    // field reading as an empty grid of beige slabs.
     for (const sx of [-1, 1]) {
       for (const sz of [-1, 1]) {
         ctx.root.add(mesh(sbox(1.9, 0.05, 1.3), MAT.deskTop, { pos: [sx * 1.1, DESK_TOP_Y, sz * 1.05] }));
         ctx.root.add(mesh(sbox(0.5, 0.34, 0.16), MAT.plastic, { pos: [sx * 1.1, DESK_TOP_Y + 0.2, sz * 0.55] }));
+        if (wantChairs && r.chance(0.8)) {
+          const chair = makeDeskChair({ variant: 2, seed: seed * 47 + sx * 3 + sz, merge: false });
+          chair.position.set(sx * (1.1 + r.range(-0.25, 0.25)), 0, sz * r.range(0.2, 0.5));
+          chair.rotation.y = sz > 0 ? r.range(-0.7, 0.7) : Math.PI + r.range(-0.7, 0.7);
+          ctx.root.add(chair);
+        }
       }
     }
     return finish(ctx, o, { size: [POD_HALF * 2, podTop, POD_HALF * 2], offset: [0, podTop / 2, 0] });
@@ -1721,25 +2168,57 @@ export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
       );
     }
 
-    // monitor at the back of the main run, facing the user at +Z
+    // monitor at the back of the main run, facing the user at +Z.
+    // Skew scales with mess: a tidy desk is square to the panel, a chaotic one is not, and the
+    // refs are full of monitors sitting at fifteen degrees to everything around them.
+    const skew = 0.06 + mess * 0.55;
     const monitor = makeMonitor({ variant: monitorVariant, seed: seed * 7 + i, merge: false });
     monitor.position.set(-0.31 + r.range(-0.14, 0.14), DESK_TOP_Y, -0.5);
-    monitor.rotation.y = r.range(-0.2, 0.2);
+    monitor.rotation.y = r.range(-skew, skew);
     station.add(monitor);
+
+    // Second screen on the busier desks — the trading-floor read, and it doubles the number of
+    // emissive notes in the pod.
+    if (v === 0 && r.chance(0.18 + mess * 0.4)) {
+      const second = makeMonitor({ variant: 2, seed: seed * 71 + i, merge: false });
+      second.position.set(0.55 + r.range(-0.06, 0.06), DESK_TOP_Y, -0.42);
+      second.rotation.y = -0.5 + r.range(-skew, skew);
+      station.add(second);
+    }
 
     const kbd = makeKeyboardMouse({ variant: 1, seed: seed * 11 + i, merge: false });
     kbd.position.set(-0.34, DESK_TOP_Y, -0.22);
-    kbd.rotation.y = r.range(-0.1, 0.1);
+    kbd.rotation.y = r.range(-0.1 - mess * 0.35, 0.1 + mess * 0.35);
     station.add(kbd);
 
+    // --- task chair -------------------------------------------------------
+    // No collider: chairs live inside the cubicle, behind the desk collider the player can
+    // already never pass. They are silhouette, not physics.
+    if (wantChairs && r.chance(0.94)) {
+      const knocked = mess > 0.62 && r.chance(0.22);
+      const chair = makeDeskChair({
+        variant: v === 0 ? 0 : 1,
+        seed: seed * 53 + i,
+        knocked,
+        merge: false,
+        swivel: r.range(-0.9, 0.9),
+      });
+      // Pushed in on a tidy desk, shoved back and turned on a messy one.
+      const out = knocked ? r.range(0.62, 0.95) : 0.30 + mess * r.range(0.1, 0.55);
+      chair.position.set(-0.34 + r.range(-0.22, 0.22), 0, out);
+      chair.rotation.y = knocked ? r.range(0, Math.PI * 2) : Math.PI + r.range(-0.5, 0.5);
+      station.add(chair);
+    }
+
     if (v === 0) {
-      if (mugs < 2 && r.chance(0.75)) {
+      if (mugs < 3 && r.chance(0.55 + mess * 0.45)) {
         mugs++;
         const mug = makeMug({ seed: seed * 13 + i, merge: false });
         mug.position.set(r.range(0.05, 0.28), DESK_TOP_Y, r.range(-0.5, -0.2));
         station.add(mug);
       }
-      if (plants < 2 && r.chance(0.7)) {
+      // A tidy desk gets the plant; a wrecked one has killed it.
+      if (plants < 2 && r.chance(0.85 - mess * 0.55)) {
         plants++;
         const plant = makePottedPlant({ variant: 1, seed: seed * 17 + i, merge: false });
         plant.position.set(r.range(0.55, 0.85), DESK_TOP_Y, r.range(0.05, 0.5));
@@ -1752,12 +2231,45 @@ export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
         phone.rotation.y = r.range(0.1, 0.5);
         station.add(phone);
       }
+      // Letter trays and manila stacks: the paperwork VOLUME the refs have and the build
+      // did not. Loose sheets alone read as litter; stacks read as a job.
+      if (r.chance(0.30 + mess * 0.45)) {
+        const tray = makePaperTray({ seed: seed * 59 + i, merge: false });
+        tray.position.set(r.range(0.5, 0.86), DESK_TOP_Y, r.range(-0.55, -0.25));
+        tray.rotation.y = r.range(-0.35, 0.35);
+        station.add(tray);
+      }
+      if (r.chance(0.22 + mess * 0.5)) {
+        const folders = makeFolderStack({ seed: seed * 61 + i, merge: false });
+        folders.position.set(r.range(-0.95, -0.6), DESK_TOP_Y, r.range(-0.5, 0.1));
+        folders.rotation.y = r.range(-0.5, 0.5);
+        station.add(folders);
+      }
+      // A drawer left hanging open — pure "somebody left in a hurry".
+      if (mess > 0.5 && r.chance(0.35)) {
+        // Pedestal sits at desk-local (-0.73, ·, -0.33); its front face is at z = -0.04.
+        const drawer = makeOpenDrawer(seed * 67 + i);
+        drawer.position.set(-0.73, 0.42, -0.04);
+        station.add(drawer);
+      }
+      // Sticky notes stuck to the panel beside the monitor. Highest chroma-per-triangle
+      // object in the level.
+      const stickies = Math.round(r.range(0, 1.2 + mess * 4));
+      for (let s = 0; s < stickies; s++) {
+        station.add(
+          mesh(quad(0.076, 0.076), PAPER(STICKY_TINTS[r.int(0, STICKY_TINTS.length - 1)]), {
+            pos: [r.range(-0.95, 0.2), 0.95 + r.range(0, 0.34), -0.712],
+            rot: [0, 0, r.range(-0.32, 0.32)],
+            cast: false,
+          }),
+        );
+      }
       // Loose paperwork. Spin in Z (in-plane) and lay flat in X — see makeScatterPaper.
-      const sheets = r.int(1, 3);
+      const sheets = Math.round(r.range(mess < 0.25 ? 0 : 1, 2 + mess * 5));
       for (let s = 0; s < sheets; s++) {
         station.add(
           mesh(quad(0.21, 0.297), MAT.paper, {
-            pos: [r.range(-0.9, -0.55), DESK_TOP_Y + 0.002 + s * 0.0015, r.range(-0.5, -0.12)],
+            pos: [r.range(-0.95, -0.45), DESK_TOP_Y + 0.002 + s * 0.0015, r.range(-0.55, -0.05)],
             rot: [-Math.PI / 2, 0, r.range(0, Math.PI)],
             cast: false,
           }),
@@ -1767,10 +2279,11 @@ export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
   });
 
   if (v === 0) {
-    // Pod-edge clutter: a box someone never unpacked, and a bin.
-    if (r.chance(0.6)) {
-      const box = makeCardboardBox({ variant: 1, seed: seed * 19, merge: false });
-      box.position.set(r.range(-1.6, 1.6), 0, POD_HALF - 0.45);
+    // Pod-edge clutter: boxes somebody never unpacked, and a bin. Count scales with mess.
+    const boxes = Math.round(r.range(0, 0.6 + mess * 2.4));
+    for (let b = 0; b < boxes; b++) {
+      const box = makeCardboardBox({ variant: 1, seed: seed * 19 + b * 5, merge: false });
+      box.position.set(r.range(-1.7, 1.7), b === 1 ? 0.34 : 0, (POD_HALF - 0.45) * (r.chance(0.5) ? 1 : -1));
       box.rotation.y = r.range(0, Math.PI);
       ctx.root.add(box);
     }
@@ -1779,6 +2292,18 @@ export function makeCubiclePod(o?: CubiclePodOptions): THREE.Group {
       const bin = makeTrashCan({ variant: 1, seed: seed * 23, merge: false });
       bin.position.set(r.range(1.5, 2.0) * (r.chance(0.5) ? 1 : -1), 0, r.range(1.6, 2.0) * (r.chance(0.5) ? 1 : -1));
       ctx.root.add(bin);
+    }
+    // Paper on the floor INSIDE the pod. The refs put paper everywhere, including where
+    // nobody skates — that ambient litter is a large part of why they read as lived-in.
+    const floorSheets = Math.round(r.range(0, mess * 7));
+    for (let s = 0; s < floorSheets; s++) {
+      ctx.root.add(
+        mesh(quad(0.21, 0.297), MAT.paper, {
+          pos: [r.range(-1.9, 1.9), 0.006 + r.range(0, 0.004), r.range(-1.9, 1.9)],
+          rot: [-Math.PI / 2, 0, r.range(0, Math.PI)],
+          cast: false,
+        }),
+      );
     }
   }
 
@@ -2101,7 +2626,7 @@ export function makeWhiteboard(o?: PropOptions): THREE.Group {
 
   const inkTints: readonly number[] = [0xc0392b, 0x2a55a8, 0x2f8a4a];
   for (let i = 0; i < 7; i++) {
-    const ink = MaterialLibrary.get('darkPlastic', { color: inkTints[r.int(0, 2)], roughness: 0.7 });
+    const ink = mat(['darkPlastic', { color: inkTints[r.int(0, 2)] }]);
     ctx.root.add(
       mesh(quad(r.range(0.14, 0.55), 0.018), ink, {
         pos: [r.range(-w / 2 + 0.35, w / 2 - 0.35), r.range(-h / 2 + 0.25, h / 2 - 0.16), 0.03],
@@ -2112,7 +2637,7 @@ export function makeWhiteboard(o?: PropOptions): THREE.Group {
   }
   // markers on the tray
   for (let i = 0; i < 3; i++) {
-    const ink = MaterialLibrary.get('darkPlastic', { color: inkTints[i], roughness: 0.5 });
+    const ink = mat(['darkPlastic', { color: inkTints[i] }]);
     ctx.root.add(mesh(cyl(0.011, 0.011, 0.12, 6), ink, { pos: [-0.4 + i * 0.16, -h / 2 + 0.062, 0.062], rot: [0, 0, Math.PI / 2], cast: false }));
   }
 

@@ -55,3 +55,4 @@ refs/
 *.local.*
 dist-fx/
 .fxtools/
+tools/posepreview/
