@@ -340,6 +340,26 @@ function sbox(w: number, h: number, d: number): THREE.BufferGeometry {
   return cached(`sb|${w}|${h}|${d}`, () => finalize(new THREE.BoxGeometry(w, h, d)));
 }
 
+/**
+ * Plain box whose UVs are pre-multiplied, so texture tiling is a property of the GEOMETRY
+ * rather than of the material.
+ *
+ * This is the cheap half of the draw-call story. Asking MaterialLibrary for a different
+ * `repeat` forks the texture set and therefore the merge bucket; scaling uv here composes with
+ * whatever repeat the shared material already carries and merges into it. Anything that wants
+ * "the same steel, tiled to suit my length" uses this.
+ */
+function sboxUV(w: number, h: number, d: number, su: number, sv = 1): THREE.BufferGeometry {
+  return cached(`sbu|${w}|${h}|${d}|${su}|${sv}`, () => {
+    const g = finalize(new THREE.BoxGeometry(w, h, d));
+    const uv = g.getAttribute('uv') as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+    uv.needsUpdate = true;
+    g.setAttribute('uv1', uv);
+    return g;
+  });
+}
+
 /** Faceted cylinder / cone / drum. `seg*2 + caps` tris. */
 function cyl(rTop: number, rBot: number, h: number, seg = 10, open = false): THREE.BufferGeometry {
   return cached(`cy|${rTop}|${rBot}|${h}|${seg}|${open}`, () =>
@@ -485,6 +505,22 @@ const MAT = {
   ledgeStone: ['concreteFloor', { color: 0xb6b2aa, roughness: 0.72, repeat: [2, 1] }] as [MaterialId, MaterialOptions],
   /** Planter soil. */
   soil: ['cardboard', { color: 0x4b3a2a }] as [MaterialId, MaterialOptions],
+
+  // ---- CANONICAL GRIND STEEL ------------------------------------------------
+  // THERE ARE EXACTLY TWO OF THESE AND THERE MUST NEVER BE A THIRD.
+  //
+  // Every angle iron, coping lip and caster strip in the level used to ask MaterialLibrary for
+  // `grindMetal` with a `repeat` derived from the piece's own length — [10,1] on a kicker,
+  // [5,1] / [4,1] / [3,1] on the three ledge widths, [16,1] on a rail. A `repeat` change forks
+  // the texture set, a forked texture set forks the material family, and a forked family is an
+  // extra draw call FOREVER, for a 35 mm strip of steel that occupies four pixels. Four widths
+  // of ledge bought four draw calls and nothing else.
+  //
+  // Tiling density that actually needs to vary is baked into the geometry UVs instead (see
+  // `sboxUV`), which costs nothing and merges.
+  grindSteel: ['grindMetal', { repeat: [8, 1] }] as [MaterialId, MaterialOptions],
+  /** The caster-polished contact strip: the one true mirror on a rail. */
+  grindPolish: ['grindMetal', { repeat: [8, 1], roughness: 0.11 }] as [MaterialId, MaterialOptions],
 } as const;
 
 /** Accent tints applied to the odd filing cabinet / bin / box so the aisle has colour rhythm. */
@@ -715,7 +751,30 @@ function mergeGroup(root: THREE.Group): THREE.Group {
     }
 
     const merged = bucket.geos.length === 1 ? bucket.geos[0] : mergeGeometries(bucket.geos, false);
-    if (!merged) continue;
+    if (!merged) {
+      // mergeGeometries returns null and logs a one-line complaint that names an ARRAY INDEX
+      // and nothing else, and the old code then `continue`d — silently dropping every triangle
+      // in the bucket. A whole material's worth of the level disappearing without a word is not
+      // an acceptable failure mode, so: say which bucket, say exactly which attribute sets
+      // disagreed, and fall back to drawing the pieces unmerged rather than not at all.
+      if (typeof console !== 'undefined') {
+        const sig = (g: THREE.BufferGeometry) =>
+          `${g.index ? 'idx+' : ''}${Object.keys(g.attributes).sort().join(',')}`;
+        const counts = new Map<string, number>();
+        for (const g of bucket.geos) counts.set(sig(g), (counts.get(sig(g)) ?? 0) + 1);
+        console.warn(
+          `[OfficeProps] merge failed for "${key}" (${bucket.geos.length} geometries); ` +
+          `attribute sets present: ${[...counts].map(([s, n]) => `${s} x${n}`).join(' | ')}`,
+        );
+      }
+      for (const g of bucket.geos) {
+        const solo = new THREE.Mesh(g, material);
+        solo.castShadow = bucket.cast;
+        solo.receiveShadow = bucket.receive;
+        out.add(solo);
+      }
+      continue;
+    }
     if (bucket.geos.length > 1) for (const g of bucket.geos) g.dispose();
     merged.computeBoundingSphere();
     const me = new THREE.Mesh(merged, material);
@@ -1315,7 +1374,7 @@ export function makePrinter(o?: PropOptions): THREE.Group {
     ctx.root.add(mesh(sbox(0.2, 0.014, 0.02), MAT.chrome, { pos: [0, 0.175, d / 2 + 0.014] }));
     ctx.root.add(mesh(sbox(0.2, 0.02, 0.13), MAT.plastic, { pos: [0.16, h + 0.075, d / 2 - 0.13], rot: [-0.35, 0, 0] }));
     ctx.root.add(
-      mesh(quad(0.12, 0.055), MaterialLibrary.get('screenOn', { emissive: 0x63c07d, emissiveIntensity: 1.4 }), {
+      mesh(quad(0.12, 0.055), MaterialLibrary.get('screenOn', { emissive: SCREEN_TINTS[1] }), {
         pos: [0.16, h + 0.09, d / 2 - 0.115],
         rot: [-1.92, 0, 0],
         cast: false,
@@ -1922,7 +1981,7 @@ export function makeLedgeBlock(o?: LedgeOptions): THREE.Group {
   // Angle iron — the grind surface, and the only bright specular on the prop.
   for (const s of [-1, 1]) {
     ctx.root.add(
-      mesh(sbox(w + 0.02, 0.035, 0.075), ['grindMetal', { repeat: [Math.max(2, Math.round(w)), 1] }], {
+      mesh(sboxUV(w + 0.02, 0.035, 0.075, Math.max(2, Math.round(w)) / 8), MAT.grindSteel, {
         pos: [0, h - 0.016, s * (d / 2 - 0.03)],
         cast: false,
       }),
@@ -2407,7 +2466,7 @@ export function makeKickerRamp(o?: KickerOptions): THREE.Group {
 
   // Steel coping lip along the top edge — this is what the chair actually hits.
   ctx.root.add(
-    mesh(cbox(w + 0.05, 0.055, 0.13, 0.018), ['grindMetal', { repeat: [10, 1] }], {
+    mesh(cbox(w + 0.05, 0.055, 0.13, 0.018, [Math.max(2, Math.round(w)) / 8, 1]), MAT.grindSteel, {
       pos: [0, h - 0.012, d / 2 - 0.055],
     }),
   );
@@ -2427,6 +2486,108 @@ export function makeKickerRamp(o?: KickerOptions): THREE.Group {
   collide(ctx, [w, 0.18, Math.hypot(d, h)], [0, h / 2, 0], undefined);
   ctx.colliders[0].rotationY = undefined;
   return finish(ctx, o, { size: [w, h, d], offset: [0, h / 2, 0] });
+}
+
+/** Quarter-pipe transition profile: flat at -Z, vertical at +Z, extruded along X. */
+function transition(w: number, d: number, h: number, seg = 7): THREE.BufferGeometry {
+  return cached(`tr|${w}|${d}|${h}|${seg}`, () => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-d / 2, 0);
+    for (let i = 1; i <= seg; i++) {
+      const th = (i / seg) * (Math.PI / 2);
+      shape.lineTo(-d / 2 + d * Math.sin(th), h * (1 - Math.cos(th)));
+    }
+    shape.lineTo(d / 2, 0);
+    shape.closePath();
+    const g = new THREE.ExtrudeGeometry(shape, { depth: w, bevelEnabled: false, steps: 1 });
+    // Same axis correction as `wedge`: profile is authored in XY and extruded along +Z.
+    g.rotateY(-Math.PI / 2);
+    g.translate(w / 2, 0, 0);
+    return finalize(g);
+  });
+}
+
+export interface QuarterPipeOptions extends PropOptions {
+  width?: number;
+  depth?: number;
+  height?: number;
+}
+
+/**
+ * QUARTER PIPE — the piece of vocabulary the floorplate did not have.
+ *
+ * Every skateable object in the level so far was a straight line at one of two heights: cap
+ * rails at 1.32 m and ledges at 0.4 m. A park made only of straight lines is a park you can
+ * only travel along, and the establishing shot of it reads as a floor plan with handrails.
+ * A transition is the one primitive that sends the player UP and turns them AROUND, which is
+ * what makes the open middle of a plate a place you circulate through rather than cross.
+ *
+ * Built as improvised office kit — plywood sheeting over a steel frame, coping welded from
+ * the same stock as the desk rails — because in this game somebody built it out of the fit-out
+ * contractor's leftovers at 3 a.m.
+ *
+ * The collider is a STAIRCASE of axis-aligned boxes hugging the underside of the transition:
+ * the physics layer here only accepts boxes with a Y rotation, so a genuine curved collider is
+ * not expressible. Six bands puts the worst-case step at ~2 cm of the ride surface, which is
+ * under the caster radius and therefore invisible to the player.
+ * ~420 tris.
+ */
+export function makeQuarterPipe(o?: QuarterPipeOptions): THREE.Group {
+  const ctx = begin('quarterPipe', o, 251);
+  const w = o?.width ?? 4.2;
+  const d = o?.depth ?? 1.9;
+  const h = o?.height ?? 1.5;
+
+  ctx.root.add(mesh(transition(w, d, h, ctx.variant === 0 ? 8 : 5), MAT.plywood));
+
+  // Steel cheek plates proud of the sheeting, so the curve reads as a silhouette edge and not
+  // as a gradient. This is the whole reason a real ramp is legible from thirty metres.
+  for (const s of [-1, 1]) {
+    const cheek = new THREE.Mesh(transition(0.035, d - 0.05, h - 0.03, 5), mat(MAT.deskFrame));
+    cheek.position.set(s * (w / 2 + 0.005), 0.015, 0);
+    cheek.castShadow = true;
+    cheek.receiveShadow = true;
+    ctx.root.add(cheek);
+  }
+
+  // Coping: a full-width tube at the lip. The grind line, and the brightest specular note on
+  // the prop, which is what tells the player at a glance that the top edge is live.
+  ctx.root.add(
+    mesh(cyl(0.05, 0.05, w + 0.08, 8), MAT.grindPolish, {
+      pos: [0, h + 0.012, d / 2 - 0.045],
+      rot: [0, 0, Math.PI / 2],
+    }),
+  );
+
+  // Vertical back panel + kickplate, so the ramp is a built object from behind as well.
+  ctx.root.add(mesh(sboxUV(w, h, 0.06, w / 3, h / 3), MAT.deskFrame, { pos: [0, h / 2, d / 2 + 0.03] }));
+  ctx.root.add(mesh(sbox(w, 0.014, 0.18), MAT.deskFrame, { pos: [0, 0.007, -d / 2 - 0.08], cast: false }));
+
+  if (ctx.variant === 0) {
+    // Frame ribs showing through under the lip — free structural read.
+    for (let i = 0; i < 4; i++) {
+      const x = -w / 2 + 0.4 + (i * (w - 0.8)) / 3;
+      ctx.root.add(mesh(sbox(0.05, 0.05, d - 0.2), MAT.deskFrame, { pos: [x, h * 0.16, 0.02], cast: false }));
+    }
+  }
+
+  ctx.grinds.push({ start: [-w / 2, h + 0.06, d / 2 - 0.045], end: [w / 2, h + 0.06, d / 2 - 0.045] });
+
+  // Stepped collider under the transition.
+  const bands = 6;
+  for (let i = 0; i < bands; i++) {
+    const y0 = (i / bands) * h;
+    const y1 = ((i + 1) / bands) * h;
+    // Surface z at the MIDPOINT height of the band: half the band pokes marginally proud of
+    // the sheeting and half sits marginally inside it, which is the smallest total error.
+    const ym = (y0 + y1) / 2;
+    const th = Math.acos(Math.max(-1, Math.min(1, 1 - ym / h)));
+    const zs = -d / 2 + d * Math.sin(th);
+    const zBack = d / 2 + 0.06;
+    collide(ctx, [w, y1 - y0, Math.max(0.06, zBack - zs)], [0, (y0 + y1) / 2, (zs + zBack) / 2]);
+  }
+
+  return finish(ctx, o, { size: [w, h, d + 0.12], offset: [0, h / 2, 0] });
 }
 
 /**
@@ -2451,7 +2612,7 @@ export function makeGrindRail(length: number, o?: PropOptions): THREE.Group {
   // The strip the casters have polished mirror-bright. Free storytelling, and it is the only
   // thing in the frame that tells the player this cylinder is a rail and not a pipe.
   ctx.root.add(
-    mesh(sbox(L - 0.02, 0.004, 0.032), ['grindMetal', { repeat: [16, 1], roughness: 0.11 }], {
+    mesh(sboxUV(L - 0.02, 0.004, 0.032, L / 4), MAT.grindPolish, {
       pos: [0, topY + 0.001, 0],
       cast: false,
     }),
@@ -2528,7 +2689,7 @@ export function makeVendingMachine(o?: PropOptions): THREE.Group {
   // Illuminated product window. Low emissive intensity on purpose — this is a lit panel in
   // the room, not a light source, and it must not compete with the ceiling troffers.
   ctx.root.add(
-    mesh(quad(w - 0.16, h - 0.62), ['screenOn', { emissive: cold ? 0x4f9ee8 : 0xf0a02a, emissiveIntensity: 0.85 }], {
+    mesh(quad(w - 0.16, h - 0.62), ['screenOn', { emissive: cold ? SCREEN_TINTS[0] : SCREEN_TINTS[2] }], {
       pos: [0, h * 0.60, d / 2 + 0.006],
       cast: false,
       receive: false,
@@ -2577,7 +2738,7 @@ export function makeCopier(o?: PropOptions): THREE.Group {
   // control panel, angled, with a live screen
   ctx.root.add(mesh(cbox(0.30, 0.03, 0.20, 0.008), MAT.plastic, { pos: [0.20, h * 0.62 + 0.10, d / 2 - 0.20], rot: [-0.45, 0, 0] }));
   ctx.root.add(
-    mesh(quad(0.20, 0.11), ['screenOn', { emissive: 0x3fcf78, emissiveIntensity: 1.1 }], {
+    mesh(quad(0.20, 0.11), ['screenOn', { emissive: SCREEN_TINTS[1] }], {
       pos: [0.20, h * 0.62 + 0.125, d / 2 - 0.175],
       rot: [-2.02, 0, 0],
       cast: false,

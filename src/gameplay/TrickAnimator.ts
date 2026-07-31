@@ -225,7 +225,7 @@ export interface AnimatorConfig {
   pushLift: number;
   /** Seconds for one push cycle. */
   pushCycle: number;
-  /** Height the coasting foot hovers above the floor, metres. Keeps the shoe out of the carpet. */
+  /** How far the coasting foot's SOLE clears the floor, metres. Keeps the shoe out of the carpet. */
   coastLift: number;
   /** How far behind the pelvis the coasting foot trails, metres. Must clear the caster ring. */
   coastTrail: number;
@@ -946,7 +946,7 @@ export class TrickAnimator {
     pushApart: 0.310,
     pushLift: 0.150,
     pushCycle: 0.60,
-    coastLift: 0.115,
+    coastLift: 0.055,
     coastTrail: -0.120,
 
     leanBase: 0.340,
@@ -998,6 +998,8 @@ export class TrickAnimator {
   private lenShin = 0.40;
   private lenUpArm = 0.28;
   private lenForeArm = 0.26;
+  /** How far the rig's shoe hangs below its ankle joint, metres. Measured at bind time. */
+  private footDrop = 0;
 
   // Per-frame IK outputs. Reused, never reallocated.
   private ikUpper = new THREE.Vector3();
@@ -1215,6 +1217,33 @@ export class TrickAnimator {
       if (d.lengthSq() < 1e-10) continue;
       e.restDir = d.normalize();
     }
+
+    // 4a. how far below the ankle does this rig's shoe actually reach? `ankleRise` is authored as
+    // a plausible default, but a chunky stylised shoe can hang a lot further than that, and the
+    // difference is the sole ploughing through the carpet on every push. Take the deeper of the
+    // two, measured off the geometry, so the foot plants on the floor rather than in it.
+    this.footDrop = 0;
+    for (const f of [FOOT_L, FOOT_R]) {
+      const ef = this.slots[f];
+      if (!ef) continue;
+      let lowest = 0;
+      ef.bone.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh || !m.geometry) return;
+        if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        const bb = m.geometry.boundingBox;
+        if (!bb) return;
+        // Eight corners, because a rotated box's lowest corner is not its bbox min.
+        for (let c = 0; c < 8; c++) {
+          _v1.set(c & 1 ? bb.max.x : bb.min.x, c & 2 ? bb.max.y : bb.min.y, c & 4 ? bb.max.z : bb.min.z);
+          _v1.applyMatrix4(m.matrixWorld).applyMatrix4(modelInv);
+          const drop = ef.restModelPos.y - _v1.y;
+          if (drop > lowest) lowest = drop;
+        }
+      });
+      if (lowest > this.footDrop) this.footDrop = lowest;
+    }
+    this.footDrop *= Math.abs(this.rig.model.scale.y) || 1;
 
     // 4b. which way does this rig face?
     if (this.config.autoFacing) {
@@ -1948,6 +1977,8 @@ export class TrickAnimator {
 
     // Floor, in the pelvis's own frame: the chair root's origin IS the floor (caster contact).
     const floorY = -(this.seatLocal.y + c.pelvisAboveSeat);
+    // Ankle height of a planted foot: never less than the rig's own shoe depth (see bindBones).
+    const rise = Math.max(c.ankleRise, this.footDrop + 0.006);
 
     // --- the kicking target ---------------------------------------------------------------
     const ph = this.pushPhase;
@@ -1959,13 +1990,13 @@ export class TrickAnimator {
       footZ = c.pushReach + (c.pushDrive - c.pushReach) * u;
       // The ankle climbs through the drive because the heel comes up and he finishes on the toe.
       // It has to climb by more than the toe drops, or the shoe's toe box ends up under the floor.
-      footY = floorY + c.ankleRise * (1 + 0.90 * u);
+      footY = floorY + rise * (1 + 0.90 * u);
       toeDown = 0.35 + 0.55 * u;
     } else {
       const v = ph >= 0.75 ? (ph - 0.75) / 0.55 : (ph + 0.25) / 0.55;
       const u = smoothstep(v);
       footZ = c.pushDrive + (c.pushReach - c.pushDrive) * u;
-      footY = floorY + c.ankleRise + c.pushLift * Math.sin(Math.PI * v);
+      footY = floorY + rise + c.pushLift * Math.sin(Math.PI * v);
       toeDown = 0.35 - 0.30 * Math.sin(Math.PI * v);
     }
     _v1.set(side * c.pushApart, footY, footZ);
@@ -1974,7 +2005,7 @@ export class TrickAnimator {
     // Down beside the caster ring and trailing behind him, hovering `coastLift` off the carpet:
     // close enough to the floor to read as "ready to kick again", far enough back that the shoe
     // never ploughs through a spoke or drags a shin across the seat.
-    _v2.set(side * (c.pushApart + 0.050), floorY + c.coastLift, c.coastTrail);
+    _v2.set(side * (c.pushApart + 0.050), floorY + rise + c.coastLift, c.coastTrail);
 
     const drive = Math.max(0, Math.min(1, this.pushSm)) * (1 - this.airSm);
     _v1.lerp(_v2, 1 - drive);
@@ -2000,9 +2031,14 @@ export class TrickAnimator {
       toeDown += 0.25 * this.airSm;
     }
 
-    // The shoe is never allowed below the floor plane while the wheels are down. `ankleRise` is
-    // the ankle height of a planted foot, so half of it is the shallowest the ankle may ever get.
-    const minY = floorY + c.ankleRise * 0.55;
+    // A toe-down foot reaches further past its ankle than a flat one, so the ankle has to climb
+    // by roughly what the pitch costs — otherwise the toe box of the shoe finishes the drive
+    // phase a couple of centimetres under the carpet.
+    _v1.y += this.footDrop * 0.42 * Math.max(0, toeDown) * (1 - this.airSm);
+
+    // The shoe is never allowed below the floor plane while the wheels are down. `rise` is the
+    // ankle height of a planted foot, so most of it is the shallowest the ankle may ever get.
+    const minY = floorY + rise * 0.80;
     if (_v1.y < minY) _v1.y += (minY - _v1.y) * (1 - this.airSm);
 
     // Hip joint -> ankle. `_v1` is still measured from the NOMINAL pelvis, so the live hip offset

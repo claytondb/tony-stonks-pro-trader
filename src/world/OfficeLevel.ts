@@ -59,6 +59,7 @@ import {
   makePlanterLedge,
   makePottedPlant,
   makePrinter,
+  makeQuarterPipe,
   makeScatterPaper,
   makeTrashCan,
   makeVendingMachine,
@@ -148,10 +149,33 @@ function mulberry32(seed: number): () => number {
 // MaterialLibrary surfaces bind an aoMap and three r162 samples aoMap from uv1.
 // ---------------------------------------------------------------------------
 
+/**
+ * Give a stock three primitive the same attribute signature every OfficeProps geometry has:
+ * NON-INDEXED, with a uv1.
+ *
+ * The de-indexing is not cosmetic. BufferGeometryUtils.mergeGeometries refuses to merge a
+ * bucket whose members disagree about whether an index buffer exists, and it refuses by
+ * returning null — at which point the caller drops the entire bucket. OfficeProps runs every
+ * geometry it authors through `finalize()`, which de-indexes; the shell, the walls and the
+ * floor here are raw PlaneGeometry / BoxGeometry, which are indexed. For as long as those
+ * pieces each had a private material this never came up, because a one-geometry bucket is not
+ * merged. The moment the wall bands were consolidated onto the shared laminate and trim
+ * materials — which is the point of the consolidation — four indexed strips landed in a bucket
+ * of forty-seven non-indexed ones and took the whole bucket down with them.
+ *
+ * uv1 matters for the same reason it does in OfficeProps: three samples aoMap from the second
+ * UV set, and several of these surfaces bind a packed ORM.
+ */
 function withUV1(g: THREE.BufferGeometry): THREE.BufferGeometry {
-  const uv = g.getAttribute('uv');
-  if (uv && !g.getAttribute('uv1')) g.setAttribute('uv1', uv.clone());
-  return g;
+  let out = g;
+  if (out.index) {
+    const flat = out.toNonIndexed();
+    out.dispose();
+    out = flat;
+  }
+  const uv = out.getAttribute('uv');
+  if (uv && !out.getAttribute('uv1')) out.setAttribute('uv1', uv.clone());
+  return out;
 }
 
 function plane(w: number, h: number): THREE.BufferGeometry {
@@ -368,12 +392,21 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   //
   // The bands are pushed through `place()` into the merged static batch, so the whole wall
   // assembly — 4 planes, 4 dados, 4 rails, 4 skirtings — costs three draw calls, not sixteen.
+  //
+  // ONE TEXTURE SET FOR THE WHOLE WALL. Every band used to ask MaterialLibrary for `drywall`
+  // (or laminate, or trim) at its OWN `repeat`, which forks the texture set, which forks the
+  // merge bucket in OfficeProps.mergePropsByMaterial — five extra draw calls, permanently, for
+  // 160 triangles of banding. Because the merge consolidates materials that differ only in
+  // `.color` into one vertex-coloured family, sharing a single repeat across the three drywall
+  // bands collapses them into the family the props already use, and the rail and skirting fall
+  // into the level's existing deskLaminate / cubicleTrim buckets. Net: five buckets to zero.
   const DADO_H = 1.15;
   const RAIL_H = 0.085;
-  const wallMat = MaterialLibrary.get('drywall', { repeat: [W / 4, H / 2.6], color: 0xd6cfc2 });
-  const dadoMat = MaterialLibrary.get('drywall', { repeat: [W / 3, 1], color: 0x33405c });
-  const railMat = MaterialLibrary.get('deskLaminate', { repeat: [W / 2, 1], color: 0xc9a877 });
-  const skirtMat = MaterialLibrary.get('cubicleTrim', { repeat: [W / 2, 1] });
+  const WALL_REPEAT: [number, number] = [W / 4, H / 2.6];
+  const wallMat = MaterialLibrary.get('drywall', { repeat: WALL_REPEAT, color: 0xd6cfc2 });
+  const dadoMat = MaterialLibrary.get('drywall', { repeat: WALL_REPEAT, color: 0x33405c });
+  const railMat = MaterialLibrary.get('deskLaminate', { color: 0xc9a877 });
+  const skirtMat = MaterialLibrary.get('cubicleTrim');
   const wallSpecs: { w: number; x: number; z: number; rotY: number }[] = [
     { w: W, x: 0, z: -halfD, rotY: 0 },            // faces +Z
     { w: W, x: 0, z: halfD, rotY: Math.PI },       // faces -Z
@@ -466,7 +499,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // Deliberately NOT modelled as beams and ductwork: everything above the ceiling plane is
   // between the cutaway camera and the floor, so overhead structure does not add depth to the
   // establishing shot, it stripes it out. A vertical band at the perimeter never occludes.
-  const parapetMat = MaterialLibrary.get('drywall', { repeat: [W / 5, 1], color: 0x5a5348 });
+  const parapetMat = MaterialLibrary.get('drywall', { repeat: WALL_REPEAT, color: 0x5a5348 });
   for (const spec of wallSpecs) {
     const band = new THREE.Mesh(plane(spec.w, 1.9), parapetMat);
     band.castShadow = false;
@@ -656,7 +689,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
           // the whole field is one merge), so the outer column now gets real desks, monitors
           // and chairs; only its collider and grind sets stay cheap.
           const variant = ci === 0 ? 0 : 1;
-          const cleared = ci > 0 && chance(0.12);
+          const cleared = ci > 0 && chance(0.18);
 
           // ---- PER-POD CHARACTER ------------------------------------------
           // The floorplate used to roll the same dressing distribution for every pod, which is
@@ -714,13 +747,43 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
           // Pod tops are a secondary grind line — register the two near columns.
           const grind = ci <= 1 && !cleared;
 
-          place(acc, pod, x, 0, z, (ci + ri) % 2 === 0 ? rand(-0.02, 0.02) : Math.PI / 2 + rand(-0.02, 0.02), {
-            collide,
-            grind,
-          });
+          // Orientation used to be a strict CHECKERBOARD — (ci + ri) parity — which from any
+          // wide camera is the most legible pattern a human eye can find, and it read as
+          // wallpaper. Real fit-outs run in BAYS: several pods sharing an orientation, then a
+          // break. Rolling per pod with a heavy bias toward the previous bay's orientation gives
+          // runs of two to four, with the occasional pod turned right around because the tenant
+          // wanted a window. Aisle-facing pods stay square to the corridor so the hero grind
+          // line keeps a clean edge behind it.
+          const podYaw =
+            ci === 0
+              ? rand(-0.02, 0.02)
+              : (Math.floor(ri / (1 + (ci % 3)) + ci) % 2) * (Math.PI / 2)
+                + (chance(0.16) ? Math.PI / 2 : 0)
+                + rand(-0.035, 0.035);
+
+          place(acc, pod, x, 0, z, podYaw, { collide, grind });
 
           if (ci === 0 && chance(0.4)) {
             acc.paperSeeds.push({ x: x - sx * (POD_SIZE / 2 + 0.5), z: z + rand(-1.4, 1.4), radius: 1.1 });
+          }
+
+          // Between-pod service gap dressing: the 1.3 m aisle between pod columns was empty on
+          // every one of the thirty pods. One prop in three of those gaps is what stops the pod
+          // field reading as a lattice of identical islands separated by clean carpet.
+          if (ci > 0 && chance(0.34)) {
+            const gx = x - sx * (POD_PITCH / 2);
+            const gz = z + rand(-1.8, 1.8);
+            if (!blocked(keepClear, gx, gz, 0.5, 0.5)) {
+              const g = rng();
+              const gp =
+                g < 0.26 ? makeBoxStack({ seed: podIndex * 13 + 5 })
+                  : g < 0.46 ? makeCardboardBox({ variant: 1, seed: podIndex * 17 + 7 })
+                    : g < 0.62 ? makeFilingCabinet({ variant: 1, seed: podIndex * 19 + 11, accent: chance(0.2) })
+                      : g < 0.76 ? makeTrashCan({ variant: 1, seed: podIndex * 23 + 13 })
+                        : g < 0.88 ? makePottedPlant({ variant: 0, seed: podIndex * 29 + 17 })
+                          : makeDeskChair({ variant: 1, seed: podIndex * 31 + 19, knocked: chance(0.5) });
+              place(acc, gp, gx, 0, gz, rand(0, Math.PI * 2), { collide: 1 });
+            }
           }
         }
       }
@@ -835,28 +898,199 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     }
   }
 
+  // ================================================== TRANSITION AGAINST THE WALL ====
+  // THIS IS THE FIX FOR "THE DEAD CENTRE IS A WAREHOUSE FLOOR".
+  //
+  // Every skateable object on this plate was a straight line at one of two heights: cap rails
+  // at 1.40 m and ledges at 0.4-0.6 m. A park built only out of straight lines is a park you
+  // can only travel ALONG — you enter an arm at one end, you leave it at the other, and the
+  // nine metres of carpet between the two lines has no reason to exist. That is precisely what
+  // an "architectural walkthrough" looks like from a wide camera: circulation, not a park.
+  //
+  // A transition is the primitive that fixes it, because it sends the player UP and turns them
+  // AROUND, which is what makes an open floor a place you circulate IN. So each arm of the
+  // cross corridor gets a run of quarter pipes backed hard onto the corridor wall.
+  //
+  // THE COPING IS DELIBERATELY FLUSH WITH THE CORRIDOR CAP RAIL. The wall top sits at
+  // AISLE_H + 0.08 = 1.40 and the QP lip is authored to land there, so carving up the
+  // transition puts the player's wheels exactly on the continuous 17 m grind line running
+  // along the top of the wall behind it. Pump the ramp, pop the lip, hold the rail: that is a
+  // designed line rather than a field of props, and it costs 1.5 m off the corridor width,
+  // which tightens the space at the same time.
+  const CAP_TOP = AISLE_H + 0.08;
+  const QP_DEPTH = 1.55;
+  for (const sx of [-1, 1]) {
+    // The rail the level data owns runs down ONE side of each arm; the transitions take the
+    // other, so the two lines are parallel and transferable instead of fighting.
+    const wallZ = sx > 0 ? -CROSS_HALF : CROSS_HALF;
+    const cz = wallZ - Math.sign(wallZ) * (QP_DEPTH / 2 + 0.06);
+    for (const bx of [8.6, 14.2, 19.6]) {
+      const px = sx * bx;
+      if (Math.abs(px) + 2.4 > crossEndX) continue;
+      if (blocked(keepClear, px, cz, 2.4, QP_DEPTH / 2)) continue;
+      const qp = makeQuarterPipe({
+        width: 4.4,
+        depth: QP_DEPTH,
+        height: CAP_TOP - 0.06,
+        seed: 3800 + Math.round(bx * 3) + sx,
+      });
+      // rotY = 0 puts the tall end at +Z. The wall is at -Z on the +X arm, so flip there.
+      place(acc, qp, px, 0, cz, wallZ < 0 ? Math.PI : 0, { collide: true, grind: true });
+      acc.wear.push({ x: px, z: cz - Math.sign(wallZ) * 1.7, width: 4.6, depth: 2.6, strength: 0.5 });
+      acc.paperSeeds.push({ x: px + rand(-1.6, 1.6), z: cz - Math.sign(wallZ) * 1.5, radius: 1.3 });
+    }
+  }
+
+  // --- spawn banks ------------------------------------------------------------
+  // Two low banks flanking the spawn, one at the mouth of each arm of the cross corridor,
+  // facing outward. The player spawns between them, so the opening frame says "there is
+  // transition here" rather than "there is a corridor here" — and it says it sideways, which
+  // is the direction the level otherwise gives the player no reason to look in.
+  //
+  // x = ±6.1 is the one lane in the arm that nothing else claims: the hero ledges stop at
+  // x = 3.9, the corridor walls start at 5.2 and turn the corner there, and the arm plaza's
+  // first item is at 7.3.
+  for (const sx of [-1, 1]) {
+    const bx = sx * 6.1;
+    if (blocked(keepClear, bx, 0, 0.7, 1.7)) continue;
+    // rotY = +PI/2 maps the ramp's local +Z (its tall end) onto +X.
+    place(acc, makeQuarterPipe({ variant: 1, width: 3.2, depth: 1.2, height: 0.66, seed: 3900 + sx }), bx, 0, 0,
+      sx * Math.PI / 2, { collide: true, grind: true });
+    acc.wear.push({ x: bx - sx * 1.5, z: 0, width: 2.4, depth: 3.4, strength: 0.45 });
+  }
+
+  // --- spine islands ----------------------------------------------------------
+  // The spine's centre lane was the widest unbroken strip of carpet on the plate: the level
+  // data's kickers sit at x = ±2.4 and its floor rails at x = ±4.0, so the two metres either
+  // side of the centre line carried nothing at all. A funbox — kicker, flat, kicker — turns
+  // that dead lane into the connector between the two rail lines, and because it is composed
+  // out of props that already exist it enters the same merge buckets and costs zero draw calls.
+  //
+  // GEOMETRY, NOT TASTE, PICKS THE POSITION. The only gap on the spine that a full funbox fits
+  // in is between the intersection and the level's first kicker: that ramp occupies
+  // z = 7.6…9.4 and the second one 12.1…13.9, so the usable band is z = 4.0…7.5 and a funbox
+  // of flat length L needs L + 1.84 m. L = 1.6 lands the assembly in 4.03…7.47 with 5 cm to
+  // spare at each end. The stretch beyond it is covered by the 8 m hubba below, which is why
+  // there is only one island per half and not two.
+  const ISLAND_W = 2.0;
+  const ISLAND_LEN = 1.6;
+  for (const sz of [-1, 1]) {
+    const cz = sz * 5.75;
+    if (blocked(keepClear, 0, cz, ISLAND_W / 2 + 0.2, ISLAND_LEN / 2 + 1.4)) continue;
+    place(acc, makeLedgeBlock({
+      width: ISLAND_W,
+      depth: ISLAND_LEN,
+      height: 0.42,
+      seed: 4000 + sz,
+      stripe: sz > 0 ? ACCENT_ORANGE : ACCENT_TEAL,
+    }), 0, 0, cz, 0, { collide: true, grind: true });
+    // A kick at each end so the island is rideable from both directions.
+    for (const end of [-1, 1]) {
+      place(acc, makeKickerRamp({
+        variant: 1,
+        width: ISLAND_W,
+        depth: 0.92,
+        height: 0.42,
+        seed: 4050 + end * 3 + sz,
+      }), 0, 0, cz + sz * end * (ISLAND_LEN / 2 + 0.46), sz * end > 0 ? Math.PI : 0, {
+        collide: true,
+        grind: false,
+      });
+    }
+    acc.wear.push({ x: 0, z: cz, width: 3.0, depth: ISLAND_LEN + 3.4, strength: 0.4 });
+    acc.paperSeeds.push({ x: rand(-1.4, 1.4), z: cz + sz * rand(1.6, 2.6), radius: 1.2 });
+  }
+
+  // --- spine hubbas -----------------------------------------------------------
+  // The level data's kickers alternate sides down the spine — both +Z kickers sit at x = -2.4,
+  // both -Z kickers at x = +2.4 — so each half of the corridor has one side carrying every
+  // obstacle and the other side carrying eight metres of bare carpet. That asymmetry is very
+  // visible from the follow camera, because the empty side is exactly where the camera lags.
+  //
+  // An 8 m ledge in the empty lane balances it and, more usefully, gives each half of the spine
+  // a THIRD parallel line: kicker lane, ledge, floor rail. Three lines a metre and a half
+  // apart is a corridor you can slalom; one line is a corridor you drive down.
+  for (const sz of [-1, 1]) {
+    const lx = sz > 0 ? 2.72 : -2.72;   // opposite the kickers in that half
+    const cz = sz * 10.4;
+    if (blocked(keepClear, lx, cz, 0.6, 4.2)) continue;
+    place(acc, makeLedgeBlock({
+      width: 8.0,
+      depth: 0.92,
+      height: 0.52,
+      seed: 4200 + sz,
+      stripe: sz > 0 ? ACCENT_TEAL : ACCENT_ORANGE,
+    }), lx, 0, cz, Math.PI / 2, { collide: true, grind: true });
+    acc.wear.push({ x: lx - Math.sign(lx) * 1.3, z: cz, width: 2.4, depth: 8.4, strength: 0.35 });
+    for (let k = -1; k <= 1; k++) {
+      acc.paperSeeds.push({ x: lx - Math.sign(lx) * rand(0.9, 1.8), z: cz + k * 3.0, radius: 1.1 });
+    }
+  }
+
+  // ---------------------------------------------------- cross-arm wall clutter ---
+  // The arms only ever got skate furniture; the 1.5 m strip between the furniture and the
+  // corridor wall stayed showroom-clean for eighteen metres in both directions, which is a
+  // large share of what reads as "empty". Same rules as the spine: hard against the wall,
+  // never in the skate line.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const wz = sz * (CROSS_HALF - 0.55);
+      // This arm's transitions live on the wall opposite the level's floor rail; on that side
+      // the clutter loop has to step around them.
+      const transitionSide = (sx > 0 ? -1 : 1) === sz;
+      for (let x = sx * (SPINE_HALF + 1.6); Math.abs(x) < crossEndX - 1.0; x += sx * rand(1.8, 4.2)) {
+        if (transitionSide && [8.6, 14.2, 19.6].some((b) => Math.abs(Math.abs(x) - b) < 2.9)) continue;
+        if (blocked(keepClear, x, wz, 0.6, 0.6)) continue;
+        const roll = rng();
+        const accent = chance(0.2);
+        let prop: THREE.Object3D;
+        if (roll < 0.18) prop = makeBoxStack({ seed: Math.round(x * 5) + 131 });
+        else if (roll < 0.34) prop = makeCardboardBox({ variant: 1, seed: Math.round(x * 7) + 137 });
+        else if (roll < 0.48) prop = makeTrashCan({ variant: 1, seed: Math.round(x * 11) + 139, accent });
+        else if (roll < 0.60) prop = makePottedPlant({ variant: 0, seed: Math.round(x * 13) + 149 });
+        else if (roll < 0.70) prop = makeFilingCabinet({ variant: 1, seed: Math.round(x * 17) + 151, accent });
+        else if (roll < 0.78) prop = makeWaterCooler({ variant: 1, seed: Math.round(x * 19) + 157 });
+        else if (roll < 0.86) prop = makePrinter({ variant: 1, seed: Math.round(x * 23) + 163 });
+        else prop = makeDeskChair({ variant: 1, seed: Math.round(x * 29) + 167, knocked: roll > 0.94 });
+        place(acc, prop, x, 0, wz, rand(0, Math.PI * 2), { collide: 2 });
+        if (chance(0.55)) acc.paperSeeds.push({ x: x + rand(-1.1, 1.1), z: wz - sz * 0.9, radius: 1.0 });
+      }
+    }
+  }
+
   // Aisle clutter so the spine itself isn't a bare carpet strip: boxes, bins, plants and the
   // chairs somebody rolled out of the way, tucked against the corridor wall, never in the
   // skate line. Twice the previous density: the refs are MESSY, and one prop every six metres
   // of a 46 m corridor is not messy, it is tidy.
+  // BOTH walls, not one at random. Rolling a side per step meant a 46 m corridor got roughly
+  // ten props spread over ninety metres of wall, i.e. one every nine metres, which no camera
+  // reads as clutter. Walking both walls independently doubles it, and the props stay in the
+  // 0.5 m service strip the skate line never touches.
   const aisleEdge = SPINE_HALF - 0.5;
-  for (let z = -halfD + 4; z < halfD - 4; z += rand(2.4, 4.6)) {
-    if (Math.abs(z) < CROSS_HALF + 1.2) continue;
-    const sx = chance(0.5) ? 1 : -1;
-    const x = sx * aisleEdge;
-    if (blocked(keepClear, x, z, 0.6, 0.6)) continue;
-    const roll = rng();
-    const accent = chance(0.22);
-    let prop: THREE.Object3D;
-    if (roll < 0.20) prop = makeCardboardBox({ variant: 1, seed: Math.round(z * 3) + 61 });
-    else if (roll < 0.36) prop = makeTrashCan({ variant: 1, seed: Math.round(z * 7) + 67, accent });
-    else if (roll < 0.50) prop = makePottedPlant({ variant: 0, seed: Math.round(z * 11) + 71 });
-    else if (roll < 0.62) prop = makePrinter({ variant: 1, seed: Math.round(z * 13) + 73 });
-    else if (roll < 0.70) prop = makeFireExtinguisher({ seed: Math.round(z * 17) + 79 });
-    else if (roll < 0.82) prop = makeBoxStack({ seed: Math.round(z * 19) + 83 });
-    else prop = makeDeskChair({ variant: 1, seed: Math.round(z * 23) + 89, knocked: roll > 0.91 });
-    place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: 2 });
-    if (chance(0.5)) acc.paperSeeds.push({ x: x - sx * 0.9, z: z + rand(-1.2, 1.2), radius: 0.9 });
+  for (const sx of [-1, 1]) {
+    for (let z = -halfD + 4; z < halfD - 4; z += rand(1.7, 3.4)) {
+      if (Math.abs(z) < CROSS_HALF + 1.2) continue;
+      const x = sx * aisleEdge;
+      if (blocked(keepClear, x, z, 0.6, 0.6)) continue;
+      const roll = rng();
+      const accent = chance(0.22);
+      let prop: THREE.Object3D;
+      if (roll < 0.20) prop = makeCardboardBox({ variant: 1, seed: Math.round(z * 3) + 61 * sx });
+      else if (roll < 0.36) prop = makeTrashCan({ variant: 1, seed: Math.round(z * 7) + 67, accent });
+      else if (roll < 0.50) prop = makePottedPlant({ variant: 0, seed: Math.round(z * 11) + 71 });
+      else if (roll < 0.62) prop = makePrinter({ variant: 1, seed: Math.round(z * 13) + 73 });
+      else if (roll < 0.70) prop = makeFireExtinguisher({ seed: Math.round(z * 17) + 79 });
+      else if (roll < 0.82) prop = makeBoxStack({ seed: Math.round(z * 19) + 83 });
+      else prop = makeDeskChair({ variant: 1, seed: Math.round(z * 23) + 89, knocked: roll > 0.91 });
+      place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: 2 });
+      if (chance(0.6)) acc.paperSeeds.push({ x: x - sx * 0.9, z: z + rand(-1.2, 1.2), radius: 0.9 });
+      // Stacked on top: the "this floor is being decommissioned" read, and a second silhouette
+      // height off one footprint.
+      if (roll < 0.30 && chance(0.4)) {
+        place(acc, makeCardboardBox({ variant: 1, seed: Math.round(z * 31) + 97 }), x + rand(-0.12, 0.12), 0.36,
+          z + rand(-0.12, 0.12), rand(0, Math.PI), { collide: false });
+      }
+    }
   }
 
   // ------------------------------------------------------- perimeter dress ---
@@ -871,7 +1105,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   for (const run of wallRuns) {
     const yaw = Math.atan2(run.nx, run.nz); // face into the room
     const span = run.along === 'x' ? W : D;
-    for (let t = -span / 2 + 2.2; t < span / 2 - 2.2; t += rand(0.95, 3.4)) {
+    for (let t = -span / 2 + 2.2; t < span / 2 - 2.2; t += rand(0.8, 2.3)) {
       const x = run.along === 'x' ? t : run.base;
       const z = run.along === 'x' ? run.base : t;
       if (blocked(keepClear, x, z, 0.7, 0.7)) continue;
@@ -942,7 +1176,13 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // Loose paperwork, CLUSTERED. 220 sheets scattered uniformly across the whole plate with
   // no contact shadow was the loudest cheapness tell in the build: it read as a broken decal
   // system, not as blown paperwork. Paper piles where it was dropped.
-  const paper = makeScatterPaper(160, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
+  //
+  // 320 sheets, up from 160. Two things changed since that number was picked: the clustering
+  // pass landed (so sheets pile where something happened instead of dusting the plate evenly),
+  // and the seed list has roughly doubled with the transitions, islands and arm clutter. Loose
+  // paper is the single cheapest thing in the refs — it is in every one of them, in drifts —
+  // and at 18 triangles a sheet the whole storm is one mesh and 5,800 triangles.
+  const paper = makeScatterPaper(320, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
   place(acc, paper, 0, 0, 0, 0, { collide: false });
 
   // Traffic-lane wear down both corridors plus the point stains collected above.
@@ -990,20 +1230,37 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   });
   root.add(ceilingBatch);
 
-  // Sanity check: nothing in the ceiling batch may sit below the ceiling plane. A troffer
-  // that loses its Y translation during the merge lands on the carpet as a blown-out white
-  // slab, which is indistinguishable from a broken lightmap. Fail loud in dev instead.
+  // ---------------------------------------------------- CEILING SELF-CHECK ---
+  // The suspended ceiling has now gone missing from an establishing shot twice, and both times
+  // the first hour went on deciding whether it was a build bug, a merge bug or a culling bug.
+  // So the builder answers that question itself, at build time, out loud:
+  //
+  //   * does the batch contain geometry at all,
+  //   * does it span the full plate (a grid built at the wrong size leaves a bare rim),
+  //   * does it sit AT the ceiling plane (a troffer that loses its Y translation in the merge
+  //     lands on the carpet as a blown-out white slab, which looks exactly like a broken
+  //     lightmap), and
+  //   * did every troffer we asked for actually survive into the batch.
+  let ceilMeshes = 0;
+  ceilingBatch.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) ceilMeshes++;
+  });
+  const ceilBox = new THREE.Box3().setFromObject(ceilingBatch);
+  const troffersWanted = panelCountX * panelCountZ;
   if (typeof console !== 'undefined') {
-    let minY = Infinity;
-    ceilingBatch.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh || !m.geometry) return;
-      m.geometry.computeBoundingBox();
-      const bb = m.geometry.boundingBox;
-      if (bb) minY = Math.min(minY, bb.min.y + m.position.y);
-    });
-    if (minY < H - 1.9) {
-      console.warn(`[OfficeLevel] ceiling batch reaches y=${minY.toFixed(2)}, expected >= ${(H - 1.9).toFixed(2)}`);
+    const span = ceilBox.isEmpty() ? 0 : ceilBox.max.x - ceilBox.min.x;
+    const problems: string[] = [];
+    if (!ceilMeshes) problems.push('ceiling batch is EMPTY');
+    if (span < W - TILE * 2) problems.push(`ceiling spans ${span.toFixed(1)} m of a ${W} m plate`);
+    if (!ceilBox.isEmpty() && ceilBox.min.y < H - 1.9) {
+      problems.push(`ceiling reaches y=${ceilBox.min.y.toFixed(2)}, expected >= ${(H - 1.9).toFixed(2)}`);
+    }
+    if (problems.length) console.warn(`[OfficeLevel] CEILING: ${problems.join('; ')}`);
+    else {
+      console.log(
+        `[OfficeLevel] ceiling OK — ${ceilMeshes} draw calls, ${troffersWanted} troffers, ` +
+        `plane y=${H}, batch y=[${ceilBox.min.y.toFixed(2)}, ${ceilBox.max.y.toFixed(2)}]`,
+      );
     }
   }
 
@@ -1026,7 +1283,17 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       // ONLY the suspended tile grid hides. The building shell stays (so the frame never
       // clears to a void) and the fixture point lights stay (killing them on the same branch
       // is what made every wide shot lose all local light and go flat).
-      const inside = y < H - 0.15;
+      //
+      // THE THRESHOLD IS ABOVE THE CEILING, NOT BELOW IT. It used to be H - 0.15, i.e. 15 cm
+      // UNDER the tile plane, which meant an ordinary gameplay camera — the follow rig sits
+      // around 2.6-3.2 m when the player is airborne off a kicker — crossed it while still
+      // inside the room and deleted the entire ceiling for the duration of the jump. That is
+      // the "the ceiling has vanished and there is a black void above the wall line" report:
+      // not a build failure, a cutaway firing a whole ramp height too early.
+      //
+      // H + 0.3 is above the tile plane and above the deepest pendant canopy, so the ceiling
+      // can only disappear once the camera is genuinely outside the room looking down.
+      const inside = y < H + 0.3;
       if (ceilingBatch.visible !== inside) ceilingBatch.visible = inside;
     },
     colliders: acc.colliders,
