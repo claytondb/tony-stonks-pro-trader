@@ -14,13 +14,14 @@
  *   - refined ACES filmic tone curve (full RRT+ODT fit with the ACES colour
  *     matrices, not the cheap Narkowicz approximation — the matrices are what
  *     keep saturated orange grind sparks from clipping to white)
- *   - lift / gamma / gain colour grading, done in a gamma-2.2 working space
+ *   - lift / gamma / gain colour grading, done in the sRGB working space
  *   - black-point re-anchor
  *   - a real contrast S-curve around a sub-0.5 pivot (paired power curves, C1 at
  *     the pivot, bijective on [0,1] — so it has a toe and a shoulder and can be
  *     pushed hard without clipping either end)
  *   - warm-highlight / cool-shadow split tone
  *   - vibrance (chroma-humped saturation, not a flat multiply)
+ *   - a soft highlight shoulder so nothing clips flat per-channel
  *   - vignette
  *   - film grain (shadow weighted) + dither
  *
@@ -60,11 +61,13 @@ export type PostQuality = 'off' | 'low' | 'medium' | 'high' | 'ultra';
 export interface GradeOptions {
   saturation?: number;
   contrast?: number;
-  /** Black point subtracted (in the gamma-2.2 working space) before the S-curve. */
+  /** Black point subtracted (in the sRGB working space) before the S-curve. */
   black?: number;
   vignette?: number;
   grain?: number;
   split?: number;
+  /** Knee (0..1) above which highlights compress toward white instead of clipping. */
+  shoulder?: number;
   bloomStrength?: number;
   bloomRadius?: number;
   bloomThreshold?: number;
@@ -131,6 +134,7 @@ uniform vec3  uGain;
 uniform vec3  uShadowTint;
 uniform vec3  uHighlightTint;
 uniform float uSplit;
+uniform float uShoulder;     // knee above which highlights compress toward 1 instead of clipping
 
 varying vec2 vUv;
 
@@ -181,6 +185,27 @@ vec3 sCurve( vec3 x, float pivot, float k ) {
   vec3 lo = pivot * pow( c / pivot, vec3( k ) );
   vec3 hi = 1.0 - ( 1.0 - pivot ) * pow( ( 1.0 - c ) / ( 1.0 - pivot ), vec3( k ) );
   return mix( lo, hi, step( vec3( pivot ), c ) );
+}
+
+// --- display-linear <-> sRGB working space ----------------------------------
+// NOT pow(x, 1/2.2) / pow(x, 2.2). The sRGB transfer has a LINEAR TOE below
+// 0.0031308 with slope 12.92, and pow(2.2) has slope 0 at the origin, so the two
+// diverge by nearly an order of magnitude exactly where this grade does its most
+// delicate work. Concretely: the grade lifts the floor of the frame to 0.026 in
+// its working space, then the old pow(col, 2.2) handed OutputPass 1.06e-4
+// linear, which the real sRGB OETF encodes as 0.0014 — 0.35/255, not the 6.6/255
+// the lift asked for. That is the entire reason the build kept measuring p1 = 1.7
+// against the references' 9-10 no matter how hard the lift was pushed: the blacks
+// were not being crushed by the grade, they were being crushed by the round trip
+// out of it. Using the actual transfer function makes the round trip exact.
+vec3 linearToSrgb( vec3 c ) {
+  c = clamp( c, 0.0, 1.0 );
+  return mix( c * 12.92, 1.055 * pow( c, vec3( 1.0 / 2.4 ) ) - 0.055, step( vec3( 0.0031308 ), c ) );
+}
+
+vec3 srgbToLinear( vec3 c ) {
+  c = clamp( c, 0.0, 1.0 );
+  return mix( c / 12.92, pow( ( c + 0.055 ) / 1.055, vec3( 2.4 ) ), step( vec3( 0.04045 ), c ) );
 }
 
 float hash21( vec2 p ) {
@@ -239,9 +264,9 @@ void main() {
   // exposure + filmic tone curve ----------------------------------------
   col = tonemapACES( max( col, 0.0 ) * uExposure * ACES_EXPOSURE_SCALE );
 
-  // move to a gamma-2.2 working space; grading numbers behave like the
+  // move to the sRGB working space; grading numbers behave like the
   // sRGB reference frames there.
-  col = pow( col, vec3( 1.0 / 2.2 ) );
+  col = linearToSrgb( col );
 
   // gain / gamma ---------------------------------------------------------
   col = col * uGain;
@@ -285,6 +310,21 @@ void main() {
   // pulse white flash ----------------------------------------------------
   col += p * vec3( 0.22, 0.208, 0.185 );
 
+  // highlight shoulder ---------------------------------------------------
+  // Everything above (gain, the S-curve's own shoulder, the warm split tone and
+  // the vibrance hump) can push a channel past 1.0, and the final clamp then
+  // lands it on exactly 1.0. Per-channel clipping is what turns a lit troffer
+  // into a hard white slab with a coloured fringe: the blue channel clips first
+  // in a warm highlight, so the fixture goes amber, then cyan-fringed, then flat
+  // white over about a fifth of a stop. This is a soft knee instead — identity
+  // below uShoulder, C1-continuous there (slope 1), asymptotic to 1.0 above, so
+  // the fixture keeps a gradient all the way into its core and the hue holds.
+  {
+    float k = uShoulder;
+    vec3 over = max( col - k, 0.0 );
+    col = min( col, vec3( k ) ) + ( 1.0 - k ) * ( over / ( over + ( 1.0 - k ) ) );
+  }
+
   // vignette (aspect corrected, tightens slightly with speed) ------------
   float aspect = uResolution.x / max( uResolution.y, 1.0 );
   vec2 v = ( vUv - CENTER ) * vec2( aspect, 1.0 );
@@ -300,8 +340,9 @@ void main() {
 
   col = clamp( col, 0.0, 1.0 );
 
-  // back to linear — OutputPass applies the sRGB transfer.
-  gl_FragColor = vec4( pow( col, vec3( 2.2 ) ), 1.0 );
+  // back to linear — OutputPass applies the sRGB transfer, so this must be its
+  // exact inverse or the lift above never reaches the frame.
+  gl_FragColor = vec4( srgbToLinear( col ), 1.0 );
 }
 `;
 
@@ -320,36 +361,70 @@ const GRADE_DEFAULTS = {
   // above 200. i.e. the grade was not producing a narrow band because it lacked
   // gain, it was producing one because the linear contrast had to stay timid to
   // avoid clipping. With the real S-curve it can be pushed.
-  saturation: 1.14,
+  //
+  // Palette-correction pass 2. Measured against the refs the r7 build came back
+  // R/B 1.46 (refs 1.23-1.32), shadow R/B 0.92 (refs 0.70-0.82) and mean HSV
+  // saturation 0.42 (refs 0.28-0.30): a sodium cast, warm shadows, and enough
+  // chroma gain on top to make the cast impossible to miss. The warm/cool SPLIT
+  // was right; the white point it was splitting around was not. Fixes here are
+  // (a) a near-luma-neutral highlight tint, (b) a lower vibrance gain, (c) the
+  // highlight shoulder above, and (d) the shadow cooling moved into the fill
+  // light in Environment.ts where it belongs.
+  saturation: 1.04,
   contrast: 1.55, // slope at the pivot; a true S-curve, so this does not clip
-  pivot: 0.33,
+  pivot: 0.35,
   // The office IBL floors the frame at a mid grey; without re-anchoring the black
   // point, p25 lands at 77/255 against the refs' 50-59 and the picture has no
   // shadow core anywhere, only degrees of "lit".
-  black: 0.034,
-  vignette: 0.3,
+  // 0.034 -> 0.050 with the lift raised to match. The build measured p25 = 78/255
+  // against the refs' 52-60 (no shadow core) while its p1 sat at 1.7 against their
+  // 9-10 (crushed to nothing in the vignette corners) — i.e. the low end was
+  // simultaneously too flat and too dead. Re-anchoring lower and lifting the floor
+  // afterwards fixes both ends of that.
+  black: 0.038,
+  // 0.30 -> 0.24. At 0.30 the corners were the darkest thing in every frame,
+  // which is where that p1 = 1.7 came from.
+  vignette: 0.24,
   grain: 0.026,
-  // 0.5 -> 0.70. Measured shadow R/B was 0.86 against the refs' 0.70-0.81 — the
-  // shadows were not cool, they were neutral with a story about being cool.
-  split: 0.7,
+  // The split itself was right. It is now applied around a NEUTRAL white point
+  // (see the tints below), so it can come down a little without losing the
+  // separation it buys.
+  split: 0.66,
   chromaticBase: 0.0005,
-  lift: new THREE.Vector3(0.003, 0.004, 0.011),
+  // Refs never reach true black: their 1st-percentile luma is 6-9/255, and the
+  // lift is cool because an office's darkest pixels are shadow, not fixture.
+  lift: new THREE.Vector3(0.032, 0.034, 0.043),
   gammaInv: new THREE.Vector3(1.0, 1.0, 1.0 / 1.03),
   // Was (1.025, 1.015, 1.0) — a warm multiply on EVERY pixel including the
   // shadows, which is a large part of how the whole frame came out beige. Warmth
   // now lives only in the highlight end of the split tone, where it belongs.
   gain: new THREE.Vector3(1.0, 1.0, 1.0),
-  shadowTint: new THREE.Vector3(0.79, 0.945, 1.215),
-  highlightTint: new THREE.Vector3(1.115, 1.0, 0.865),
+  // Both tints are deliberately close to luma-neutral (Rec.709 luma 0.94 and 1.01)
+  // so the split rotates hue without moving exposure. The highlight tint was
+  // (1.115, 1.0, 0.865) — a 1.29 R/B multiply sitting on top of an already-warm
+  // key and an already-warm IBL ceiling. Stacked three deep, that is the sodium
+  // cast. 1.11 here still reads amber against a 0.69 R/B shadow.
+  shadowTint: new THREE.Vector3(0.825, 0.955, 1.155),
+  highlightTint: new THREE.Vector3(1.09, 1.0, 0.90),
+  // Knee for the soft highlight shoulder in the grade shader.
+  shoulder: 0.9,
 };
 
 // threshold 0.85 linear was above everything in the scene EXCEPT the emissive
 // troffer quads, so the bloom had exactly one client and it read as a blown-out
 // sprite rather than as light in a room. Scene mid-grey lands near 0.14 linear and
-// a brightly-lit ceiling/desk near 0.6, so 0.55 lets the lit surfaces themselves
-// halate — the fixtures stop being uniquely special — while the lower strength
-// and wider radius turn the fixture from a hard white quad into a soft pool.
-const BLOOM_DEFAULTS = { strength: 0.34, radius: 0.75, threshold: 0.62 };
+// a brightly-lit ceiling/desk near 0.6, so a low threshold lets the lit surfaces
+// themselves halate and the fixtures stop being uniquely special.
+//
+// But UnrealBloomPass has no upper clamp on its input: a troffer whose emissive
+// radiance is 8-20 linear contributes strength x 20, so 0.34/0.75 turned the
+// nearest fixture into a white starburst eating an eighth of the frame while every
+// other light in the room stayed a dot. The refs' fixtures are bright with a tight,
+// low-amplitude halo — they do not destroy their surroundings. Threshold up so only
+// genuine sources qualify, strength down by ~40% and the radius tightened so the
+// halo stays a halo. Paired with the grade's new highlight shoulder, the fixture
+// now keeps a visible gradient into its core instead of clipping flat.
+const BLOOM_DEFAULTS = { strength: 0.2, radius: 0.6, threshold: 0.72 };
 
 /** Wrap an addon constructor so a broken/absent pass degrades instead of throwing. */
 function tryMake<T>(label: string, factory: () => T): T | null {
@@ -410,14 +485,18 @@ export class PostFX {
     vignette: GRADE_DEFAULTS.vignette,
     grain: GRADE_DEFAULTS.grain,
     split: GRADE_DEFAULTS.split,
+    shoulder: GRADE_DEFAULTS.shoulder,
     bloomStrength: BLOOM_DEFAULTS.strength,
     bloomRadius: BLOOM_DEFAULTS.radius,
     bloomThreshold: BLOOM_DEFAULTS.threshold,
-    // > 1 deliberately: the blend is `mix(vec3(1.0), ao, intensity)` multiplied onto
-    // the beauty buffer, so intensity > 1 extrapolates past the raw AO and darkens
-    // harder. It has to: the grade's lift + pivot lift the AO term straight back out
-    // again, so the pass must over-deliver for contact darkening to survive to frame.
-    aoIntensity: 1.55,
+    // The blend is `mix(vec3(1.0), ao, intensity)` multiplied onto the beauty buffer,
+    // so intensity > 1 extrapolates past the raw AO. 1.55 was compensating for the
+    // thickness bug above by over-driving a buffer that was nearly all white — and it
+    // is not a free knob: at 1.55 any pixel with ao < 0.355 blends with a NEGATIVE
+    // factor, i.e. a hard black hole with no gradient. With the gate fixed the AO
+    // buffer carries real range, so a mild extrapolation is all that's needed to
+    // survive the grade's lift.
+    aoIntensity: 1.2,
     chromaticBase: GRADE_DEFAULTS.chromaticBase,
   };
 
@@ -508,33 +587,39 @@ export class PostFX {
         const p = new GTAOPass(this.scene, this.camera, aw, ah);
         p.output = this.aoDebugOutput();
         p.blendIntensity = this.opts.aoIntensity;
-        // CONTACT occlusion, not mid-range room occlusion. A 1.3 m world radius with a
-        // linear distance falloff spreads the term so thinly that the place it matters
-        // most — the 2 cm where a cubicle partition meets the carpet — gets almost
-        // nothing. A tight radius with a superlinear exponent puts the energy at the
-        // contact.
+        // THE reason AO was running and invisible: `thickness`.
         //
-        // 0.45 m was still too tight for THIS scene's scale, though: a desk pedestal is
-        // ~0.6 m deep and a cubicle bay ~1.5 m, so at 0.45 m the pass could only see the
-        // last centimetre of every junction and the "soft dark pool" the whole desk
-        // should be sitting in never formed. 0.7 m spans the pedestal, and `thickness`
-        // is kept well under the radius so background geometry doesn't false-occlude.
+        // In three's GTAO shader `thickness` is not a falloff, it is a rejection
+        // gate — `if ( abs( viewDelta.z ) < thickness )` — applied to every horizon
+        // sample. A sample whose view-space depth differs from the shading point by
+        // more than `thickness` is thrown away as "background", not counted as an
+        // occluder. The previous tuning set thickness (0.32 m) to less than HALF the
+        // sample radius (0.7 m), which means the majority of every sample ring was
+        // discarded before it could occlude anything. The pass produced an AO buffer
+        // that was ~1.0 almost everywhere and the compositing then had nothing to
+        // multiply in. three's own defaults are radius 0.25 / thickness 1.0 — i.e.
+        // thickness FOUR TIMES the radius — and that ratio is the load-bearing part.
+        //
+        // Radius is sized to this scene: a desk pedestal is ~0.6 m deep and a cubicle
+        // bay ~1.5 m, so 0.9 m spans the junction that matters (partition-to-carpet,
+        // desk-to-pedestal, chair caster cluster) and thickness now comfortably
+        // exceeds it. `scale` is an EXPONENT on the AO term (ao = pow(ao, scale)), so
+        // with the gate opened it has to come down from 2.6 or every contact turns
+        // into a black hole.
         p.updateGtaoMaterial({
-          radius: 0.7,
-          distanceExponent: 1.45,
-          thickness: 0.32,
+          radius: 0.9,
+          distanceExponent: 1.2,
+          thickness: 1.6,
           distanceFallOff: 1.0,
-          scale: 2.6,
+          scale: 1.5,
           samples: tier.aoSamples,
           screenSpaceRadius: false,
         });
-        // Tighter denoise radius to match the tighter AO radius: at 4 the poisson
-        // denoiser was smearing the contact term straight back out again.
         p.updatePdMaterial({
           lumaPhi: 10,
           depthPhi: 1.5,
           normalPhi: 4,
-          radius: 3,
+          radius: 4,
           radiusExponent: 1,
           rings: 2,
           samples: tier.pdSamples,
@@ -600,6 +685,7 @@ export class PostFX {
           uShadowTint: { value: GRADE_DEFAULTS.shadowTint.clone() },
           uHighlightTint: { value: GRADE_DEFAULTS.highlightTint.clone() },
           uSplit: { value: this.opts.split },
+          uShoulder: { value: this.opts.shoulder },
         },
         vertexShader: GRADE_VERT,
         fragmentShader: GRADE_FRAG,
@@ -775,6 +861,7 @@ export class PostFX {
       u['uVignette'].value = this.opts.vignette;
       u['uGrain'].value = this.opts.grain;
       u['uSplit'].value = this.opts.split;
+      u['uShoulder'].value = this.opts.shoulder;
       u['uChromaBase'].value = this.opts.chromaticBase;
     }
     if (this.bloomPass) {

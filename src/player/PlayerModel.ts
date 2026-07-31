@@ -73,6 +73,15 @@ export class PlayerModel {
   private localPosition = STANDING_OFFSET.clone();
   private mounted = false;
 
+  /**
+   * Set true once a TrickAnimator has bound to this rig and is driving the joints itself.
+   * While it is set, `update()` stops stamping the root transform and `play()` stops
+   * choosing poses, so the two systems are not fighting over the same objects.
+   * (This is the integration contract TrickAnimator documents in REQUIRED_PLAYERMODEL_PATCH,
+   * adapted to the procedural StonksCharacter rig that replaced the FBX.)
+   */
+  externalRootControl = false;
+
   /** Set while a `playOnce` clip is "running", so `play` does not stomp it early. */
   private oneShotUntil = 0;
   private oneShotNext: AnimationName | null = null;
@@ -118,6 +127,8 @@ export class PlayerModel {
 
   play(name: AnimationName, options?: { loop?: boolean; fadeTime?: number }): void {
     if (!this.character) return;
+    // TrickAnimator owns pose selection once it is attached.
+    if (this.externalRootControl) { this.currentAnimation = name; return; }
     const loop = options?.loop ?? true;
     const now = performance.now();
 
@@ -187,6 +198,8 @@ export class PlayerModel {
       this.play(next);
     }
 
+    if (this.externalRootControl) return;
+
     this.character.update(deltaTime);
     // The rig owns its own transform; Game.ts writes the chair transform and nothing else.
     this.character.root.position.copy(this.localPosition);
@@ -195,6 +208,52 @@ export class PlayerModel {
 
   getModel(): THREE.Group | null {
     return this.character?.root ?? null;
+  }
+
+  /**
+   * Build the RigRefs TrickAnimator needs from the procedural StonksCharacter hierarchy.
+   *
+   * StonksCharacter is a plain Object3D chain, not a skinned FBX, so there are no THREE.Bone
+   * instances for TrickAnimator's fuzzy name classifier to find. This adapter does two things:
+   *   - renames the joint groups to names the classifier recognises (Hips / Spine / Chest /
+   *     Head / LeftArm / LeftForeArm / LeftUpLeg / LeftLeg / LeftFoot ...), and
+   *   - flags them `isBone`, which is all THREE.Bone actually adds over Object3D and all
+   *     TrickAnimator reads (name, parent, position, quaternion, matrixWorld).
+   *
+   * Returns null when the rig has not loaded. The caller must treat a low bind count as a
+   * failure and fall back to the built-in poses.
+   */
+  getRigRefs(chairRoot: THREE.Object3D): {
+    model: THREE.Object3D;
+    mixer: THREE.AnimationMixer | null;
+    clips: Map<string, THREE.AnimationClip>;
+    bones: Map<string, THREE.Bone>;
+    chairRoot: THREE.Object3D;
+  } | null {
+    const root = this.character?.root;
+    if (!root) return null;
+
+    // slot name in StonksCharacter -> a name TrickAnimator's classifier binds.
+    const RENAME: Record<string, string> = {
+      hips: 'Hips',
+      torso: 'Spine',
+      chest: 'Chest',
+      head: 'Head',
+      shoulderL: 'LeftArm', shoulderR: 'RightArm',
+      elbowL: 'LeftForeArm', elbowR: 'RightForeArm',
+      hipL: 'LeftUpLeg', hipR: 'RightUpLeg',
+      kneeL: 'LeftLeg', kneeR: 'RightLeg',
+      ankleL: 'LeftFoot', ankleR: 'RightFoot',
+    };
+
+    root.traverse((o) => {
+      const to = RENAME[o.name];
+      if (!to) return;
+      o.name = to;
+      (o as THREE.Object3D & { isBone?: boolean }).isBone = true;
+    });
+
+    return { model: root, mixer: null, clips: new Map(), bones: new Map(), chairRoot };
   }
 
   getCurrentAnimation(): AnimationName | null {

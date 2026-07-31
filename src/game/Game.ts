@@ -7,12 +7,19 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from '../input/InputManager';
+import { THPSControls, type ControlIntent } from '../input/THPSControls';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
 import { GrindSystem } from '../physics/GrindSystem';
 import { CameraController } from '../rendering/CameraController';
 import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
-import { TrickDefinition } from '../tricks/TrickRegistry';
-import { ComboSystem } from '../tricks/ComboSystem';
+import { TrickRegistry, TrickDefinition } from '../tricks/TrickRegistry';
+import { ScoreSystem, yawDeltaDegrees, type BailReason, type ScoreEvent, type TrickKind } from '../gameplay/ScoreSystem';
+import { BalanceSystem, type BalanceState } from '../gameplay/BalanceSystem';
+import { GoalTracker, defaultGoalSetFor, matchGap, type GoalProgress } from '../gameplay/GoalSystem';
+import { TrickAnimator } from '../gameplay/TrickAnimator';
+import { DestructibleManager, scatterDestructibles, type DestructibleDef, type SmashEvent } from '../gameplay/Destructibles';
+import { PoliceSquad, type SquadEvent } from '../gameplay/PoliceAI';
+import { PaperStorm } from '../vfx/PaperStorm';
 import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
@@ -31,7 +38,18 @@ import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } fro
 import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
 import { ChaseHUD } from '../ui/ChaseHUD';
 import { DialogueBox } from '../ui/DialogueBox';
-import { NPCOfficer } from '../npc/NPCOfficer';
+
+const DEG2RAD = Math.PI / 180;
+
+/** Stable 32-bit hash, so a level's procedural scatter is identical every reload. */
+function hashString(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) % 65536 || 1;
+}
 
 export class Game {
   // Core
@@ -93,6 +111,17 @@ export class Game {
 
   // Systems
   private input!: InputManager;
+  /** The one source of player intent. Everything gameplay-facing reads this, never raw keys. */
+  private controls!: THPSControls;
+  private intent!: ControlIntent;
+  /** The one authoritative score path. Nothing else may write the player's stonks. */
+  private score!: ScoreSystem;
+  private balance!: BalanceSystem;
+  private goals: GoalTracker | null = null;
+  private trickAnimator: TrickAnimator | null = null;
+  private destructibles: DestructibleManager | null = null;
+  private paperStorm: PaperStorm | null = null;
+  private police: PoliceSquad | null = null;
   private physics!: PhysicsWorld;
   private grindSystem!: GrindSystem;
   private grindParticles!: GrindParticles;
@@ -100,12 +129,16 @@ export class Game {
   private speedLines!: SpeedLines;
   private cameraController!: CameraController;
   private trickDetector!: TrickDetector;
-  private comboSystem!: ComboSystem;
   private hud!: HUD;
   private playerModel!: PlayerModel;
-  
+
   // Game objects
   private chair!: THREE.Group;
+  /**
+   * Child of `chair` holding the chair mesh and the rider. The rigid body is Y-locked and
+   * cannot pitch or roll itself, so BalanceSystem's visual lean is applied HERE.
+   */
+  private chairTilt!: THREE.Group;
   private chairBody!: RAPIER.RigidBody;
   private useGLBModel = true; // Set to false to use primitive shapes
   private wheelMeshes: THREE.Object3D[] = []; // Chair wheel meshes for spin animation
@@ -117,9 +150,6 @@ export class Game {
   private modelCache: Map<string, THREE.Object3D> = new Map();
   private gltfLoader!: GLTFLoader;
   
-  // NPC officers
-  private npcOfficers: NPCOfficer[] = [];
-  private officerCaughtCooldown = 0;  // Prevent rapid caught events (seconds)
   
   // Player state
   private playerState: PlayerTrickState = {
@@ -132,13 +162,44 @@ export class Game {
   };
   
   private specialMeter = 0;
-  private grindBalance = 0.5;
-  private grindScore = 0;  // Stonks earned during current grind
-  private totalStonks = 0;  // Total stonks earned
-  private manualBalance = 0.5;
-  private lastTrickTime = 0;
-  private queuedTrick: TrickDefinition | null = null;  // Trick input queue
+  /** Live balance readout, 0..1 with 0.5 centred. Written by BalanceSystem, read by the HUD. */
+  private balanceState: BalanceState | null = null;
   private spinRotation = 0;
+
+  // --- trick bookkeeping -----------------------------------------------------------------
+  /** The air trick currently being played, for the animator and the held-grab bail check. */
+  private activeTrick: { id: string; kind: TrickKind; name: string; until: number } | null = null;
+  /** Set while a grab is being HELD. Landing with it still held is a bail. */
+  private heldGrabId: string | null = null;
+  /** The named grind currently being scored, from TrickDetector.detectGrindType(). */
+  private grindTrick: TrickDefinition | null = null;
+  /** True when the landing came off a ramp/quarterpipe, which opens the full revert window. */
+  private landedFromTransition = false;
+  /** Charge held on the ollie button at the moment it popped, 0..1. */
+  private ollieCharge = 1;
+  /** Seconds of grace after a bail during which the player cannot score. */
+  private bailRecovery = 0;
+  /** Guards against a second bail landing in the same instant from a different source. */
+  private lastBailTime = -Infinity;
+  /** Seconds since the goal HUD was last rebuilt. */
+  private goalHudTimer = 0;
+  /** Highest speed seen this frame-pair, for the high-speed collision bail test. */
+  private prevSpeed = 0;
+  /** Chair yaw last frame, so air rotation can be fed to the spin scorer. */
+  private lastYaw = 0;
+  /** Where the wheels last left the floor, for gap detection on touchdown. */
+  private takeoffPos = new THREE.Vector3();
+  /** The goal zone the player was in last frame, so entries fire exactly once. */
+  private currentZoneId = '';
+  /** Floating pickups (S-T-O-N-K-S letters, the hidden file, cash) placed by GoalSystem. */
+  private collectibles: {
+    id: string;
+    kind: 'letter' | 'hiddenItem' | 'cash';
+    group: THREE.Group;
+    position: THREE.Vector3;
+    value: number;
+    taken: boolean;
+  }[] = [];
   private cumulativeSpinDegrees = 0;  // Track total spin during air time
   private airStartRotation = 0;  // Chair Y rotation when leaving ground
   private lastGroundedTime = 0;  // Coyote time tracking
@@ -205,7 +266,10 @@ export class Game {
       
       report(60, 'Loading player model...');
       await this.initPlayer();
-      
+
+      report(70, 'Wiring gameplay systems...');
+      this.initGameplaySystems();
+
       report(75, 'Loading level assets...');
       await this.preloadLevelModels();
       
@@ -312,47 +376,406 @@ export class Game {
   // Physics is now initialized in init() before other systems
   
   private initInput(): void {
+    // InputManager is kept alive only for the debug animation cycler and the pause key;
+    // every gameplay decision now reads THPSControls' ControlIntent instead.
     this.input = new InputManager();
+    this.controls = new THPSControls();
+    this.intent = this.controls.getIntent();
   }
-  
+
   private initTricks(): void {
     this.trickDetector = new TrickDetector();
-    this.comboSystem = new ComboSystem();
+
+    // ---- the single score path -----------------------------------------------------------
+    this.score = new ScoreSystem();
+    this.score.on((event) => this.onScoreEvent(event));
+
+    // ---- balance -------------------------------------------------------------------------
+    this.balance = new BalanceSystem();
+    this.balance.onBail((info) => {
+      // A blown manual/grind/lip balance is a real bail: it forfeits the position.
+      this.bail(info.mode === 'grind' || info.mode === 'lip' ? 'grind' : 'landing');
+    });
+    this.balance.onEnd((info) => {
+      if (info.mode === 'manual' || info.mode === 'noseManual') {
+        this.score.endManual();
+        this.playerState.isManualing = false;
+      }
+    });
   }
-  
+
+  /**
+   * The one place score events reach the rest of the game. The HUD is a display sink;
+   * sounds, camera and goals hang off the same events so they can never disagree with
+   * the number on screen.
+   */
+  private onScoreEvent(event: ScoreEvent): void {
+    this.hud?.onScoreEvent(event);
+    this.hud?.setScore(this.score.balance);
+
+    switch (event.type) {
+      case 'trick': {
+        proceduralSounds.playTrick(event.trick.basePoints);
+        // Only discrete tricks feed the special meter; a grind cannot fill it by existing.
+        if (event.trick.kind !== 'special') {
+          const prev = this.specialMeter;
+          this.specialMeter = Math.min(1, this.specialMeter + event.points / 6000);
+          this.hud?.setSpecial(this.specialMeter);
+          this.controls?.setSpecialReady(this.specialMeter >= 1);
+          if (prev < 1 && this.specialMeter >= 1) proceduralSounds.playSpecialReady();
+        }
+        this.goals?.notifyTrickAt(event.trick.id, this.zoneIdAtPlayer());
+        break;
+      }
+
+      case 'land': {
+        if (event.gained > 0) {
+          proceduralSounds.playChaChing(event.gained);
+          proceduralSounds.playComboLanded(event.multiplier);
+          this.cameraController.impactZoomPulse(event.gained);
+          this.goals?.notifyCombo(event.gained);
+          if (this.chaseMechanic?.isChaseActive()) {
+            this.chaseMechanic.addSpeedBoost(Math.min(5, event.gained / 2000));
+          }
+        }
+        this.goals?.notifyScore(this.score.sessionScore);
+        break;
+      }
+
+      case 'bail': {
+        proceduralSounds.playBail();
+        this.cameraController.shake(0.8, 0.4);
+        break;
+      }
+
+      case 'tierReached':
+        this.goals?.notifyScore(this.score.sessionScore);
+        break;
+
+      case 'balanceChanged':
+        break;
+    }
+  }
+
+  // =========================================================================
+  // Tricks
+  // =========================================================================
+
+  /**
+   * Direction -> trick, for each button. Nine directions cover most of the registry; the
+   * remainder hang off the nollie modifier, so every one of the 35 registry entries is
+   * reachable from the keyboard or the pad.
+   *
+   * Key is `${dir.x},${dir.y}` with y = +1 UP (nose) and x = +1 RIGHT.
+   */
+  private static readonly FLIP_TRICKS: Record<string, string> = {
+    '0,0': 'kickflip',
+    '-1,0': 'heelflip',
+    '1,0': 'pop_shove',
+    '0,-1': 'fs_shove',
+    '0,1': 'impossible',
+    '-1,-1': '360_flip',
+    '-1,1': 'hardflip',
+    '1,-1': 'varial_flip',
+    '1,1': 'swivel_flip',
+  };
+  /** Nollie (UP held through the ollie charge) unlocks the two chair-specific flips. */
+  private static readonly FLIP_TRICKS_NOLLIE: Record<string, string> = {
+    '0,0': 'caster_kick',
+    '0,1': 'armrest_spin',
+  };
+
+  private static readonly GRAB_TRICKS: Record<string, string> = {
+    '0,0': 'indy',
+    '-1,0': 'melon',
+    '1,0': 'tailgrab',
+    '0,1': 'nosegrab',
+    '0,-1': 'benihana',
+    '-1,1': 'madonna',
+    '1,1': 'airwalk',
+    '-1,-1': 'coffee_mug',
+    '1,-1': 'keyboard_clutch',
+  };
+  private static readonly GRAB_TRICKS_NOLLIE: Record<string, string> = {
+    '0,0': 'monitor_hug',
+  };
+
+  private static readonly SPECIAL_TRICKS: Record<string, string> = {
+    '0,0': 'quarterly_report',
+    '-1,0': 'golden_parachute',
+    '1,0': 'hostile_takeover',
+    '0,1': 'pink_slip',
+    '0,-1': 'pink_slip',
+  };
+
+  private static dirKey(dir: { x: number; y: number }): string {
+    return `${dir.x},${dir.y}`;
+  }
+
+  private static readonly SPECIAL_COST = 1;
+
+  /** ScoreSystem's TrickKind for a registry entry. */
+  private static kindOf(t: TrickDefinition): TrickKind {
+    switch (t.type) {
+      case 'grab': return 'grab';
+      case 'grind': return 'grind';
+      case 'manual': return 'manual';
+      case 'special': return 'special';
+      default: return 'flip';
+    }
+  }
+
+  /**
+   * Commit a discrete trick to the open position and start its animation.
+   * Returns false when the trick was refused (nothing is on cooldown-locked here — the
+   * one-trick-per-press rule is enforced by the EDGE fields on ControlIntent, which is what
+   * killed the old held-button repeat exploit).
+   */
+  private performTrick(def: TrickDefinition, held: boolean): boolean {
+    if (this.bailRecovery > 0) return false;
+
+    const kind = Game.kindOf(def);
+    this.score.addTrick({
+      id: def.id,
+      name: def.displayName,
+      basePoints: def.basePoints,
+      kind,
+    });
+
+    const duration = def.duration > 0 ? def.duration : 600;
+    this.activeTrick = { id: def.id, kind, name: def.displayName, until: performance.now() + duration };
+    this.trickAnimator?.playTrick(def.id, kind, duration / 1000);
+    this.heldGrabId = held ? def.id : null;
+    return true;
+  }
+
+  /**
+   * Air-trick input. Every branch is EDGE driven: one press, one trick. Holding the button
+   * does nothing on subsequent frames, which is the repeat exploit fixed at the source.
+   */
+  private updateTricks(): void {
+    const intent = this.intent;
+
+    // Releasing the grab button ends a held grab cleanly (no bail).
+    if (this.heldGrabId && !intent.grabHeld) {
+      this.heldGrabId = null;
+      this.trickAnimator?.releaseTrick();
+    }
+
+    if (!this.playerState.isAirborne) return;
+    if (this.bailRecovery > 0) return;
+
+    const key = Game.dirKey(intent.dir);
+
+    // SPECIAL: two buttons at once, gated behind a full meter, and it SPENDS the meter.
+    if (intent.special) {
+      if (this.specialMeter >= Game.SPECIAL_COST) {
+        const id = Game.SPECIAL_TRICKS[key] ?? Game.SPECIAL_TRICKS['0,0'];
+        const def = TrickRegistry.get(id);
+        if (def && this.performTrick(def, false)) {
+          this.specialMeter = 0;
+          this.hud?.setSpecial(0);
+          this.controls.setSpecialReady(false);
+          this.playerState.hasSpecial = false;
+          proceduralSounds.playSpecialReady();
+          return;
+        }
+      }
+    }
+
+    if (intent.flipEdge) {
+      const id = (intent.nollie ? Game.FLIP_TRICKS_NOLLIE[key] : undefined)
+        ?? Game.FLIP_TRICKS[key] ?? 'kickflip';
+      const def = TrickRegistry.get(id);
+      if (def) this.performTrick(def, false);
+      return;
+    }
+
+    if (intent.grabEdge) {
+      const id = (intent.nollie ? Game.GRAB_TRICKS_NOLLIE[key] : undefined)
+        ?? Game.GRAB_TRICKS[key] ?? 'indy';
+      const def = TrickRegistry.get(id);
+      if (def) this.performTrick(def, true);
+    }
+  }
+
+  // =========================================================================
+  // Land / bail — the only two ways a position closes
+  // =========================================================================
+
+  /** Bank the open position. Everything else about landing hangs off this. */
+  private land(): void {
+    if (!this.score.isOpen) return;
+    this.score.land();
+    this.goals?.notifyScore(this.score.sessionScore);
+    this.hud?.setScore(this.score.balance);
+  }
+
+  /**
+   * Forfeit the open position and take the loss. This is the ONLY bail entry point, so
+   * every source — blown balance, bad landing, high-speed collision, being caught — is
+   * scored identically and can never double-charge in the same instant.
+   */
+  private bail(reason: BailReason): void {
+    const now = performance.now();
+    if (now - this.lastBailTime < 400) return;
+    this.lastBailTime = now;
+
+    this.score.bail(reason);
+    this.hud?.setScore(this.score.balance);
+
+    this.balance.end();
+    this.playerState.isManualing = false;
+    this.heldGrabId = null;
+    this.activeTrick = null;
+    this.trickAnimator?.releaseTrick();
+    this.bailRecovery = 0.9;
+
+    // A bail costs you the special, THPS-style.
+    if (this.specialMeter > 0) {
+      this.specialMeter = 0;
+      this.playerState.hasSpecial = false;
+      this.hud?.setSpecial(0);
+      this.controls?.setSpecialReady(false);
+    }
+
+    if (this.grindSystem.isGrinding()) {
+      this.grindSystem.forceEndGrind();
+      this.playerState.isGrinding = false;
+      this.grindTrick = null;
+      proceduralSounds.stopGrindLoop();
+      proceduralSounds.stopBalanceWarning();
+      this.cameraController.setGrindCamera(false);
+    }
+
+    // Paper explodes out of the rider on a wipeout — cheap, readable, and it is the game's
+    // own visual language for losing money.
+    const pos = this.chair?.position;
+    if (pos && this.paperStorm) this.paperStorm.burst(pos.clone().setY(pos.y + 0.6), 26, 6.5);
+
+    this.postFX?.pulse(1.0);
+  }
+
+  // =========================================================================
+  // Destructibles / paper / police event sinks
+  // =========================================================================
+
+  private onSmash(e: SmashEvent): void {
+    // Score through the one path.
+    this.score.addTrick({
+      id: `smash_${e.kind}`,
+      name: e.label,
+      basePoints: Math.max(50, e.scoreValue),
+      kind: 'flip',
+    });
+    this.goals?.notifySmash(e.id);
+
+    // Paper is the signature debris; the other materials still throw a smaller puff.
+    if (this.paperStorm) {
+      const count = e.debrisKind === 'paper' ? 34 : e.debrisKind === 'cardboard' ? 18 : 8;
+      const energy = Math.min(12, 3 + e.impulse * 0.05);
+      this.paperStorm.burst(e.position.clone().setY(e.position.y + 0.4), count, energy, e.direction);
+    }
+
+    proceduralSounds.playTrick(e.scoreValue);
+    this.cameraController.shake(Math.min(0.35, 0.06 + e.impulse * 0.002), 0.18);
+  }
+
+  private onSquadEvent(e: SquadEvent): void {
+    switch (e.type) {
+      case 'spotted':
+        this.goals?.setPursuit(true);
+        proceduralSounds.playBail();
+        break;
+      case 'lost':
+        if (this.police && !this.police.inPursuit) this.goals?.setPursuit(false);
+        break;
+      case 'caught':
+        this.onOfficerCaught?.();
+        this.cameraController.shake(1.2, 0.5);
+        // Being caught costs stonks AND kills the combo. One code path, same as any bail.
+        this.bail('police');
+        if (this.dialogueBox) {
+          this.dialogueBox.show(['SEC OFFICER: Gotcha! ...wait, he\'s still going?!']);
+        }
+        if (this.lastCheckpointIndex >= 0 && this.checkpointPosition) this.restoreCheckpoint();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Fire notifyZoneEntered() once per entry, so 'reach the exit' escape goals can settle. */
+  private updateZones(): void {
+    if (!this.goals) return;
+    const id = this.zoneIdAtPlayer();
+    if (id === this.currentZoneId) return;
+    this.currentZoneId = id;
+    if (id) this.goals.notifyZoneEntered(id);
+  }
+
+  /** Id of the goal zone the player is standing in, or '' — fed to trickAt goals. */
+  private zoneIdAtPlayer(): string {
+    if (!this.goals || !this.chair) return '';
+    const p = this.chair.position;
+    return this.goals.zoneAt(p.x, p.y, p.z)?.id ?? '';
+  }
+
+  /**
+   * Destructibles, paper VFX, the police squad and the trick animator. Everything here
+   * needs both the scene and the physics world, so it runs after initPlayer().
+   */
+  private initGameplaySystems(): void {
+    // ---- destructible props ---------------------------------------------------------------
+    this.destructibles = new DestructibleManager(this.scene, this.physics);
+    // Impact maths has to know what is doing the hitting: the Rapier chair capsule.
+    this.destructibles.setPlayerMass(80);
+    this.destructibles.onSmash((e) => this.onSmash(e));
+
+    // ---- flying paper ---------------------------------------------------------------------
+    this.paperStorm = new PaperStorm(this.scene, { maxSheets: 320, groundY: 0 });
+
+    // ---- police ---------------------------------------------------------------------------
+    this.police = new PoliceSquad(this.scene, this.physics);
+    this.police.on((e) => this.onSquadEvent(e));
+
+    // ---- procedural rider animation -------------------------------------------------------
+    this.attachTrickAnimator();
+  }
+
+  /**
+   * Bind TrickAnimator to the rider rig. The rig is procedural (StonksCharacter), so binding
+   * can legitimately fail; when it does we leave PlayerModel's own poses in charge rather than
+   * shipping a T-posed rider.
+   */
+  private attachTrickAnimator(): void {
+    if (!this.playerModel || !this.chairParts) return;
+    try {
+      const rig = this.playerModel.getRigRefs(this.chairParts.root);
+      if (!rig) return;
+      const animator = new TrickAnimator(rig);
+      const bound = Object.keys(animator.getBoundBones()).length;
+      if (bound < 8) {
+        console.warn(`[Game] TrickAnimator bound only ${bound} joints; keeping PlayerModel poses.`);
+        animator.dispose();
+        return;
+      }
+      animator.setChairTier(1);
+      this.trickAnimator = animator;
+      this.playerModel.externalRootControl = true;
+      console.log(`[Game] TrickAnimator attached (${bound} joints bound).`);
+    } catch (err) {
+      console.warn('[Game] TrickAnimator failed to attach; keeping PlayerModel poses.', err);
+      this.trickAnimator = null;
+    }
+  }
+
   private initUI(): void {
     const overlay = document.getElementById('ui-overlay');
     if (overlay) {
       this.hud = new HUD(overlay);
-      
-      // Connect combo events to HUD
-      this.comboSystem.on((event) => {
-        this.hud.onComboEvent(event);
-        
-        // Update combo display
-        const state = this.comboSystem.getState();
-        this.hud.updateCombo(state.tricks, state.totalPoints, state.multiplier);
-        this.hud.updateComboTimer(state.timeRemaining, 2000); // 2000ms max combo time
-        
-        // Play sounds based on combo events
-        if (event.type === 'combo_landed' && event.totalScore) {
-          proceduralSounds.playChaChing(event.totalScore);  // 💰 cha-ching!
-          proceduralSounds.playComboLanded(state.multiplier);
-          // Impact zoom pulse on big landings (>5000 points)
-          this.cameraController.impactZoomPulse(event.totalScore);
-          
-          // Give speed boost during chase levels when landing tricks
-          if (this.chaseMechanic?.isChaseActive()) {
-            const boost = Math.min(5, event.totalScore / 2000); // Up to 5 boost from big tricks
-            this.chaseMechanic.addSpeedBoost(boost);
-          }
-        } else if (event.type === 'combo_failed') {
-          proceduralSounds.playBail();
-          // Shake camera on bail
-          this.cameraController.shake(0.8, 0.4);
-        }
-      });
-      
+      this.hud.setScore(this.score.balance);
+
       // Initialize story systems
       this.initStorySystems(overlay);
     }
@@ -504,10 +927,16 @@ export class Game {
       this.physics.setRotationY(this.chairBody, this.checkpointRotation);
       this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
       
-      // Reset player state
+      // Reset player state. A teleport is not a bail: the open position is dropped without
+      // banking it and without charging for it.
       this.playerState.isGrounded = true;
       this.playerState.isAirborne = false;
-      this.comboSystem.reset();
+      this.score.resetCombo();
+      this.balance.reset();
+      this.balanceState = null;
+      this.activeTrick = null;
+      this.heldGrabId = null;
+      this.endGrind();
       
       // Restart chase if active
       if (this.currentStoryLevel?.hasChaseMechanic) {
@@ -523,13 +952,37 @@ export class Game {
     if (success && this.currentStoryLevel?.outroDialogue) {
       this.showOutroDialogue(this.currentStoryLevel.outroDialogue);
     }
-    
+
     // Stop chase
     this.chaseMechanic?.stop();
     this.chaseHUD?.hide();
-    
-    // Calculate final score
-    this.onLevelComplete?.(this.totalStonks, this.levelTime, 0, 0);
+
+    // Cash out anything still open so the run's last combo is not silently binned.
+    if (this.score.isOpen) this.land();
+    this.goals?.notifyFinish();
+
+    const summary = this.score.getRunSummary();
+    const goalSummary = this.goals?.summary ?? null;
+    const completed = goalSummary?.completed ?? 0;
+    const total = goalSummary?.total ?? 0;
+
+    // ---- economy ------------------------------------------------------------------------
+    // Both of these were dead code before: the upgrade shop had no income and the level
+    // select had no completion record, so the whole economy was disconnected at both ends.
+    const earned = Math.max(0, Math.round(summary.sessionEarned));
+    if (earned > 0) storyProgress.addStonks(earned);
+    if (success && this.currentLevelId) {
+      storyProgress.completeLevel(
+        this.currentLevelId,
+        Math.round(summary.sessionScore),
+        this.levelTime,
+        earned,
+        this.currentStoryLevel?.nextLevel
+      );
+    }
+
+    // REAL completed/total, so the rank stops being permanently 'D' off a 0/0 = NaN.
+    this.onLevelComplete?.(Math.round(summary.sessionScore), this.levelTime, completed, total);
   }
   
   private async initPlayer(): Promise<void> {
@@ -537,6 +990,12 @@ export class Game {
     this.chair = new THREE.Group();
     this.chair.position.set(0, 0, 5); // Start in the middle of the skate area
     this.scene.add(this.chair);
+
+    // Visual lean group. The Rapier body is Y-locked (it can only yaw), so BalanceSystem's
+    // pitch and roll have to be applied to a visual child rather than to the body.
+    this.chairTilt = new THREE.Group();
+    this.chairTilt.name = 'chairTilt';
+    this.chair.add(this.chairTilt);
     
     // Procedural office chair (ChairModel). Replaces chair.glb, which shipped
     // metalness = 1.0 with no env map and rendered as a black lump. This one is
@@ -549,11 +1008,11 @@ export class Game {
       parts.root.position.y = -0.70;
       this.chairParts = parts;
       this.wheelMeshes = parts.casters;
-      this.chair.add(parts.root);
+      this.chairTilt.add(parts.root);
       console.log(`Procedural chair built (${parts.root.userData.triangles} tris, ${parts.casters.length} casters)`);
     } catch (error) {
       console.warn('Failed to build procedural chair, using primitives:', error);
-      this.chair.add(this.createChairMesh());
+      this.chairTilt.add(this.createChairMesh());
     }
 
     // Load GLB player model if enabled
@@ -580,9 +1039,9 @@ export class Game {
         this.updatePlayerMountPosition();
         this.playerModel.play('rolling', { loop: true });
         
-        this.chair.add(model);
-        
-        console.log('GLB player model attached to chair');
+        this.chairTilt.add(model);
+
+        console.log('Player rig attached to chair');
       } catch (error) {
         console.warn('Failed to load GLB model, using primitives:', error);
         this.useGLBModel = false;
@@ -1335,15 +1794,12 @@ export class Game {
     // Initialize chase mechanic for chase levels
     if (level.hasChaseMechanic && this.chaseMechanic) {
       this.chaseMechanic.start(level.chaseSpeed || 8, 50);
-      this.chaseMechanic.createVisuals(this.scene);
       this.chaseHUD?.show();
     } else {
       this.chaseMechanic?.stop();
       this.chaseHUD?.hide();
     }
     
-    // Spawn NPC officers for story levels that have them defined
-    this.spawnLevelNPCs(level.id);
     
     // Show intro dialogue after a short delay
     if (level.introDialogue && level.introDialogue.length > 0) {
@@ -1370,9 +1826,13 @@ export class Game {
     
     // Reset player state
     this.specialMeter = 0;
-    this.grindBalance = 0.5;
-    this.manualBalance = 0.5;
     this.spinRotation = 0;
+    this.activeTrick = null;
+    this.heldGrabId = null;
+    this.grindTrick = null;
+    this.bailRecovery = 0;
+    this.lastBailTime = -Infinity;
+    this.prevSpeed = 0;
     this.playerState = {
       isGrounded: true,
       isAirborne: false,
@@ -1381,7 +1841,7 @@ export class Game {
       hasSpecial: false,
       airTime: 0
     };
-    
+
     // Start the level already seated on the chair.
     this.isMounted = true;
     this.animState = 'rolling';
@@ -1389,10 +1849,27 @@ export class Game {
     if (this.playerModel) {
       this.playerModel.play('rolling', { loop: true });
     }
-    
-    // Reset combo
-    this.comboSystem.reset();
-    
+
+    // ---- score / balance -----------------------------------------------------------------
+    // startRun() clears the combo, run stats and tiers but KEEPS the banked balance, which is
+    // then re-seeded from the save so the wallet is continuous across levels.
+    this.score.startRun();
+    this.score.setBalance(storyProgress.getStonks(), 'Level load');
+    this.balance.reset();
+    this.balanceState = null;
+    if (this.chairTilt) this.chairTilt.rotation.set(0, 0, 0);
+
+    // ---- goals ---------------------------------------------------------------------------
+    const goalSet = defaultGoalSetFor(level.id);
+    this.goals = new GoalTracker(goalSet);
+    this.goals.on((goal) => this.onGoalComplete(goal));
+    this.currentZoneId = '';
+    this.score.setScoreTargets({
+      high: goalSet.highScore,
+      pro: goalSet.proScore,
+      sick: goalSet.sickScore,
+    });
+
     // Clear existing level objects
     this.clearLevelObjects();
     
@@ -1406,14 +1883,208 @@ export class Game {
     
     // Set player spawn
     const spawn = level.spawnPoint;
+    const spawnPos = new THREE.Vector3(spawn.position[0], spawn.position[1], spawn.position[2]);
     if (this.chairBody) {
-      this.physics.setPosition(this.chairBody, new THREE.Vector3(spawn.position[0], spawn.position[1], spawn.position[2]));
+      this.physics.setPosition(this.chairBody, spawnPos);
       this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
       this.physics.setRotationY(this.chairBody, spawn.rotation * Math.PI / 180);
     }
-    
+    this.chair.position.copy(spawnPos);
+    this.lastYaw = spawn.rotation * Math.PI / 180;
+
+    // Knockable props, litter and the police squad all key off the REAL spawn point.
+    this.spawnDestructibles(level, spawnPos);
+    this.spawnLitter(level, spawnPos);
+    this.spawnPolice(spawnPos);
+    this.spawnCollectibles();
+
     // Reset HUD
     this.hud?.reset();
+    this.hud?.setScore(this.score.balance);
+    this.hud?.setGoals(this.goals ? this.goals.progress : []);
+    this.goalHudTimer = 0;
+  }
+
+  /**
+   * Fill the level with knockable props. GoalSystem's smash targets are spawned FIRST and with
+   * their authored ids, so `notifySmash(id)` from a real collision settles a real goal.
+   */
+  private spawnDestructibles(level: LevelData, spawnPos: THREE.Vector3): void {
+    if (!this.destructibles) return;
+    this.destructibles.reset();
+
+    const defs: DestructibleDef[] = [];
+    const groundY = 0;
+
+    // 1. Goal-authored smash targets, at their authored positions and ids.
+    const targets = this.goals?.smashTargets ?? [];
+    const KIND_FOR_LABEL: [RegExp, DestructibleDef['kind']][] = [
+      [/cooler/i, 'waterCooler'],
+      [/printer|copier|fax/i, 'printer'],
+      [/cabinet|filing/i, 'filingCabinet'],
+      [/monitor|screen/i, 'monitor'],
+      [/plant|ficus/i, 'pottedPlant'],
+      [/box|carton/i, 'cardboardBox'],
+      [/mug|coffee/i, 'mug'],
+      [/bin|trash|waste/i, 'trashCan'],
+      [/chair/i, 'chairEmpty'],
+      [/cone/i, 'coneStack'],
+    ];
+    for (const t of targets) {
+      let kind: DestructibleDef['kind'] = 'printer';
+      for (const [re, k] of KIND_FOR_LABEL) {
+        if (re.test(t.label)) { kind = k; break; }
+      }
+      defs.push({
+        kind,
+        id: t.id,
+        position: new THREE.Vector3(t.position[0], groundY, t.position[2]),
+        rotationY: 0,
+      });
+    }
+
+    // 2. Set dressing. Scattered across the playfield, seeded off the level id so a reload
+    //    puts every prop back exactly where it was.
+    const half = Math.max(24, (level.groundSize ?? 60) * 0.42);
+    const seed = hashString(level.id);
+    defs.push(...scatterDestructibles(
+      new THREE.Vector3(spawnPos.x, groundY, spawnPos.z),
+      half * 2, half * 2,
+      this.currentLevelId === 'ch1_office' ? 30 : 20,
+      seed,
+    ));
+
+    this.destructibles.spawnMany(defs);
+  }
+
+  /** Floor litter around the spawn and along the play area; it swirls in the player's wake. */
+  private spawnLitter(level: LevelData, spawnPos: THREE.Vector3): void {
+    if (!this.paperStorm) return;
+    this.paperStorm.reset();
+    this.paperStorm.setGroundLevel(0);
+    const radius = Math.min(30, Math.max(14, (level.groundSize ?? 60) * 0.25));
+    this.paperStorm.addFloorLitter(new THREE.Vector3(spawnPos.x, 0, spawnPos.z), radius, 110);
+  }
+
+  /**
+   * Put the squad where the player actually is. The old officers were hard-coded around the
+   * origin, which on a level that spawns you at (-120, -140) meant they were 150+ units away
+   * and the player never saw a single one.
+   */
+  private spawnPolice(spawnPos: THREE.Vector3): void {
+    if (!this.police) return;
+    this.police.reset();
+
+    // Ring of patrol posts around the spawn, far enough that you are not caught on frame 1.
+    const RING = 26;
+    const posts = 4;
+    for (let i = 0; i < posts; i++) {
+      const a = (i / posts) * Math.PI * 2 + 0.4;
+      const p = new THREE.Vector3(
+        spawnPos.x + Math.cos(a) * RING,
+        0,
+        spawnPos.z + Math.sin(a) * RING,
+      );
+      // Each officer walks a chord across the spawn area, so their cones sweep the playfield.
+      const b = a + Math.PI * 0.5;
+      this.police.spawn({
+        position: p,
+        patrolPoints: [
+          p.clone(),
+          new THREE.Vector3(spawnPos.x + Math.cos(b) * RING, 0, spawnPos.z + Math.sin(b) * RING),
+        ],
+      });
+    }
+    this.hud?.setWanted(0);
+  }
+
+  /**
+   * Build the floating pickups GoalSystem authored for this level: the six S-T-O-N-K-S
+   * letters and the hidden file. Without these the collect goals are literally impossible,
+   * which is why the checklist could never be finished before.
+   */
+  private spawnCollectibles(): void {
+    this.clearCollectibles();
+    if (!this.goals) return;
+
+    const letterMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff88, emissive: 0x00ff88, emissiveIntensity: 1.6,
+      roughness: 0.35, metalness: 0.0,
+    });
+    const itemMat = new THREE.MeshStandardMaterial({
+      color: 0xffd700, emissive: 0xffb000, emissiveIntensity: 1.4,
+      roughness: 0.3, metalness: 0.1,
+    });
+
+    const make = (
+      id: string, kind: 'letter' | 'hiddenItem' | 'cash',
+      p: [number, number, number], mat: THREE.Material, value: number,
+    ) => {
+      const group = new THREE.Group();
+      // One mesh, one draw call. A faceted ring reads at gameplay distance far better than a
+      // solid blob, and the pickups are numerous enough that a second mesh each would matter.
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.11, 5, 10), mat);
+      ring.rotation.x = Math.PI / 2;
+      group.add(ring);
+      group.position.set(p[0], p[1] + 1.1, p[2]);
+      this.scene.add(group);
+      this.levelObjects.push(group);
+      this.collectibles.push({
+        id, kind, group,
+        position: group.position.clone(),
+        value, taken: false,
+      });
+    };
+
+    for (const l of this.goals.letterPlacements) {
+      make(l.id, 'letter', l.position, letterMat, 250);
+    }
+    for (const pk of this.goals.pickupPlacements) {
+      make(pk.id, 'hiddenItem', pk.position, itemMat, pk.value ?? 1000);
+    }
+  }
+
+  private clearCollectibles(): void {
+    for (const c of this.collectibles) {
+      this.scene.remove(c.group);
+      c.group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) m.geometry.dispose();
+      });
+    }
+    this.collectibles = [];
+  }
+
+  /** Spin the pickups and test them against the player. */
+  private updateCollectibles(dt: number): void {
+    if (this.collectibles.length === 0) return;
+    const p = this.chair.position;
+
+    for (const c of this.collectibles) {
+      if (c.taken) continue;
+      c.group.rotation.y += dt * 2.2;
+      c.group.position.y = c.position.y + Math.sin(performance.now() * 0.003 + c.position.x) * 0.12;
+
+      const dx = p.x - c.position.x;
+      const dy = p.y - c.position.y;
+      const dz = p.z - c.position.z;
+      if (dx * dx + dy * dy + dz * dz > 2.6 * 2.6) continue;
+
+      c.taken = true;
+      c.group.visible = false;
+      this.goals?.notifyCollect(c.kind, c.id);
+      // Pickups pay out through the one score path, exactly like every other award.
+      this.score.addStonks(c.value, c.kind === 'letter' ? 'Letter' : 'Hidden file');
+      proceduralSounds.playChaChing(c.value);
+      this.paperStorm?.burst(c.position.clone(), 10, 4.5);
+    }
+  }
+
+  /** A goal just completed: pay it, announce it, refresh the checklist. */
+  private onGoalComplete(goal: GoalProgress): void {
+    this.hud?.showGoalComplete(goal);
+    proceduralSounds.playSpecialReady();
+    if (this.goals) this.hud?.setGoals(this.goals.progress);
   }
   
   /**
@@ -1426,6 +2097,8 @@ export class Game {
     }
     this.levelObjects = [];
 
+    this.clearCollectibles();
+
     // The office floorplate owns real geometry; free it rather than leaking it.
     if (this.officeInterior) {
       this.scene.remove(this.officeInterior.root);
@@ -1436,169 +2109,21 @@ export class Game {
     // Clear grind system rails
     this.grindSystem.clearRails();
     
-    // Clear physics colliders from previous level
+    // Clear physics colliders from previous level. Anything holding a Rapier body must be
+    // cleared FIRST or it is left pointing at a freed body.
+    this.destructibles?.reset();
+    this.police?.reset();
+    this.paperStorm?.reset();
     this.physics.clearStaticBodies();
-    
-    // Dispose and remove NPC officers
-    this.clearNPCOfficers();
   }
   
   /**
-   * Remove all NPC officers from scene
+   * PoliceSquad is now the ONE pursuit system. The old NPCOfficer squad (four GLB officers
+   * hard-coded around the origin) and ChaseMechanic's three decorative capsule blobs have both
+   * been removed from the loop: they were three overlapping "chase" systems, none of which
+   * shared a perception model, a catch rule or a score consequence.
    */
-  private clearNPCOfficers(): void {
-    for (const officer of this.npcOfficers) {
-      this.scene.remove(officer.getGroup());
-      officer.dispose();
-    }
-    this.npcOfficers = [];
-    this.officerCaughtCooldown = 0;
-  }
-  
-  /**
-   * Spawn NPC officers for a given level ID
-   */
-  private spawnLevelNPCs(levelId: string): void {
-    // Only spawn for levels that need them
-    if (levelId === 'story_1_office') {
-      this.spawnOfficeOfficers();
-    } else if (levelId === 'story_6_forest' || levelId === 'story_9_finale') {
-      // Forest/finale chase levels: add officers to supplement the abstract chase mechanic
-      this.spawnChaseOfficers();
-    }
-  }
-  
-  /**
-   * Spawn 4 officers patrolling the office level (ch1_office)
-   * Officers patrol between cubicle rows; switch to chase when player within 15 units
-   */
-  private spawnOfficeOfficers(): void {
-    const officerConfigs = [
-      {
-        position: new THREE.Vector3(-25, 0, -10),
-        patrolPoints: [
-          new THREE.Vector3(-25, 0, -30),
-          new THREE.Vector3(-25, 0, 5),
-        ],
-      },
-      {
-        position: new THREE.Vector3(25, 0, -15),
-        patrolPoints: [
-          new THREE.Vector3(25, 0, -30),
-          new THREE.Vector3(25, 0, 5),
-        ],
-      },
-      {
-        position: new THREE.Vector3(0, 0, -25),
-        patrolPoints: [
-          new THREE.Vector3(-15, 0, -25),
-          new THREE.Vector3(15, 0, -25),
-        ],
-      },
-      {
-        position: new THREE.Vector3(0, 0, 5),
-        patrolPoints: [
-          new THREE.Vector3(-10, 0, 5),
-          new THREE.Vector3(10, 0, 5),
-        ],
-      },
-    ];
-    
-    for (const cfg of officerConfigs) {
-      const officer = new NPCOfficer(
-        {
-          position: cfg.position,
-          patrolPoints: cfg.patrolPoints,
-          detectionRange: 15,
-          chaseRange: 25,
-          catchRange: 2,
-          walkSpeed: 3,
-          runSpeed: 6,
-        },
-        {
-          onCaught: () => this.handleOfficerCaught(),
-        }
-      );
-      
-      this.npcOfficers.push(officer);
-      
-      // Load async — add to scene when ready
-      officer.load(this.gltfLoader).then((group) => {
-        this.scene.add(group);
-        console.log('[Game] NPC officer spawned at', cfg.position);
-      }).catch((err) => {
-        console.warn('[Game] Failed to load NPC officer model:', err);
-      });
-    }
-  }
-  
-  /**
-   * Spawn officers for chase levels (visual pursuers)
-   */
-  private spawnChaseOfficers(): void {
-    const spawnPos = this.currentStoryLevel?.spawnPoint.position;
-    if (!spawnPos) return;
-    
-    const base = new THREE.Vector3(spawnPos[0] - 10, 0, spawnPos[2]);
-    
-    for (let i = 0; i < 2; i++) {
-      const offset = new THREE.Vector3((i - 0.5) * 4, 0, 0);
-      const officer = new NPCOfficer(
-        {
-          position: base.clone().add(offset),
-          detectionRange: 999,   // Always chasing
-          chaseRange: 999,
-          catchRange: 2,
-          walkSpeed: 4,
-          runSpeed: 8,
-        },
-        {
-          onCaught: () => this.handleOfficerCaught(),
-        }
-      );
-      
-      officer.startChase();
-      this.npcOfficers.push(officer);
-      
-      officer.load(this.gltfLoader).then((group) => {
-        this.scene.add(group);
-        console.log('[Game] Chase NPC officer spawned');
-      }).catch((err) => {
-        console.warn('[Game] Failed to load chase NPC officer:', err);
-      });
-    }
-  }
-  
-  /**
-   * Handle the "caught" event from an NPC officer
-   */
-  private handleOfficerCaught(): void {
-    // Cooldown to avoid rapid re-triggering
-    if (this.officerCaughtCooldown > 0) return;
-    this.officerCaughtCooldown = 3; // 3 second cooldown
-    
-    console.log('[Game] Player caught by officer NPC!');
-    this.onOfficerCaught?.();
-    
-    // Camera shake for impact
-    this.cameraController.shake(1.2, 0.5);
-    
-    // Deduct score penalty
-    const penalty = 500;
-    this.totalStonks = Math.max(0, this.totalStonks - penalty);
-    this.hud?.setScore(Math.floor(this.totalStonks));
-    
-    // Show brief dialogue
-    if (this.dialogueBox) {
-      this.dialogueBox.show(['SEC OFFICER: Gotcha! ...wait, he\'s still going?!']);
-    }
-    
-    // Restore from checkpoint if available, else keep going (non-fatal)
-    if (this.lastCheckpointIndex >= 0 && this.checkpointPosition) {
-      this.restoreCheckpoint();
-    }
-  }
-  
+
   /**
    * Load objects from level data with instancing optimization
    */
@@ -2780,176 +3305,101 @@ export class Game {
   }
   
   private fixedUpdate(dt: number): void {
-    // Update input
+    // ---- 1. INTENT --------------------------------------------------------------------
+    // THPSControls is the single source of player intent. InputManager is still ticked so
+    // the debug animation cycler keeps working, but nothing gameplay-facing reads it.
+    const intent = this.controls.update(dt);
+    this.intent = intent;
     this.input.update();
-    const input = this.input.getState();
-    
-    // Hide controls hint on first meaningful input
-    if (input.forward || input.brake || input.turnLeft || input.turnRight || 
-        input.jump || input.flip || input.grab || input.grind) {
+
+    if (intent.push || intent.brake || intent.turn !== 0 || intent.olliePopped ||
+        intent.flipEdge || intent.grabEdge || intent.grindEdge || intent.revertEdge) {
       this.hud?.hideControlsHint();
     }
-    
-    // Update player state
+
+    if (this.bailRecovery > 0) this.bailRecovery = Math.max(0, this.bailRecovery - dt);
+
+    // ---- 2. GROUND / AIR STATE, LAND + TAKEOFF EVENTS ----------------------------------
     this.updatePlayerState(dt);
-    
-    // Detect and execute tricks (with input queue support)
-    const detectedTrick = this.trickDetector.detectTrick(input, this.playerState);
-    const now = performance.now();
-    const trickCooldownActive = now - this.lastTrickTime < 200; // ~200ms trick animation window
-    
-    // Queue trick if we're still in a trick animation
-    if (detectedTrick && trickCooldownActive && !this.queuedTrick) {
-      this.queuedTrick = detectedTrick;
+
+    const velNow = this.physics.getVelocity(this.chairBody);
+    const speedNow = Math.hypot(velNow.x, velNow.z);
+
+    // ---- 3. AIR TRICKS ----------------------------------------------------------------
+    this.updateTricks();
+
+    // Expire a finished one-shot trick so the animator returns to the ride pose.
+    if (this.activeTrick && !this.heldGrabId && performance.now() > this.activeTrick.until) {
+      this.activeTrick = null;
+      this.trickAnimator?.releaseTrick();
     }
-    
-    // Determine which trick to execute: queued trick takes priority, then newly detected
-    const trickToExecute = !trickCooldownActive 
-      ? (this.queuedTrick || detectedTrick)
-      : null;
-    
-    if (trickToExecute) {
-      this.comboSystem.addTrick(trickToExecute);
-      this.lastTrickTime = now;
-      this.queuedTrick = null;  // Clear queue after executing
-      proceduralSounds.playTrick(trickToExecute.basePoints);
-      
-      // Add to special meter
-      const prevSpecial = this.specialMeter;
-      this.specialMeter = Math.min(1, this.specialMeter + trickToExecute.basePoints / 5000);
-      this.hud?.setSpecial(this.specialMeter);
-      
-      // Special meter just filled
-      if (prevSpecial < 1 && this.specialMeter >= 1) {
-        proceduralSounds.playSpecialReady();
-      }
-    }
-    
-    // Clear queued trick if player lands (no longer airborne)
-    if (!this.playerState.isAirborne) {
-      this.queuedTrick = null;
-    }
-    
-    // Update grind cooldown
+
+    // ---- 4. GRIND ---------------------------------------------------------------------
     this.grindSystem.updateCooldown(dt);
-    
-    // Check for grind initiation (automatic when near a rail)
+    this.updateGrind(dt, intent, speedNow);
+
+    // ---- 5. MANUAL / REVERT / BALANCE -------------------------------------------------
+    this.updateBalance(dt, intent, speedNow);
+
+    // ---- 6. MOVEMENT ------------------------------------------------------------------
     if (!this.grindSystem.isGrinding()) {
-      const pos = this.physics.getPosition(this.chairBody);
-      const vel = this.physics.getVelocity(this.chairBody);
-      // Auto-grind: always check for rails, no button required
-      const startedGrind = this.grindSystem.tryStartGrind(pos, vel, true);
-      
-      if (startedGrind) {
-        this.playerState.isGrinding = true;
-        this.grindBalance = 0.5;
-        this.grindScore = 0;  // Reset grind score
-        proceduralSounds.playGrindStart();
-        proceduralSounds.startGrindLoop();
-        proceduralSounds.startBalanceWarning();  // Start balance warning system (initially silent)
-        
-        // Enable grind camera angle for better rail visibility
-        const grindState = this.grindSystem.getState();
-        if (grindState.rail) {
-          this.cameraController.setGrindCamera(true, grindState.rail.start, grindState.rail.end);
-        }
-      }
-    }
-    
-    // Update grind if active
-    if (this.grindSystem.isGrinding()) {
-      // Balance input from A/D keys
-      let balanceInput = 0;
-      if (input.turnLeft) balanceInput = -1;
-      if (input.turnRight) balanceInput = 1;
-      
-      // Jump off rail
-      if (input.jump) {
-        this.grindSystem.forceEndGrind();
-        this.playerState.isGrinding = false;
-        proceduralSounds.stopGrindLoop();
-        proceduralSounds.stopBalanceWarning();
-        proceduralSounds.playJump();
-        // Apply jump impulse
-        this.physics.applyImpulse(this.chairBody, new THREE.Vector3(0, 10, 0));
-        // Disable grind camera angle
-        this.cameraController.setGrindCamera(false);
-      } else {
-        // Update grind physics with upgrade-modified balance drift
-        this.grindSystem.updateGrind(dt, balanceInput, this.physics, this.chairBody, this.grindBalanceDrift * 2);
-        
-        // Update balance display
-        const grindState = this.grindSystem.getState();
-        this.grindBalance = grindState.balance;
-        
-        // Update balance warning sound (gets louder/higher pitch near edges)
-        proceduralSounds.updateBalanceWarning(this.grindBalance);
-        
-        // Earn stonks while grinding (10 per second base, up to 50 with good balance)
-        const balanceBonus = 1 + Math.abs(0.5 - grindState.balance) * -4 + 2;  // Better balance = more stonks
-        const stonksPerSecond = 10 * Math.max(1, balanceBonus);
-        this.grindScore += stonksPerSecond * dt;
-        this.totalStonks += stonksPerSecond * dt;
-        this.hud?.setScore(Math.floor(this.totalStonks));
-        
-        // Update grind particles with sparks
-        if (grindState.rail) {
-          const grindPos = new THREE.Vector3().lerpVectors(
-            grindState.rail.start,
-            grindState.rail.end,
-            grindState.progress
-          );
-          grindPos.y += 0.1;  // Slightly above rail
-          this.grindParticles.update(dt, true, grindPos, grindState.rail.direction);
-        }
-        
-        // Check if grind ended
-        if (!this.grindSystem.isGrinding()) {
-          this.playerState.isGrinding = false;
-          proceduralSounds.stopGrindLoop();
-          proceduralSounds.stopBalanceWarning();
-          // Disable grind camera angle
-          this.cameraController.setGrindCamera(false);
-        }
-      }
-    } else {
-      // Apply normal movement forces
-      this.applyMovement(input, dt);
-      
-      // Update particles (not grinding)
+      this.applyMovement(intent, dt);
       this.grindParticles.update(dt, false);
     }
-    
-    // Always update landing particles
     this.landingParticles.update(dt);
-    
-    // Step physics (but not during grinding - grind system controls position)
+
+    // ---- 7. PHYSICS -------------------------------------------------------------------
     if (!this.grindSystem.isGrinding()) {
       this.physics.step(dt);
     }
-    
-    // Sync visual to physics (or grind position)
+
+    // ---- 8. TRANSFORM SYNC + VISUAL LEAN ----------------------------------------------
     const pos = this.physics.getPosition(this.chairBody);
     const rot = this.physics.getRotation(this.chairBody);
-    
     this.chair.position.copy(pos);
     this.chair.quaternion.copy(rot);
-    
-    // Apply spin rotation (visual only during air)
+
     if (this.playerState.isAirborne && this.spinRotation !== 0) {
       this.chair.rotation.y += this.spinRotation * dt;
     }
-    
-    // Update camera
+
+    // The rigid body is Y-locked, so BalanceSystem's pitch/roll go on the visual group.
+    const bal = this.balanceState;
+    if (this.chairTilt) {
+      const pitchRad = bal ? bal.pitchDegrees * DEG2RAD : 0;
+      const rollRad = bal ? bal.rollDegrees * DEG2RAD : 0;
+      this.chairTilt.rotation.x = pitchRad;
+      this.chairTilt.rotation.z = rollRad;
+    }
+
+    // ---- 9. SCORE TICK ----------------------------------------------------------------
+    this.score.setAirborne(this.playerState.isAirborne);
+    // Air rotation feeds the spin scorer, which turns it into 180/360/540 entries itself.
+    if (this.playerState.isAirborne) {
+      const yawNow = this.chair.rotation.y;
+      this.score.addSpin(yawDeltaDegrees(this.lastYaw, yawNow));
+      this.lastYaw = yawNow;
+    } else {
+      this.lastYaw = this.chair.rotation.y;
+    }
+    this.score.update(dt);
+    this.hud?.setScore(this.score.balance);
+
+    // ---- 10. CAMERA + FEEDBACK --------------------------------------------------------
     this.cameraController.update(dt);
-    
-    // Update wheel roll sound based on speed
+
     const currentVel = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(currentVel.x, 0, currentVel.z).length();
+
+    // High-speed collision: a big instantaneous loss of speed with a combo open is a crash.
+    if (this.prevSpeed > 9 && currentSpeed < this.prevSpeed * 0.45 && this.playerState.isGrounded
+        && this.score.isOpen && this.bailRecovery <= 0) {
+      this.bail('collision');
+    }
+    this.prevSpeed = currentSpeed;
+
     proceduralSounds.updateWheelRoll(currentSpeed, this.playerState.isGrounded && !this.playerState.isGrinding);
-    
-    // Caster animation: forks trail the direction of travel, tyres roll at v/r.
-    // Must run AFTER the chair transform is written this frame.
+
     if (this.chairParts) {
       spinCasters(this.chairParts, currentSpeed, dt);
     } else if (this.wheelMeshes.length > 0 && this.playerState.isGrounded && !this.playerState.isGrinding) {
@@ -2957,89 +3407,242 @@ export class Game {
       for (const wheel of this.wheelMeshes) wheel.rotation.x += rotationDelta;
     }
 
-    // Update speed lines effect (radial blur at high speeds)
     this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);
-
-    // Update speed stock-chart HUD
     this.hud?.setSpeed(currentSpeed);
-    
-    // Update dynamic FOV based on speed (wider FOV at high speeds)
     this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
-    
-    // Update trick zoom (zoom out slightly during air time for better trick visibility)
     this.cameraController.setTrickZoom(this.playerState.isAirborne, this.playerState.airTime);
-    
-    // Update combo system
-    this.comboSystem.update(dt);
-    
-    // Update combo timer bar every frame for smooth animation
-    if (this.hud && this.comboSystem.hasActiveCombo()) {
-      const comboState = this.comboSystem.getState();
-      this.hud.updateComboTimer(comboState.timeRemaining, 2000);
-    }
-    
-    // Update HUD balance meter
-    if (this.playerState.isGrinding || this.playerState.isManualing) {
+
+    // ---- 11. HUD COMBO + BALANCE ------------------------------------------------------
+    const comboState = this.score.state;
+    this.hud?.setComboState(comboState.open ? comboState : null);
+
+    if (this.balance.isActive) {
       this.hud?.setBalanceVisible(true);
-      this.hud?.setBalance(this.playerState.isGrinding ? this.grindBalance : this.manualBalance);
+      this.hud?.setBalance(this.balance.balance01);
     } else {
       this.hud?.setBalanceVisible(false);
     }
-    
-    // Update player model animations
-    if (this.playerModel && this.useGLBModel) {
-      // The rig derives speed and turn rate from the chair's own motion; it only needs the
-      // gameplay booleans it cannot see for itself.
-      this.playerModel.update(dt, {
-        grounded: this.playerState.isGrounded,
-        grinding: this.playerState.isGrinding,
-        airborne: this.playerState.isAirborne,
-        airTime: this.playerState.airTime,
-      });
-      this.updatePlayerAnimation(input);
+
+    // ---- 12. WORLD SYSTEMS ------------------------------------------------------------
+    this.destructibles?.update(dt, this.chair.position, currentVel);
+    this.paperStorm?.update(dt, this.chair.position, currentVel);
+    this.updateCollectibles(dt);
+
+    if (this.police) {
+      // Noise: how loud the player is. A grinding office chair is a siren.
+      const noise = Math.min(1, currentSpeed / 14 + (this.playerState.isGrinding ? 0.45 : 0));
+      this.police.update(dt, this.chair.position, currentVel, noise);
+      this.hud?.setWanted(Math.ceil(this.police.heatLevel * 5));
+      this.goals?.setPursuit(this.police.inPursuit);
     }
-    
-    // Update story-specific systems
+
+    // ---- 13. GOALS --------------------------------------------------------------------
+    if (this.goals) {
+      this.goals.update(dt);
+      this.updateZones();
+      const unpaid = this.goals.takeUnpaidReward();
+      if (unpaid > 0) this.score.addStonks(unpaid, 'Goal reward');
+
+      this.goalHudTimer += dt;
+      if (this.goalHudTimer > 0.25) {
+        this.goalHudTimer = 0;
+        this.hud?.setGoals(this.goals.progress);
+      }
+    }
+
+    // ---- 14. RIDER ANIMATION ----------------------------------------------------------
+    this.updateRider(dt, currentSpeed, intent);
+
+    // ---- 15. STORY --------------------------------------------------------------------
     this.updateStorySystems(dt);
-    
-    // Clear just-pressed keys after processing
+
     this.input.clearJustPressed();
   }
-  
+
+  /**
+   * Grind entry / exit. Grinding now REQUIRES the grind button: the old code called
+   * tryStartGrind() unconditionally every frame, so rails grabbed you whether you wanted
+   * them or not and no grind trick was ever named.
+   */
+  private updateGrind(dt: number, intent: ControlIntent, speed: number): void {
+    if (!this.grindSystem.isGrinding()) {
+      if (!intent.grind || this.bailRecovery > 0) return;
+
+      const pos = this.physics.getPosition(this.chairBody);
+      const vel = this.physics.getVelocity(this.chairBody);
+      const rail = this.grindSystem.tryStartGrind(pos, vel, true);
+      if (!rail) return;
+
+      this.playerState.isGrinding = true;
+
+      // Name the grind from the approach angle. detectGrindType() has been implemented and
+      // uncalled since it was written; this is the call site.
+      const approach = THREE.MathUtils.radToDeg(
+        Math.atan2(vel.x, vel.z) - Math.atan2(rail.direction.x, rail.direction.z)
+      );
+      let def = this.trickDetector.detectGrindType(approach) ?? TrickRegistry.get('50_50') ?? null;
+      // Holding a vertical direction as you lock on picks the two grinds the angle table
+      // cannot reach, so all eight grind entries are live.
+      if (intent.dir.y > 0) def = TrickRegistry.get('crooked') ?? def;
+      else if (intent.dir.y < 0) def = TrickRegistry.get('bluntslide') ?? def;
+
+      this.grindTrick = def;
+      const base = def?.basePoints ?? 300;
+      this.score.startGrind(def?.displayName ?? 'Grind', base);
+      this.balance.startGrind();
+      this.trickAnimator?.playTrick(def?.id ?? '50_50', 'grind', 0);
+      this.goals?.notifyTrickAt(def?.id ?? '50_50', this.zoneIdAtPlayer());
+
+      proceduralSounds.playGrindStart();
+      proceduralSounds.startGrindLoop();
+      proceduralSounds.startBalanceWarning();
+
+      const gs = this.grindSystem.getState();
+      if (gs.rail) this.cameraController.setGrindCamera(true, gs.rail.start, gs.rail.end);
+      return;
+    }
+
+    // --- already grinding ---
+    // Ollie out, or release the grind button to drop off. Both keep the combo open.
+    if (intent.olliePopped || !intent.grindHeld) {
+      const popping = intent.olliePopped;
+      this.endGrind();
+      if (popping) {
+        proceduralSounds.playJump();
+        const v = this.physics.getVelocity(this.chairBody);
+        this.physics.setVelocity(this.chairBody, new THREE.Vector3(v.x, 10 * this.jumpMultiplier * intent.ollieCharge, v.z));
+      }
+      return;
+    }
+
+    // Balance the rail on the horizontal axis (grinds are left/right in THPS).
+    this.grindSystem.updateGrind(dt, -intent.dir.x, this.physics, this.chairBody, this.grindBalanceDrift * 2);
+    this.score.updateGrind(dt, this.balance.balance01);
+    proceduralSounds.updateBalanceWarning(this.balance.balance01);
+
+    const gs = this.grindSystem.getState();
+    if (gs.rail) {
+      const grindPos = new THREE.Vector3().lerpVectors(gs.rail.start, gs.rail.end, gs.progress);
+      grindPos.y += 0.1;
+      this.grindParticles.update(dt, true, grindPos, gs.rail.direction);
+    }
+    if (speed < 0.2) this.endGrind();
+
+    // The grind system can drop the grind on its own (ran off the end of the rail).
+    if (!this.grindSystem.isGrinding()) this.endGrind();
+  }
+
+  /** Close a grind without bailing. The combo stays open. */
+  private endGrind(): void {
+    if (this.grindSystem.isGrinding()) this.grindSystem.forceEndGrind();
+    if (!this.playerState.isGrinding) return;
+
+    this.playerState.isGrinding = false;
+    this.grindTrick = null;
+    this.score.endGrind();
+    if (this.balance.state.mode === 'grind') this.balance.end();
+    this.trickAnimator?.releaseTrick();
+    proceduralSounds.stopGrindLoop();
+    proceduralSounds.stopBalanceWarning();
+    this.cameraController.setGrindCamera(false);
+  }
+
+  /**
+   * Manual / nose-manual on the down-up tap, revert on landing from a transition, and the
+   * inverted-pendulum integration that drives both (and the grind).
+   */
+  private updateBalance(dt: number, intent: ControlIntent, speed: number): void {
+    // --- manual entry (edge only, so no repeat) ---
+    if (intent.manualEdge !== 'none' && this.bailRecovery <= 0) {
+      const nose = intent.manualEdge === 'noseManual';
+      if (this.balance.tryStartManual(nose, this.playerState.isGrounded, speed)) {
+        this.score.startManual(nose);
+        this.playerState.isManualing = true;
+        const def = TrickRegistry.get(nose ? 'nose_manual' : 'manual');
+        this.trickAnimator?.playTrick(def?.id ?? 'manual', 'manual', 0);
+        this.goals?.notifyTrickAt(def?.id ?? 'manual', this.zoneIdAtPlayer());
+      }
+    }
+
+    // --- revert ---
+    if (intent.revertEdge && this.bailRecovery <= 0) {
+      if (this.balance.tryRevert(this.landedFromTransition)) {
+        this.score.revert();
+        const def = TrickRegistry.get('manual');
+        if (def) this.trickAnimator?.playTrick('revert', 'manual', 0.35);
+      }
+    }
+
+    // --- integrate ---
+    // Manuals are corrected vertically, grinds/lips horizontally. Difficulty rises with the
+    // length of the line, so a long combo is progressively hairier to hold.
+    const axis = this.balance.axis;
+    const stick = axis === 'vertical' ? intent.dir.y : axis === 'horizontal' ? intent.dir.x : 0;
+    const difficulty = 1 + Math.min(1.5, this.score.state.distinctTricks * 0.08);
+    this.balanceState = this.balance.update(dt, stick, speed, difficulty);
+
+    if (this.balance.isManualing) {
+      this.score.updateManual(dt, this.balance.balance01);
+      this.playerState.isManualing = true;
+    }
+  }
+
+  /**
+   * Drive the rider from real gameplay state. Every field here is a fact about this frame,
+   * not a guess: the animator is never told what to do, only what is happening.
+   */
+  private updateRider(dt: number, speed: number, intent: ControlIntent): void {
+    if (!this.playerModel) return;
+
+    if (this.trickAnimator) {
+      const bal = this.balanceState;
+      this.trickAnimator.update(dt, {
+        grounded: this.playerState.isGrounded,
+        airTime: this.playerState.airTime / 1000,
+        speed,
+        turn: intent.turn,
+        trickId: this.activeTrick?.id ?? (this.grindTrick?.id ?? null),
+        trickKind: (this.activeTrick?.kind ?? (this.grindTrick ? 'grind' : null)) as
+          'flip' | 'grab' | 'grind' | 'manual' | 'spin' | 'special' | null,
+        grabHeld: !!this.heldGrabId,
+        balance: bal ? bal.balance01 : 0.5,
+        pitchDeg: bal ? bal.pitchDegrees : 0,
+        rollDeg: bal ? bal.rollDegrees : 0,
+        bailing: this.bailRecovery > 0,
+        pushing: intent.push && this.playerState.isGrounded,
+      });
+      return;
+    }
+
+    // Fallback: the rig's own procedural poses.
+    this.playerModel.update(dt, {
+      grounded: this.playerState.isGrounded,
+      grinding: this.playerState.isGrinding,
+      airborne: this.playerState.isAirborne,
+      airTime: this.playerState.airTime,
+    });
+    this.updatePlayerAnimation(intent);
+  }
+
   /**
    * Update story-specific systems (checkpoints, chase, etc.)
    */
   private updateStorySystems(dt: number): void {
-    // Update level time
-    this.levelTime += dt;
-    
-    // Check for checkpoint triggers
+    // NOTE: levelTime is advanced once, in loop(), off the real frame delta. It used to be
+    // incremented here as well, so every level clock (and every 'under N seconds' goal) ran
+    // at double speed.
     this.updateCheckpoints();
-    
-    // Update chase mechanic if active
+
+    // Chase pressure is still simulated for the levels that use it, but its three decorative
+    // capsules are gone: PoliceSquad is the only thing that renders or catches a player.
     if (this.chaseMechanic?.isChaseActive()) {
       const vel = this.physics.getVelocity(this.chairBody);
       const playerSpeed = new THREE.Vector3(vel.x, 0, vel.z).length();
-      
+
       this.chaseMechanic.update(dt, playerSpeed, this.chair.position);
-      this.chaseMechanic.updateVisuals(this.chair.position, this.chair.rotation.y);
-      
-      // Update chase HUD
+
       if (this.chaseHUD) {
         this.chaseHUD.update(this.chaseMechanic.getState());
-      }
-    }
-    
-    // Update NPC officers
-    if (this.npcOfficers.length > 0) {
-      // Tick caught cooldown
-      if (this.officerCaughtCooldown > 0) {
-        this.officerCaughtCooldown -= dt;
-      }
-      
-      const playerPos = this.chair.position;
-      for (const officer of this.npcOfficers) {
-        officer.update(dt, playerPos);
       }
     }
   }
@@ -3052,7 +3655,7 @@ export class Game {
   /**
    * Update player animation based on game state
    */
-  private updatePlayerAnimation(input: ReturnType<InputManager['getState']>): void {
+  private updatePlayerAnimation(input: ControlIntent): void {
     if (!this.playerModel) return;
     
     // Skip animation updates while debug lock is active
@@ -3093,7 +3696,7 @@ export class Game {
         this.updatePlayerMountPosition();
         
         // Press forward to start running toward chair
-        if (input.forward) {
+        if (input.push) {
           this.animState = 'running';
           this.stateStartTime = now;
           this.playerModel.play('push', { loop: true });  // Use push as running
@@ -3185,7 +3788,7 @@ export class Game {
         }
         
         // Push again to go faster
-        if (input.forward && speed < 8 && this.playerState.isGrounded) {
+        if (input.push && speed < 8 && this.playerState.isGrounded) {
           // Play push once, then return to rolling (sitting)
           this.playerModel.playOnce('push', 'rolling');
           this.animState = 'pushing';
@@ -3327,148 +3930,150 @@ export class Game {
     // Becoming airborne - store starting rotation
     if (wasGrounded && !this.playerState.isGrounded) {
       this.airStartRotation = this.chair.rotation.y;
+      this.lastYaw = this.chair.rotation.y;
+      this.takeoffPos.copy(pos);
       this.cumulativeSpinDegrees = 0;
+      // A manual cannot survive the wheels leaving the floor.
+      if (this.balance.isManualing) this.balance.end();
+      // Remember whether the take-off was a transition, for the revert window on landing.
+      this.landedFromTransition = this.surfaceAngle > 18;
     }
-    
+
     // Landing detection
     if (!wasGrounded && this.playerState.isGrounded) {
-      // Just landed
       proceduralSounds.playLand();
-      
-      // Calculate landing intensity based on air time (0-1)
+
       const landingIntensity = Math.min(1, this.playerState.airTime / 1500);
-      
-      // Spawn landing dust particles
       if (landingIntensity > 0.1) {
         this.landingParticles.spawn(pos.clone(), landingIntensity);
       }
-      
-      // Camera shake on impact (stronger for bigger air or combo lands)
+
       let impactShake = Math.min(0.3, this.playerState.airTime / 2000);
-      
-      if (this.comboSystem.hasActiveCombo()) {
-        // Bigger shake for successful combo landing
-        const comboState = this.comboSystem.getState();
-        impactShake = Math.min(0.5, impactShake + comboState.multiplier * 0.05);
-        this.comboSystem.land();
-        // playComboLanded is called via combo event
+      if (this.score.isOpen) {
+        impactShake = Math.min(0.5, impactShake + this.score.multiplier * 0.05);
       }
-      
+
+      // Named gaps: one hop from takeoff to touchdown. Paid every time, THPS-style.
+      if (this.goals) {
+        const gap = matchGap(
+          this.goals.gaps,
+          [this.takeoffPos.x, this.takeoffPos.y, this.takeoffPos.z],
+          [pos.x, pos.y, pos.z],
+        );
+        if (gap) {
+          this.goals.notifyGap(gap.id, gap.bonus);
+          this.score.addTrick({ id: `gap_${gap.id}`, name: gap.name, basePoints: gap.bonus, kind: 'gap' });
+        }
+      }
+
+      // Tell BalanceSystem we touched down BEFORE deciding the outcome — the revert window
+      // is measured from here even when the landing turns out to be a bail.
+      this.balance.notifyLanded(this.landedFromTransition, Math.hypot(vel.x, vel.z));
+
+      // A grab still held at touchdown is a bail. That is the whole point of holding it.
+      if (this.heldGrabId) {
+        this.bail('landing');
+      } else if (this.score.isOpen) {
+        // Landing badly out of level (steep surface, huge sideways velocity) also bails.
+        const sideways = Math.abs(vel.y) > 22;
+        if (sideways) this.bail('landing');
+        else this.land();
+      }
+
       if (impactShake > 0.05) {
         this.cameraController.shake(impactShake, 0.2);
       }
-
-      // Screen-space impact punch (zoom + flash), decays over ~0.3s.
       this.postFX?.pulse(Math.min(1, 0.25 + landingIntensity * 0.75));
 
       this.spinRotation = 0;
       this.cumulativeSpinDegrees = 0;
-      this.hud?.setSpinCounter(0);  // Hide spin counter on landing
+      this.activeTrick = null;
+      this.trickAnimator?.releaseTrick();
+      this.hud?.setSpinCounter(0);
     }
-    
-    // Update special availability
-    this.playerState.hasSpecial = this.specialMeter >= 1;
-    
-    // Drain special meter slowly
-    if (this.playerState.hasSpecial) {
-      this.specialMeter = Math.max(0, this.specialMeter - dt * 0.1);
-      this.hud?.setSpecial(this.specialMeter);
-    }
+
+    // Update special availability.
+    //
+    // The meter used to drain the instant it filled, which meant `specialMeter >= 1` was true
+    // for exactly one frame and the four special tricks were unreachable in practice. It now
+    // holds once full and is spent — either by firing a special, or by bailing.
+    this.playerState.hasSpecial = this.specialMeter >= Game.SPECIAL_COST;
+    this.controls?.setSpecialReady(this.playerState.hasSpecial);
   }
   
-  private applyMovement(input: ReturnType<InputManager['getState']>, dt: number): void {
+  /**
+   * Drive the chair from ControlIntent. Analog turn, hold-charge ollie, and spin from the
+   * shoulder buttons instead of the old raw-key booleans.
+   */
+  private applyMovement(intent: ControlIntent, dt: number): void {
     // Only allow full movement when mounted on chair
     if (!this.isMounted) {
-      // When standing, only allow turning the chair to face it
-      if (input.turnLeft) {
-        this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 1.5, 0));
-      } else if (input.turnRight) {
-        this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, -1.5, 0));
-      } else {
-        this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
-      }
+      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, -intent.turn * 1.5, 0));
       return;
     }
-    
-    // THPS-style physics - snappy and responsive
-    // Apply upgrade multipliers from story mode
-    const accelSpeed = 0.4 * this.speedMultiplier;      // W/S - velocity boost per frame
-    const jumpImpulse = 10 * this.jumpMultiplier;        // Space - ollie (snappy)
-    const spinTorque = 6 * this.spinMultiplier;         // Q/E - spin in air
-    const maxSpeed = 18 * this.speedMultiplier;         // Cap forward speed
-    
-    // Get chair orientation and velocity
+
+    // THPS-style physics - snappy and responsive. Upgrade multipliers from story mode.
+    const accelSpeed = 0.4 * this.speedMultiplier;
+    const jumpImpulse = 10 * this.jumpMultiplier;
+    const spinTorque = 6 * this.spinMultiplier;
+    const maxSpeed = 18 * this.speedMultiplier;
+
     // +Z is forward (away from camera), matching CameraController expectations
     const chairRotation = this.physics.getRotation(this.chairBody);
     const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(chairRotation);
     const velocity = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
-    
-    // THPS-style: Get movement direction along the surface (for ramps)
+
+    // Movement direction along the surface (for ramps)
     const surfaceForward = this.physics.getSurfaceMovementDirection(forward, this.surfaceNormal);
-    
-    // FORWARD (W) - Push in facing direction (follows surface on ramps!)
-    if (input.forward && this.playerState.isGrounded) {
-      if (currentSpeed < maxSpeed) {
-        // Use surface-relative direction for smooth ramp riding
-        const boost = surfaceForward.clone().multiplyScalar(accelSpeed);
-        const newVel = velocity.clone();
-        newVel.x += boost.x;
-        newVel.y += boost.y; // This is key - adds vertical component on ramps!
-        newVel.z += boost.z;
-        this.physics.setVelocity(this.chairBody, newVel);
-        
-        // Play push sound with cooldown (every 400ms max)
-        const now = performance.now();
-        if (now - this.lastPushSoundTime > 400) {
-          proceduralSounds.playPush();
-          this.lastPushSoundTime = now;
-        }
-      }
-    }
-    
-    // BACKWARD (S) - Move backward (also follows surface)
-    if (input.brake && this.playerState.isGrounded) {
-      if (currentSpeed < maxSpeed) {
-        const boost = surfaceForward.clone().multiplyScalar(-accelSpeed * 0.6);
-        const newVel = velocity.clone();
-        newVel.x += boost.x;
-        newVel.y += boost.y;
-        newVel.z += boost.z;
-        this.physics.setVelocity(this.chairBody, newVel);
-      }
-    }
-    
-    // On steep ramps going up, preserve momentum
-    if (this.playerState.isGrounded && this.surfaceAngle > 20) {
-      // Reduce gravity effect on ramps to maintain speed
-      const gravityReduction = Math.min(0.8, this.surfaceAngle / 60);
+
+    // PUSH — kick off the floor. The rider's push animation is driven off the same flag.
+    if (intent.push && this.playerState.isGrounded && currentSpeed < maxSpeed) {
+      const boost = surfaceForward.clone().multiplyScalar(accelSpeed);
       const newVel = velocity.clone();
-      newVel.y += gravityReduction * 0.3; // Counter some gravity
+      newVel.x += boost.x;
+      newVel.y += boost.y;   // vertical component matters on ramps
+      newVel.z += boost.z;
+      this.physics.setVelocity(this.chairBody, newVel);
+
+      const now = performance.now();
+      if (now - this.lastPushSoundTime > 400) {
+        proceduralSounds.playPush();
+        this.lastPushSoundTime = now;
+      }
+    }
+
+    // BRAKE / roll back
+    if (intent.brake && this.playerState.isGrounded && currentSpeed < maxSpeed) {
+      const boost = surfaceForward.clone().multiplyScalar(-accelSpeed * 0.6);
+      const newVel = velocity.clone();
+      newVel.x += boost.x;
+      newVel.y += boost.y;
+      newVel.z += boost.z;
       this.physics.setVelocity(this.chairBody, newVel);
     }
-    
-    // TURNING (A/D)
-    //
-    // This used to be a step function: press A and the chair went from 0 to 4.5 rad/s
-    // (258 deg/s) on a single frame, release and it went straight back to 0. The camera
-    // yaw is derived from the chair yaw, so every tap whipped the whole view around at a
-    // quarter-turn per second with no ramp at either end. That is the disorientation.
-    //
-    // Real THPS turning has weight: angular velocity accelerates toward the target and
-    // decays when you let go. Same peak rate, but the ends are smooth, so the camera has
-    // something continuous to follow.
+
+    // On steep ramps going up, preserve momentum
+    if (this.playerState.isGrounded && this.surfaceAngle > 20) {
+      const gravityReduction = Math.min(0.8, this.surfaceAngle / 60);
+      const newVel = this.physics.getVelocity(this.chairBody);
+      newVel.y += gravityReduction * 0.3;
+      this.physics.setVelocity(this.chairBody, newVel);
+    }
+
+    // TURNING — analog, with weight at both ends so the camera has something continuous
+    // to follow rather than a step function.
     const turnSpeed = 3.6;      // rad/s, grounded
     const airTurnSpeed = 3.0;   // rad/s, airborne
     const TURN_ACCEL = 18;      // rad/s^2 toward the target rate
     const TURN_DECAY = 14;      // rad/s^2 back to zero on release
 
     const maxRate = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
-    const targetRate = input.turnLeft ? maxRate : input.turnRight ? -maxRate : 0;
+    const targetRate = -intent.turn * maxRate;
 
     const currentRate = this.physics.getAngularVelocity(this.chairBody).y;
     const rateGap = targetRate - currentRate;
-    const accel = targetRate === 0 ? TURN_DECAY : TURN_ACCEL;
+    const accel = Math.abs(targetRate) < 1e-3 ? TURN_DECAY : TURN_ACCEL;
     const maxDelta = accel * dt;
     const newRate = currentRate + Math.max(-maxDelta, Math.min(maxDelta, rateGap));
 
@@ -3476,44 +4081,37 @@ export class Game {
       this.chairBody,
       new THREE.Vector3(0, Math.abs(newRate) < 1e-3 ? 0 : newRate, 0)
     );
-    
-    // JUMP (Space) - Ollie with coyote time + jump buffer
-    // Coyote time: can jump briefly after leaving ground
+
+    // OLLIE — charged while the button is held, fired on release, scaled by the charge.
+    // Coyote time still applies so leaving a ledge does not eat the pop.
     const withinCoyoteTime = performance.now() - this.lastGroundedTime < this.COYOTE_TIME_MS;
     const canJump = this.playerState.isGrounded || withinCoyoteTime;
-    
-    // Jump buffer: pressing jump slightly before landing still triggers jump on land
-    const wantsJump = input.jump || this.input.isJumpBuffered();
-    
-    if (wantsJump && canJump) {
+
+    if (intent.olliePopped && canJump) {
       proceduralSounds.playJump();
-      // Clear the jump buffer so we don't double-jump
-      this.input.clearJumpBuffer();
-      // Reset coyote time so we can't double-jump
       this.lastGroundedTime = 0;
-      // Set vertical velocity directly for reliable jumping
-      const newVel = velocity.clone();
-      newVel.y = jumpImpulse;
-      // Add slight forward boost
+      this.ollieCharge = Math.max(0.3, intent.ollieCharge || 1);
+
+      // A manual you pop out of ends cleanly; the combo survives.
+      if (this.balance.isManualing) this.balance.end();
+
+      const v = this.physics.getVelocity(this.chairBody);
+      const newVel = v.clone();
+      newVel.y = jumpImpulse * this.ollieCharge;
       newVel.x += forward.x * 2;
       newVel.z += forward.z * 2;
       this.physics.setVelocity(this.chairBody, newVel);
     }
-    
-    // SPIN (Q/E) - Rotate in air
-    if (this.playerState.isAirborne) {
-      if (input.spinLeft) {
-        this.spinRotation = spinTorque;
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, spinTorque, 0));
-      } else if (input.spinRight) {
-        this.spinRotation = -spinTorque;
-        this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, -spinTorque, 0));
-      } else {
-        this.spinRotation = 0;
-      }
+
+    // SPIN — shoulder buttons, air only.
+    if (this.playerState.isAirborne && Math.abs(intent.spin) > 0.05) {
+      this.spinRotation = -intent.spin * spinTorque;
+      this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, this.spinRotation, 0));
+    } else if (this.playerState.isAirborne) {
+      this.spinRotation = 0;
     }
   }
-  
+
   private render(_alpha?: number): void {
     // PostFX owns tone mapping while enabled and falls back to a plain
     // renderer.render() internally if the composer failed to build.

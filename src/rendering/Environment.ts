@@ -183,7 +183,11 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     // ambient 0.08 -> 0.03). Same mid-tone placement, but now the mid tone is
     // carried by the KEY instead of by a uniform ambient wash, so the unlit side
     // of every form actually falls away.
-    exposure: 1.28,
+    //
+    // 1.28 -> 1.25. Measured against the refs the build was sitting at mean luma
+    // 106 vs their 96-101, which is part of what pushed the nearest troffer past
+    // the top of the ACES shoulder and turned it into a white slab.
+    exposure: 1.32,
     // The single biggest flattener in the old rig. A room IBL is a near-uniform
     // dome: every unit of envIntensity fills the shadow side of every object and
     // narrows the frame's tonal range. Dropping it and pushing the key up buys the
@@ -205,9 +209,14 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
       // not physically what a 5000K troffer does; it is what the concept art does,
       // and the concept art is the target.
       ceiling: 0xc4d3e8,
-      ceilingEnergy: 0.3,
-      panel: 0xfff3e2, // warm troffer — drives the amber highlight pools
-      panelEnergy: 4.6,
+      ceilingEnergy: 0.38,
+      // Warm troffer — drives the amber highlight pools. Pulled back from 0xfff3e2
+      // (linear R/B 1.30) to 0xfff8f0 (R/B 1.11): the ceiling band is by far the
+      // largest solid angle in an interior IBL, so its hue IS the room's white
+      // point. At 1.30 every upward-facing surface in the level was being handed a
+      // sodium cast before a single light was evaluated.
+      panel: 0xfff7ec,
+      panelEnergy: 4.0,
       panelCols: 8,
       panelRows: 4,
       panelW: 0.3,
@@ -226,18 +235,27 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     // Warm (0xffeed2) and much stronger. Warm key + cool fill + cool IBL is the
     // separation; doing it in the lights rather than only in the grade means the
     // hue split survives into the material response and the specular highlights.
-    sun: { color: 0xfff2e0, intensity: 4.6, dir: [0.62, 0.72, 0.34] },
+    //
+    // 0xfff2e0 -> 0xfff6ec. The key is 4.6 units of the brightest light in frame; at
+    // linear R/B 1.30 it was single-handedly setting a sodium white point on the
+    // carpet, the desks and the hero's shirt. 1.15 keeps the key unmistakably warmer
+    // than the fill (which is the separation) without making "white" mean amber.
+    sun: { color: 0xfff6ec, intensity: 4.6, dir: [0.62, 0.72, 0.34] },
     // Saturated, not pastel: 0x9fbcf0 at 0.85 was a bright wash that filled the
-    // shadow side back in. A deeper blue at 0.5 tints the shadow instead of lifting it.
-    fill: { color: 0x5f8ee0, intensity: 0.55, dir: [-0.65, 0.42, -0.75] },
+    // shadow side back in. A deeper blue tints the shadow instead of lifting it.
+    // 0.55 -> 0.74: measured shadow R/B was 0.92 against the refs' 0.70-0.82, i.e.
+    // the shadows were still warm and the cool half of the split was being carried
+    // entirely by the grade. Cool light in the shadow reads; a cool grade on a warm
+    // shadow just reads as muddy.
+    fill: { color: 0x6d97e4, intensity: 0.74, dir: [-0.65, 0.42, -0.75] },
     // Up-facing carpet bounce. Kept low: in a real floorplate the ceiling is a
     // huge surface, and anything above ~0.25 here paints the whole ceiling amber.
-    bounce: { color: 0xffc79a, intensity: 0.06, dir: [0.1, -1.0, -0.25] },
+    bounce: { color: 0xffd6b4, intensity: 0.05, dir: [0.1, -1.0, -0.25] },
     // Cool back rim so the near-black chair and the hero's shirt separate from the
     // mid-tone carpet at follow-camera distance. Pushed hard — with the ambient gone
     // the rim is now the ONLY thing drawing the hero's silhouette.
-    rim: { color: 0x9ec6ff, intensity: 1.9, yaw: 152, pitch: 26 },
-    hemi: { sky: 0xa8c2e6, ground: 0x3b4250, intensity: 0.14 },
+    rim: { color: 0x9ec6ff, intensity: 1.65, yaw: 152, pitch: 26 },
+    hemi: { sky: 0xa8c2e6, ground: 0x3b4250, intensity: 0.17 },
     ambient: { color: 0x5c6c88, intensity: 0.03 },
     shadow: SHADOW_INDOOR,
     // Aerial perspective, rewritten. The old 0x7d786e / 13 / 56 pair fully saturated

@@ -3,7 +3,8 @@
  * Shows score, combo, timer, and trick popups
  */
 
-import { ComboEvent, ComboTrick } from '../tricks/ComboSystem';
+import type { ComboState, ScoreEvent } from '../gameplay/ScoreSystem';
+import type { GoalProgress } from '../gameplay/GoalSystem';
 import { TrickType } from '../tricks/TrickRegistry';
 
 // Color mapping for trick types
@@ -31,12 +32,19 @@ export class HUD {
   private spinCounterElement!: HTMLElement;
   private speedChartElement!: HTMLElement;
   private speedBars: HTMLElement[] = [];
+  private goalsElement!: HTMLElement;
+  private goalsList!: HTMLElement;
+  private goalPopup!: HTMLElement;
+  private wantedElement!: HTMLElement;
 
   private currentScore = 0;
   private displayedScore = 0;
   private specialAmount = 0;
   private lastMultiplier = 1;
   private controlsHidden = false;
+  private goalSignature = '';
+  private goalPopupTimer: ReturnType<typeof setTimeout> | null = null;
+  private wantedStars = -1;
   
   constructor(container: HTMLElement) {
     this.container = container;
@@ -407,6 +415,65 @@ export class HUD {
         font-size: 24px;
         color: #00FF88;
       }
+
+      .hud-goals {
+        position: absolute;
+        top: 120px;
+        right: 20px;
+        width: 250px;
+        font-size: 13px;
+        line-height: 1.45;
+        text-align: left;
+        background: rgba(0,0,0,0.35);
+        border-left: 3px solid rgba(0,255,136,0.7);
+        padding: 8px 10px;
+        border-radius: 3px;
+      }
+      .hud-goals-title {
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: rgba(255,255,255,0.55);
+        margin-bottom: 4px;
+      }
+      .hud-goal {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: rgba(255,255,255,0.85);
+      }
+      .hud-goal.done { color: #00FF88; text-decoration: line-through; opacity: 0.75; }
+      .hud-goal.failed { color: #FF5555; opacity: 0.6; }
+      .hud-goal-detail { color: rgba(255,255,255,0.5); font-size: 11px; white-space: nowrap; }
+
+      .hud-goal-popup {
+        position: absolute;
+        top: 34%;
+        left: 50%;
+        transform: translate(-50%, -50%) scale(0.7);
+        font-size: 30px;
+        font-weight: 700;
+        color: #00FF88;
+        opacity: 0;
+        transition: opacity 0.25s ease-out, transform 0.25s ease-out;
+        text-align: center;
+      }
+      .hud-goal-popup.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      .hud-goal-popup small { display: block; font-size: 16px; color: #FFD700; font-weight: 400; }
+
+      .hud-wanted {
+        position: absolute;
+        top: 74px;
+        right: 20px;
+        font-size: 26px;
+        letter-spacing: 3px;
+        color: #FFB000;
+        opacity: 0;
+        transition: opacity 0.25s ease-out;
+        text-shadow: 0 0 10px rgba(255,60,0,0.8);
+      }
+      .hud-wanted.active { opacity: 1; }
+      .hud-wanted.hot { animation: wantedPulse 0.6s infinite; }
+      @keyframes wantedPulse { 0%,100% { color: #FFB000; } 50% { color: #FF3B30; } }
     `;
     document.head.appendChild(style);
     
@@ -502,21 +569,37 @@ export class HUD {
     this.spinCounterElement.className = 'hud-spin-counter';
     hud.appendChild(this.spinCounterElement);
     
+    // Goal checklist
+    this.goalsElement = document.createElement('div');
+    this.goalsElement.className = 'hud-goals';
+    this.goalsElement.style.display = 'none';
+    this.goalsElement.innerHTML = `<div class="hud-goals-title">GOALS</div><div class="hud-goals-list"></div>`;
+    this.goalsList = this.goalsElement.querySelector('.hud-goals-list') as HTMLElement;
+    hud.appendChild(this.goalsElement);
+
+    // Goal-complete popup
+    this.goalPopup = document.createElement('div');
+    this.goalPopup.className = 'hud-goal-popup';
+    hud.appendChild(this.goalPopup);
+
+    // Wanted stars
+    this.wantedElement = document.createElement('div');
+    this.wantedElement.className = 'hud-wanted';
+    hud.appendChild(this.wantedElement);
+
     // Controls hint (hidden if player has played before)
     this.controlsHint = document.createElement('div');
     this.controlsHint.className = 'hud-controls';
     this.controlsHint.innerHTML = `
-      W - Push forward<br>
-      S - Brake<br>
-      A/D - Turn<br>
-      SPACE - Ollie<br>
-      ↑ - Grind (near rail)<br>
-      ← + WASD - Flip tricks<br>
-      → + WASD - Grab tricks<br>
-      Q/E - Spin (in air)<br>
-      ESC - Pause
+      W - Push &nbsp; S - Brake &nbsp; A/D - Turn<br>
+      SPACE - Ollie (hold to charge)<br>
+      J - Flip &nbsp; K - Grab (hold) &nbsp; L - Grind<br>
+      Arrows - Trick direction<br>
+      ↓ then ↑ - Manual &nbsp; ↑ then ↓ - Nose manual<br>
+      SHIFT - Revert &nbsp; Q/E - Spin<br>
+      J+K - Special (meter full) &nbsp; ESC - Pause
     `;
-    
+
     // Check if player has played before
     const hasPlayed = localStorage.getItem(STORAGE_KEY_HAS_PLAYED) === 'true';
     if (hasPlayed) {
@@ -530,9 +613,21 @@ export class HUD {
   }
   
   /**
-   * Update score display
+   * Pure display sink for the banked balance.
+   *
+   * This ASSIGNS. It is deliberately the only thing it does: ScoreSystem is the single
+   * authority on what the number is, and the HUD's job is to render it. Nothing in this
+   * class may add to `currentScore` — that was the old bug where the grind loop's
+   * per-frame setScore() stomped the combo points the combo path had just added.
    */
   setScore(score: number): void {
+    if (!Number.isFinite(score)) return;
+    if (score < this.displayedScore) {
+      // A bail took stonks away: snap down rather than counting backwards forever.
+      this.displayedScore = score;
+      const el = this.scoreElement.querySelector('.hud-score-value') as HTMLElement;
+      if (el) el.textContent = '$' + Math.round(score).toLocaleString();
+    }
     this.currentScore = score;
   }
 
@@ -653,80 +748,136 @@ export class HUD {
   }
   
   /**
-   * Update combo display with multiplier pulse animation
+   * Render the live combo from ScoreSystem's ComboState. Display only — this never
+   * touches the banked score.
    */
-  updateCombo(tricks: ComboTrick[], totalPoints: number, multiplier: number): void {
+  setComboState(state: ComboState | null): void {
     const tricksEl = this.comboElement.querySelector('.hud-combo-tricks') as HTMLElement;
     const scoreEl = this.comboElement.querySelector('.hud-combo-score');
     const multEl = this.comboElement.querySelector('.hud-combo-multiplier') as HTMLElement;
-    
-    if (tricks.length > 0) {
-      this.comboElement.classList.add('active');
-      
-      // Show last 5 tricks with color coding
-      const recentTricks = tricks.slice(-5);
-      if (tricksEl) {
-        // Create colored spans for each trick
-        tricksEl.innerHTML = recentTricks.map(t => {
-          const color = TRICK_TYPE_COLORS[t.trick.type] || '#00FFFF';
-          return `<span style="color:${color}">${t.trick.displayName}</span>`;
-        }).join(' <span style="color:#888">+</span> ');
-      }
-      if (scoreEl) {
-        scoreEl.textContent = (totalPoints * multiplier).toLocaleString();
-      }
-      if (multEl) {
-        multEl.textContent = `× ${multiplier}`;
-        
-        // Pulse animation when multiplier increases
-        if (multiplier > this.lastMultiplier) {
-          multEl.classList.remove('pulse');
-          void multEl.offsetWidth; // Force reflow
-          multEl.classList.add('pulse');
-        }
-      }
-      
-      this.lastMultiplier = multiplier;
-    } else {
+
+    if (!state || !state.open || state.tricks.length === 0) {
       this.comboElement.classList.remove('active');
       this.lastMultiplier = 1;
+      return;
     }
+
+    this.comboElement.classList.add('active');
+
+    const recent = state.tricks.slice(-5);
+    if (tricksEl) {
+      tricksEl.innerHTML = recent
+        .map((t) => `<span style="color:#00FFFF">${t.name}</span>`)
+        .join(' <span style="color:#888">+</span> ');
+    }
+    if (scoreEl) scoreEl.textContent = state.formattedUnrealised;
+    if (multEl) {
+      multEl.textContent = state.formattedMultiplier;
+      if (state.multiplier > this.lastMultiplier + 0.001) {
+        multEl.classList.remove('pulse');
+        void multEl.offsetWidth;
+        multEl.classList.add('pulse');
+      }
+    }
+    this.lastMultiplier = state.multiplier;
+    this.updateComboTimer(state.timeRemaining, Math.max(1, state.timeRemaining / Math.max(0.001, state.timeFraction)));
   }
-  
+
   /**
-   * Handle combo events
+   * React to a ScoreSystem event. Popups and flashes only — the score value itself
+   * arrives through setScore(), so there is exactly one path into the number.
    */
-  onComboEvent(event: ComboEvent): void {
+  onScoreEvent(event: ScoreEvent): void {
     switch (event.type) {
-      case 'trick_added':
-        if (event.trick && event.points !== undefined && event.multiplier !== undefined) {
-          this.showTrick(event.trick.displayName, event.points, event.multiplier, event.trick.type);
-        }
+      case 'trick':
+        this.showTrick(event.trick.name, event.points, event.multiplier, trickTypeFor(event.trick.kind));
         break;
-        
-      case 'combo_landed':
-        if (event.totalScore !== undefined) {
-          this.currentScore += event.totalScore;
-          // Flash effect
-          this.scoreElement.style.color = '#00FF88';
-          setTimeout(() => {
-            this.scoreElement.style.color = '';
-          }, 300);
-        }
+
+      case 'land':
+        this.scoreElement.style.color = '#00FF88';
+        setTimeout(() => { this.scoreElement.style.color = ''; }, 300);
         this.comboElement.classList.remove('active');
         break;
-        
-      case 'combo_failed':
-        // Red flash
+
+      case 'bail':
         this.comboElement.style.color = '#FF4444';
         setTimeout(() => {
           this.comboElement.style.color = '';
           this.comboElement.classList.remove('active');
         }, 500);
+        this.showGoalBanner(event.headline, event.formattedLoss, '#FF4444');
+        break;
+
+      case 'tierReached':
+        this.showGoalBanner(event.label, '', '#FFD700');
+        break;
+
+      case 'balanceChanged':
         break;
     }
   }
-  
+
+  // -------------------------------------------------------------------------
+  // Goals
+  // -------------------------------------------------------------------------
+
+  /** Render the level checklist. Cheap to call every frame: it diffs before touching the DOM. */
+  setGoals(goals: GoalProgress[]): void {
+    if (!goals || goals.length === 0) {
+      this.goalsElement.style.display = 'none';
+      this.goalSignature = '';
+      return;
+    }
+    this.goalsElement.style.display = '';
+
+    const sig = goals.map((g) => `${g.id}:${g.current}:${g.complete ? 1 : 0}:${g.failed ? 1 : 0}:${g.secret ? 1 : 0}`).join('|');
+    if (sig === this.goalSignature) return;
+    this.goalSignature = sig;
+
+    this.goalsList.innerHTML = goals
+      .map((g) => {
+        const cls = g.complete ? 'hud-goal done' : g.failed ? 'hud-goal failed' : 'hud-goal';
+        const label = g.secret && !g.complete ? '???' : escapeHtml(g.description);
+        const detail = g.secret && !g.complete ? '' : escapeHtml(g.detail ?? '');
+        return `<div class="${cls}"><span>${g.complete ? '\u2714 ' : ''}${label}</span><span class="hud-goal-detail">${detail}</span></div>`;
+      })
+      .join('');
+  }
+
+  /** Big centred banner when a goal completes. */
+  showGoalComplete(goal: GoalProgress): void {
+    this.showGoalBanner('GOAL COMPLETE', `${goal.description}  +$${goal.reward.toLocaleString()}`, '#00FF88');
+  }
+
+  private showGoalBanner(title: string, sub: string, color: string): void {
+    this.goalPopup.style.color = color;
+    this.goalPopup.innerHTML = `${escapeHtml(title)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}`;
+    this.goalPopup.classList.remove('show');
+    void this.goalPopup.offsetWidth;
+    this.goalPopup.classList.add('show');
+    if (this.goalPopupTimer) clearTimeout(this.goalPopupTimer);
+    this.goalPopupTimer = setTimeout(() => this.goalPopup.classList.remove('show'), 2200);
+  }
+
+  // -------------------------------------------------------------------------
+  // Wanted level
+  // -------------------------------------------------------------------------
+
+  /** 0..5 stars. 0 hides the indicator. */
+  setWanted(stars: number): void {
+    const n = Math.max(0, Math.min(5, Math.round(stars)));
+    if (n === this.wantedStars) return;
+    this.wantedStars = n;
+    if (n <= 0) {
+      this.wantedElement.classList.remove('active', 'hot');
+      this.wantedElement.textContent = '';
+      return;
+    }
+    this.wantedElement.textContent = '\u2605'.repeat(n) + '\u2606'.repeat(5 - n);
+    this.wantedElement.classList.add('active');
+    this.wantedElement.classList.toggle('hot', n >= 3);
+  }
+
   /**
    * Update special meter
    */
@@ -784,6 +935,13 @@ export class HUD {
     this.balanceMeter.classList.remove('active');
     this.spinCounterElement.classList.remove('active');
     this.spinCounterElement.textContent = '';
+    this.lastMultiplier = 1;
+    this.goalSignature = '';
+    this.goalsList.innerHTML = '';
+    this.goalsElement.style.display = 'none';
+    this.goalPopup.classList.remove('show');
+    this.wantedStars = -1;
+    this.setWanted(0);
   }
   
   /**
@@ -834,4 +992,26 @@ export class HUD {
     
     this.controlsHidden = true;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** ScoreSystem's TrickKind -> the registry's TrickType, for popup colouring. */
+function trickTypeFor(kind: string): TrickType {
+  switch (kind) {
+    case 'grab': return 'grab';
+    case 'grind': return 'grind';
+    case 'manual': return 'manual';
+    case 'special': return 'special';
+    default: return 'flip';
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
