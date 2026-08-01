@@ -159,8 +159,15 @@ const SHADOW_INDOOR: ShadowSpec = {
   mapSize: 4096,
   // Tightened along with the resolution: the old -0.0005 / 0.02 pair was set for a
   // 2 cm texel and peter-pans the chair casters clean off their own contact shadow.
+  //
+  // r5: normalBias 0.015 -> 0.008. normalBias offsets the SHADOW LOOKUP along the
+  // surface normal, so at 15 mm every contact shadow in the room starts 15 mm away from
+  // the object that casts it. On a desk pedestal or a caster — features 40-60 mm across —
+  // that is a third of the contact, and it is exactly the "everything hovers" read. At a
+  // 20 m / 4096 frustum the texel is 9.8 mm, so 8 mm is still a full texel of slope
+  // protection and the acne it exists to prevent stays gone.
   bias: -0.00026,
-  normalBias: 0.015,
+  normalBias: 0.008,
 };
 const SHADOW_OUTDOOR: ShadowSpec = {
   radius: 36,
@@ -187,12 +194,27 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     // 1.28 -> 1.25. Measured against the refs the build was sitting at mean luma
     // 106 vs their 96-101, which is part of what pushed the nearest troffer past
     // the top of the ACES shoulder and turned it into a white slab.
-    exposure: 1.32,
+    //
+    // r5: 1.32 -> 1.35. Raising the bloom gate from 0.72 to 1.5 linear removed every
+    // merely-lit surface from the bloom pyramid, which is correct but takes a real amount
+    // of light out of the top of the frame: measured against the refs the r5 build came
+    // back with 5.2% of pixels above 200/255 where the refs sit at 5.3-8.0, and 17.3%
+    // below 32 where they sit at 10.2-13.3. i.e. the range widened (std 53.1 -> 56.8,
+    // refs 53.4-58.0) but it widened DOWNWARD. This puts the top back without touching
+    // the key/ambient ratio that produced the extra range in the first place. 1.37 was
+    // measured and overshot the mean (107.5 against the refs' 95.8-100.9); 1.35 lands it.
+    exposure: 1.35,
     // The single biggest flattener in the old rig. A room IBL is a near-uniform
     // dome: every unit of envIntensity fills the shadow side of every object and
     // narrows the frame's tonal range. Dropping it and pushing the key up buys the
     // whole "deep blacks / bright pools" separation the refs have.
-    envIntensity: 0.78,
+    // r5: 0.78 -> 0.68, paired with the key coming up to 5.0 and hemi/ambient coming
+    // down. The standing critique is a narrow value band, and in an interior the room
+    // IBL is what sets the FLOOR of that band: it is a near-uniform dome, so every unit
+    // of it lands identically on the lit side and the shadow side of every object. Trading
+    // 0.10 of dome for 0.4 of key leaves the lit end where it was and drops the unlit end,
+    // which is the only way to widen the range without simply crushing it in the grade.
+    envIntensity: 0.68,
     sky: {
       zenith: 0xd6e0ee,
       horizon: 0x93a0b2,
@@ -240,7 +262,7 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     // linear R/B 1.30 it was single-handedly setting a sodium white point on the
     // carpet, the desks and the hero's shirt. 1.15 keeps the key unmistakably warmer
     // than the fill (which is the separation) without making "white" mean amber.
-    sun: { color: 0xfff6ec, intensity: 4.6, dir: [0.62, 0.72, 0.34] },
+    sun: { color: 0xfff6ec, intensity: 5.0, dir: [0.62, 0.72, 0.34] },
     // Saturated, not pastel: 0x9fbcf0 at 0.85 was a bright wash that filled the
     // shadow side back in. A deeper blue tints the shadow instead of lifting it.
     // 0.55 -> 0.74: measured shadow R/B was 0.92 against the refs' 0.70-0.82, i.e.
@@ -255,8 +277,12 @@ export const ENV_PRESETS: Record<EnvPreset, PresetSpec> = {
     // mid-tone carpet at follow-camera distance. Pushed hard — with the ambient gone
     // the rim is now the ONLY thing drawing the hero's silhouette.
     rim: { color: 0x9ec6ff, intensity: 1.65, yaw: 152, pitch: 26 },
-    hemi: { sky: 0xa8c2e6, ground: 0x3b4250, intensity: 0.17 },
-    ambient: { color: 0x5c6c88, intensity: 0.03 },
+    // Hemi and ambient are the two remaining omnidirectional terms; like the IBL they
+    // pay into the shadow side and the lit side equally, so they are pure value-band
+    // narrowers. Held just high enough that a fully-occluded surface still has a hue
+    // (a literal zero here makes the AO cores read as holes punched in the frame).
+    hemi: { sky: 0xa8c2e6, ground: 0x3b4250, intensity: 0.13 },
+    ambient: { color: 0x5c6c88, intensity: 0.02 },
     shadow: SHADOW_INDOOR,
     // Aerial perspective, rewritten. The old 0x7d786e / 13 / 56 pair fully saturated
     // at 56 m, so in any wide framing the entire back half of the picture WAS the fog

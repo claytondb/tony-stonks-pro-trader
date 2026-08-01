@@ -1976,7 +1976,9 @@ export class Game {
     this.police.reset();
 
     // Ring of patrol posts around the spawn, far enough that you are not caught on frame 1.
-    const RING = 26;
+    // 26 put the ring OUTSIDE the office shell (the floorplate is 46 m, so ±23 m), which left
+    // four officers patrolling the void beyond the walls where the player could never meet them.
+    const RING = 17;
     const posts = 4;
     for (let i = 0; i < posts; i++) {
       const a = (i / posts) * Math.PI * 2 + 0.4;
@@ -3432,7 +3434,7 @@ export class Game {
       // Noise: how loud the player is. A grinding office chair is a siren.
       const noise = Math.min(1, currentSpeed / 14 + (this.playerState.isGrinding ? 0.45 : 0));
       this.police.update(dt, this.chair.position, currentVel, noise);
-      this.hud?.setWanted(Math.ceil(this.police.heatLevel * 5));
+      this.hud?.setHeat(this.police.heatLevel);
       this.goals?.setPursuit(this.police.inPursuit);
     }
 

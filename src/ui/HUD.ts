@@ -1,6 +1,15 @@
 /**
  * HUD - Heads Up Display
- * Shows score, combo, timer, and trick popups
+ *
+ * Visual language (see refs/scene-outside2.png, refs/scene-office3.png):
+ *   chunky rounded panels, dark translucent backing, light outline, bold condensed type,
+ *   gold + green accents. Stonks counter top-left, WANTED stars top-right, goal checklist
+ *   under the stars, SPEED bottom-left, BOOST bottom-right, combo + balance centre column.
+ *
+ * Everything is sized off a single CSS unit `--u`, which is `clamp(11px, 1.55vh, 16px)`.
+ * That makes the whole HUD scale with viewport height with no JS resize handler:
+ *   1600x900  -> u = 13.95px
+ *   1920x1080 -> u = 16.00px
  */
 
 import type { ComboState, ScoreEvent } from '../gameplay/ScoreSystem';
@@ -9,23 +18,44 @@ import { TrickType } from '../tricks/TrickRegistry';
 
 // Color mapping for trick types
 const TRICK_TYPE_COLORS: Record<TrickType, string> = {
-  flip: '#00FFFF',    // Cyan
-  grab: '#FFD700',    // Gold
+  flip: '#5FE3FF',    // Cyan
+  grab: '#FFC01E',    // Gold
   grind: '#FF8C00',   // Orange
-  manual: '#32CD32',  // Lime
-  special: '#FF00FF', // Magenta/Purple
+  manual: '#3BE38B',  // Lime
+  special: '#FF6BE8', // Magenta
 };
 
 const STORAGE_KEY_HAS_PLAYED = 'tonyStonks_hasPlayed';
 
+/** Number of segments in the bottom bars. */
+const SPEED_SEGMENTS = 12;
+const BOOST_SEGMENTS = 8;
+/** WANTED is a four-star system, driven by PoliceSquad.heatLevel (0..1). */
+const WANTED_STARS = 4;
+
+interface GoalRow {
+  root: HTMLElement;
+  text: HTMLElement;
+  detail: HTMLElement;
+  bar: HTMLElement | null;
+  isTier: boolean;
+}
+
 export class HUD {
   private container: HTMLElement;
   private scoreElement!: HTMLElement;
+  private scoreValue!: HTMLElement;
+  private deltaElement!: HTMLElement;
   private comboElement!: HTMLElement;
+  private comboTricks!: HTMLElement;
+  private comboScore!: HTMLElement;
+  private comboMult!: HTMLElement;
   private comboTimerFill!: HTMLElement;
   private trickPopup!: HTMLElement;
+  private trickName!: HTMLElement;
+  private trickPoints!: HTMLElement;
   private specialMeter!: HTMLElement;
-  private specialFill!: HTMLElement;
+  private specialSegments: HTMLElement[] = [];
   private balanceMeter!: HTMLElement;
   private balanceArrow!: HTMLElement;
   private controlsHint!: HTMLElement;
@@ -33,563 +63,708 @@ export class HUD {
   private speedChartElement!: HTMLElement;
   private speedBars: HTMLElement[] = [];
   private goalsElement!: HTMLElement;
+  private goalsCount!: HTMLElement;
+  private goalsTiers!: HTMLElement;
   private goalsList!: HTMLElement;
   private goalPopup!: HTMLElement;
   private wantedElement!: HTMLElement;
+  private wantedStarEls: HTMLElement[] = [];
 
   private currentScore = 0;
   private displayedScore = 0;
   private specialAmount = 0;
   private lastMultiplier = 1;
   private controlsHidden = false;
-  private goalSignature = '';
+  private goalRows = new Map<string, GoalRow>();
+  private goalOrderSig = '';
   private goalPopupTimer: ReturnType<typeof setTimeout> | null = null;
+  private deltaTimer: ReturnType<typeof setTimeout> | null = null;
+  private flashTimer: ReturnType<typeof setTimeout> | null = null;
   private wantedStars = -1;
-  
+  /** True until the first real setScore(), so the opening balance is not reported as a gain. */
+  private suppressDelta = true;
+
   constructor(container: HTMLElement) {
     this.container = container;
     this.createElements();
   }
-  
+
   private createElements(): void {
     // Inject styles
     const style = document.createElement('style');
     style.textContent = `
       .hud-container {
+        --u: clamp(11px, 1.55vh, 16px);
+        --gold: #FFC01E;
+        --green: #3BE38B;
+        --red: #FF5A3C;
+        --ink: rgba(255,255,255,0.92);
         position: absolute;
         top: 0;
         left: 0;
         width: 100%;
         height: 100%;
         pointer-events: none;
-        font-family: 'Kanit', sans-serif;
-        color: white;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-      }
-      
-      .hud-score {
-        position: absolute;
-        top: 16px;
-        right: 20px;
-        font-size: 56px;
-        text-align: right;
-        background: rgba(0,0,0,0.55);
-        border: 2px solid #00FF88;
-        border-radius: 10px;
-        padding: 8px 18px 6px;
-        min-width: 220px;
-      }
-      
-      .hud-score-label {
-        font-size: 14px;
-        color: #00FF88;
-        letter-spacing: 3px;
-        font-weight: 700;
+        font-family: 'Kanit', 'Arial Narrow', 'Helvetica Neue', Arial, sans-serif;
+        font-stretch: condensed;
+        color: var(--ink);
+        text-shadow: 0 calc(var(--u) * 0.12) calc(var(--u) * 0.2) rgba(0,0,0,0.85);
+        -webkit-font-smoothing: antialiased;
       }
 
-      .hud-score-value {
-        color: #00FF88;
+      /* ---- shared chunky panel ------------------------------------------ */
+      .hud-panel {
+        background: linear-gradient(180deg, rgba(26,29,38,0.88) 0%, rgba(9,10,14,0.92) 100%);
+        border: calc(var(--u) * 0.15) solid rgba(255,255,255,0.24);
+        border-radius: calc(var(--u) * 0.85);
+        box-shadow:
+          0 calc(var(--u) * 0.25) calc(var(--u) * 0.9) rgba(0,0,0,0.55),
+          inset 0 calc(var(--u) * 0.09) 0 rgba(255,255,255,0.14);
+      }
+
+      /* ---- STONKS hero counter (top-left) -------------------------------- */
+      .hud-stonks {
+        position: absolute;
+        top: calc(var(--u) * 1.0);
+        left: calc(var(--u) * 1.1);
+        display: flex;
+        align-items: center;
+        gap: calc(var(--u) * 0.65);
+        padding: calc(var(--u) * 0.42) calc(var(--u) * 1.0) calc(var(--u) * 0.42) calc(var(--u) * 0.42);
+      }
+      .hud-coin {
+        width: calc(var(--u) * 2.15);
+        height: calc(var(--u) * 2.15);
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: radial-gradient(circle at 34% 28%, #FFEFAF 0%, #FFC01E 52%, #C88300 100%);
+        border: calc(var(--u) * 0.13) solid rgba(120,76,0,0.9);
+        box-shadow: inset 0 calc(var(--u) * -0.14) calc(var(--u) * 0.2) rgba(120,76,0,0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: calc(var(--u) * 1.25);
         font-weight: 900;
-        letter-spacing: 1px;
-        transition: transform 0.1s ease-out;
+        color: #6B4400;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.45);
       }
-
-      .hud-score-value.negative {
-        color: #FF4444;
+      .hud-stonks-text { display: flex; flex-direction: column; line-height: 1; }
+      .hud-stonks-label {
+        font-size: calc(var(--u) * 0.66);
+        font-weight: 800;
+        letter-spacing: calc(var(--u) * 0.16);
+        color: var(--green);
+        margin-bottom: calc(var(--u) * 0.13);
       }
+      .hud-stonks-value {
+        font-size: calc(var(--u) * 1.95);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.01);
+        color: #FFFFFF;
+        font-variant-numeric: tabular-nums;
+        transition: color 0.15s, transform 0.1s ease-out;
+        transform-origin: left center;
+      }
+      .hud-stonks-value.gain { color: var(--green); }
+      .hud-stonks-value.loss { color: var(--red); }
 
-      /* Speed stock chart */
-      .hud-speed-chart {
+      /* rising / falling delta ticker */
+      .hud-delta {
         position: absolute;
-        bottom: 60px;
-        right: 20px;
+        top: calc(var(--u) * 4.55);
+        left: calc(var(--u) * 1.55);
+        font-size: calc(var(--u) * 1.05);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.04);
+        font-variant-numeric: tabular-nums;
+        opacity: 0;
+        transform: translateY(0);
+        transition: opacity 0.35s ease-out, transform 0.35s ease-out;
+        white-space: nowrap;
+      }
+      .hud-delta.up { color: var(--green); text-shadow: 0 0 calc(var(--u) * 0.6) rgba(59,227,139,0.6), 0 2px 3px rgba(0,0,0,0.9); }
+      .hud-delta.down { color: var(--red); text-shadow: 0 0 calc(var(--u) * 0.6) rgba(255,90,60,0.6), 0 2px 3px rgba(0,0,0,0.9); }
+      .hud-delta.show { opacity: 1; }
+      .hud-delta.show.up { transform: translateY(calc(var(--u) * -0.45)); }
+      .hud-delta.show.down { transform: translateY(calc(var(--u) * 0.45)); }
+
+      /* ---- WANTED (top-right) ------------------------------------------- */
+      .hud-wanted {
+        position: absolute;
+        top: calc(var(--u) * 1.0);
+        right: calc(var(--u) * 1.1);
         display: flex;
         flex-direction: column;
         align-items: flex-end;
-        gap: 4px;
-        pointer-events: none;
+        gap: calc(var(--u) * 0.28);
+        opacity: 0;
+        transition: opacity 0.25s ease-out;
       }
-
-      .hud-speed-label {
-        font-size: 11px;
-        color: #00FF88;
-        letter-spacing: 2px;
-        font-weight: 700;
-        opacity: 0.9;
-      }
-
-      .hud-speed-bars {
+      .hud-wanted.active { opacity: 1; }
+      .hud-wanted-stars {
         display: flex;
-        align-items: flex-end;
-        gap: 2px;
-        height: 28px;
+        gap: calc(var(--u) * 0.18);
+        padding: calc(var(--u) * 0.22) calc(var(--u) * 0.5);
+      }
+      .hud-star {
+        font-size: calc(var(--u) * 1.5);
+        line-height: 1;
+        color: #444B57;
+        text-shadow: 0 1px 0 rgba(0,0,0,0.8);
+        transition: color 0.2s, text-shadow 0.2s;
+      }
+      .hud-star.on {
+        color: var(--gold);
+        text-shadow: 0 0 calc(var(--u) * 0.5) rgba(255,150,0,0.9), 0 1px 0 rgba(0,0,0,0.8);
+      }
+      .hud-wanted-tag {
+        padding: calc(var(--u) * 0.12) calc(var(--u) * 0.65) calc(var(--u) * 0.2);
+        font-size: calc(var(--u) * 0.9);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.16);
+        color: #FFFFFF;
+      }
+      .hud-wanted.hot .hud-wanted-tag { animation: wantedPulse 0.7s infinite; }
+      @keyframes wantedPulse { 0%,100% { color: #FFFFFF; } 50% { color: var(--red); } }
+
+      /* ---- GOAL PANEL (top-right, under WANTED) -------------------------- */
+      .hud-goals {
+        position: absolute;
+        top: calc(var(--u) * 6.4);
+        right: calc(var(--u) * 1.1);
+        width: calc(var(--u) * 20.5);
+        padding: calc(var(--u) * 0.55) calc(var(--u) * 0.7) calc(var(--u) * 0.6);
+        text-align: left;
+      }
+      .hud-goals-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: calc(var(--u) * 0.4);
+      }
+      .hud-goals-title {
+        font-size: calc(var(--u) * 0.72);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.18);
+        color: rgba(255,255,255,0.6);
+      }
+      .hud-goals-count {
+        font-size: calc(var(--u) * 0.8);
+        font-weight: 900;
+        color: var(--gold);
+        font-variant-numeric: tabular-nums;
       }
 
-      .hud-speed-bar {
-        width: 6px;
-        border-radius: 2px 2px 0 0;
-        background: #00FF88;
-        transition: height 0.15s ease-out, background 0.2s;
-        min-height: 2px;
+      /* score tiers get their own gold-tinted block */
+      .hud-goals-tiers {
+        background: rgba(255,192,30,0.09);
+        border: 1px solid rgba(255,192,30,0.32);
+        border-radius: calc(var(--u) * 0.45);
+        padding: calc(var(--u) * 0.32) calc(var(--u) * 0.45) calc(var(--u) * 0.38);
+        margin-bottom: calc(var(--u) * 0.45);
       }
-      
+      .hud-goals-tiers::before {
+        content: 'SCORE GOALS';
+        display: block;
+        font-size: calc(var(--u) * 0.62);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.14);
+        color: rgba(255,192,30,0.85);
+        margin-bottom: calc(var(--u) * 0.22);
+      }
+      .hud-tier {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: calc(var(--u) * 0.5);
+        align-items: baseline;
+      }
+      .hud-tier + .hud-tier { margin-top: calc(var(--u) * 0.26); }
+      .hud-tier-name {
+        font-size: calc(var(--u) * 0.86);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.05);
+        color: #FFF0CC;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .hud-tier-detail {
+        font-size: calc(var(--u) * 0.74);
+        color: rgba(255,255,255,0.62);
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .hud-tier-bar {
+        grid-column: 1 / 3;
+        height: calc(var(--u) * 0.26);
+        margin-top: calc(var(--u) * 0.14);
+        background: rgba(0,0,0,0.55);
+        border-radius: 99px;
+        overflow: hidden;
+      }
+      .hud-tier-bar > i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        border-radius: 99px;
+        background: linear-gradient(90deg, #FFC01E, #FF8A00);
+        transition: width 0.2s ease-out;
+      }
+      .hud-tier.done .hud-tier-name { color: var(--green); }
+      .hud-tier.done .hud-tier-detail { color: var(--green); opacity: 0.85; }
+      .hud-tier.done .hud-tier-bar > i { background: linear-gradient(90deg, #3BE38B, #17A96A); }
+
+      /* one objective per row: description left, progress right, never overlapping */
+      .hud-goal {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: calc(var(--u) * 0.55);
+        align-items: start;
+        padding: calc(var(--u) * 0.22) 0;
+        border-top: 1px solid rgba(255,255,255,0.08);
+      }
+      .hud-goal:first-child { border-top: none; }
+      .hud-goal-text {
+        font-size: calc(var(--u) * 0.84);
+        line-height: 1.16;
+        color: rgba(255,255,255,0.88);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+        min-width: 0;
+      }
+      .hud-goal-detail {
+        font-size: calc(var(--u) * 0.72);
+        line-height: 1.35;
+        color: rgba(255,255,255,0.5);
+        white-space: nowrap;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .hud-goal.done .hud-goal-text { color: var(--green); }
+      .hud-goal.done .hud-goal-detail { color: var(--green); opacity: 0.8; }
+      .hud-goal.failed .hud-goal-text,
+      .hud-goal.failed .hud-goal-detail { color: #FF7A66; opacity: 0.65; }
+      .hud-goal.secret .hud-goal-text { color: rgba(255,255,255,0.45); letter-spacing: 0.15em; }
+
+      /* ---- COMBO (top-centre) ------------------------------------------- */
       .hud-combo {
         position: absolute;
-        top: 50%;
+        top: calc(var(--u) * 1.0);
         left: 50%;
-        transform: translate(-50%, -50%);
+        transform: translateX(-50%) scale(0.94);
+        transform-origin: top center;
         text-align: center;
+        min-width: calc(var(--u) * 20);
+        max-width: min(46vw, calc(var(--u) * 40));
+        padding: calc(var(--u) * 0.45) calc(var(--u) * 1.0) calc(var(--u) * 0.6);
         opacity: 0;
-        transition: opacity 0.2s;
-        background: rgba(0,0,0,0.6);
-        border: 2px solid rgba(255,215,0,0.4);
-        border-radius: 12px;
-        padding: 10px 22px 8px;
-        backdrop-filter: blur(4px);
+        transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+        border-color: rgba(255,192,30,0.45);
       }
-      
-      .hud-combo.active {
-        opacity: 1;
-      }
-      
+      .hud-combo.active { opacity: 1; transform: translateX(-50%) scale(1); }
       .hud-combo-tricks {
-        font-size: 22px;
-        color: #FFD700;
+        font-size: calc(var(--u) * 0.92);
+        font-weight: 600;
+        line-height: 1.18;
+        color: #7FE9FF;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        overflow-wrap: anywhere;
       }
-      
+      .hud-combo-main {
+        display: flex;
+        align-items: baseline;
+        justify-content: center;
+        gap: calc(var(--u) * 0.7);
+        margin-top: calc(var(--u) * 0.1);
+      }
       .hud-combo-score {
-        font-size: 42px;
+        font-size: calc(var(--u) * 2.0);
         font-weight: 900;
-        color: #ffffff;
-        text-shadow: 0 0 16px rgba(255,255,255,0.5);
+        color: #FFFFFF;
+        font-variant-numeric: tabular-nums;
+        text-shadow: 0 0 calc(var(--u) * 0.8) rgba(255,255,255,0.35), 0 2px 4px rgba(0,0,0,0.9);
       }
-      
       .hud-combo-multiplier {
-        font-size: 32px;
-        font-weight: 700;
-        color: #00FF88;
-        transition: transform 0.15s ease-out;
-        text-shadow: 0 0 12px rgba(0,255,136,0.6);
+        font-size: calc(var(--u) * 1.45);
+        font-weight: 900;
+        color: var(--green);
+        font-variant-numeric: tabular-nums;
+        text-shadow: 0 0 calc(var(--u) * 0.7) rgba(59,227,139,0.6), 0 2px 4px rgba(0,0,0,0.9);
       }
-      
-      .hud-combo-multiplier.pulse {
-        animation: multiplierPulse 0.3s ease-out;
-      }
-      
+      .hud-combo-multiplier.pulse { animation: multiplierPulse 0.3s ease-out; }
       @keyframes multiplierPulse {
         0% { transform: scale(1); }
-        50% { transform: scale(1.4); color: #FFFF00; }
+        50% { transform: scale(1.35); color: #FFF06B; }
         100% { transform: scale(1); }
       }
-      
       .hud-combo-timer {
-        width: 200px;
-        height: 6px;
-        background: rgba(0,0,0,0.5);
-        border-radius: 3px;
-        margin-top: 8px;
+        height: calc(var(--u) * 0.42);
+        margin-top: calc(var(--u) * 0.35);
+        background: rgba(0,0,0,0.6);
+        border-radius: 99px;
         overflow: hidden;
-        opacity: 0;
-        transition: opacity 0.2s;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
       }
-      
-      .hud-combo.active .hud-combo-timer {
-        opacity: 1;
-      }
-      
       .hud-combo-timer-fill {
         height: 100%;
         width: 100%;
-        background: linear-gradient(90deg, #FF4444, #FFD700, #00FF88);
-        border-radius: 3px;
+        border-radius: 99px;
+        background: linear-gradient(90deg, #FF5A3C, #FFC01E 45%, #3BE38B);
         transition: width 0.05s linear;
-        transform-origin: left;
       }
-      
-      .hud-combo-timer-fill.urgent {
-        animation: timerUrgent 0.3s infinite;
-      }
-      
+      .hud-combo-timer-fill.urgent { animation: timerUrgent 0.35s infinite; }
       @keyframes timerUrgent {
         0%, 100% { filter: brightness(1); }
-        50% { filter: brightness(1.5); background: #FF4444; }
+        50% { filter: brightness(1.8); }
       }
-      
-      .hud-trick-popup {
-        position: absolute;
-        bottom: 40%;
-        left: 50%;
-        transform: translateX(-50%);
-        text-align: center;
-        opacity: 0;
-        transition: opacity 0.3s, transform 0.3s;
-      }
-      
-      .hud-trick-popup.show {
-        opacity: 1;
-        animation: trickPop 0.5s ease-out;
-      }
-      
-      @keyframes trickPop {
-        0% { transform: translateX(-50%) scale(0.5); opacity: 0; }
-        50% { transform: translateX(-50%) scale(1.2); }
-        100% { transform: translateX(-50%) scale(1); opacity: 1; }
-      }
-      
-      .hud-trick-name {
-        font-size: 32px;
-        color: #00FFFF;
-      }
-      
-      .hud-trick-points {
-        font-size: 24px;
-        color: #00FF88;
-      }
-      
-      .hud-special-meter {
-        position: absolute;
-        bottom: 20px;
-        right: 20px;
-        width: 150px;
-        height: 20px;
-        background: rgba(0,0,0,0.5);
-        border: 2px solid #FFD700;
-        border-radius: 4px;
-        overflow: hidden;
-      }
-      
-      .hud-special-fill {
-        height: 100%;
-        width: 0%;
-        background: linear-gradient(90deg, #FFD700, #FF6B00);
-        transition: width 0.3s;
-      }
-      
-      .hud-special-meter.full {
-        animation: specialGlow 0.6s infinite alternate ease-in-out;
-        border-color: #FFFF00;
-      }
-      
-      .hud-special-meter.full .hud-special-fill {
-        animation: specialPulse 0.5s infinite alternate;
-      }
-      
-      .hud-special-meter.full .hud-special-label {
-        animation: specialLabelGlow 0.6s infinite alternate ease-in-out;
-      }
-      
-      @keyframes specialPulse {
-        from { filter: brightness(1); }
-        to { filter: brightness(1.5); }
-      }
-      
-      @keyframes specialGlow {
-        from {
-          box-shadow: 0 0 10px #FFD700, 0 0 20px rgba(255, 215, 0, 0.5), inset 0 0 10px rgba(255, 215, 0, 0.3);
-        }
-        to {
-          box-shadow: 0 0 20px #FFFF00, 0 0 40px rgba(255, 215, 0, 0.8), 0 0 60px rgba(255, 107, 0, 0.4), inset 0 0 15px rgba(255, 215, 0, 0.5);
-        }
-      }
-      
-      @keyframes specialLabelGlow {
-        from {
-          color: #FFD700;
-          text-shadow: 0 0 5px #FFD700;
-        }
-        to {
-          color: #FFFF00;
-          text-shadow: 0 0 10px #FFFF00, 0 0 20px #FFD700;
-        }
-      }
-      
-      .hud-special-label {
-        position: absolute;
-        top: -18px;
-        right: 0;
-        font-size: 14px;
-        color: #FFD700;
-        letter-spacing: 2px;
-      }
-      
+
+      /* ---- BALANCE METER (centre, under combo) --------------------------- */
       .hud-balance-meter {
         position: absolute;
-        top: 35%;
+        top: 24%;
         left: 50%;
-        transform: translateX(-50%);
-        width: 300px;
-        height: 20px;
-        background: rgba(0,0,0,0.7);
-        border: 2px solid #FFD700;
-        border-radius: 10px;
+        transform: translateX(-50%) scale(0.95);
+        width: calc(var(--u) * 24);
+        padding: calc(var(--u) * 0.35) calc(var(--u) * 0.5) calc(var(--u) * 0.45);
         opacity: 0;
-        transition: opacity 0.2s;
+        transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+        border-color: rgba(255,192,30,0.5);
       }
-      
-      .hud-balance-meter.active {
-        opacity: 1;
-      }
-      
+      .hud-balance-meter.active { opacity: 1; transform: translateX(-50%) scale(1); }
       .hud-balance-label {
-        position: absolute;
-        top: -25px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 16px;
-        color: #FFD700;
-        letter-spacing: 2px;
+        font-size: calc(var(--u) * 0.72);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.16);
+        color: var(--gold);
+        text-align: center;
+        margin-bottom: calc(var(--u) * 0.25);
       }
-      
-      .hud-balance-zones {
-        position: absolute;
-        width: 100%;
-        height: 100%;
-        display: flex;
-        border-radius: 8px;
+      .hud-balance-track {
+        position: relative;
+        height: calc(var(--u) * 1.05);
+        border-radius: calc(var(--u) * 0.5);
         overflow: hidden;
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.6);
       }
-      
+      .hud-balance-zones { display: flex; width: 100%; height: 100%; }
       .hud-balance-danger {
-        width: 15%;
-        height: 100%;
-        background: linear-gradient(90deg, #FF0000, #FF4444);
+        width: 16%;
+        background: linear-gradient(180deg, #FF7A3C, #C81E00);
       }
-      
       .hud-balance-safe {
         flex: 1;
-        background: linear-gradient(90deg, #44FF44, #00FF88, #44FF44);
+        background: linear-gradient(180deg, #57F0A2, #17A96A);
       }
-      
       .hud-balance-arrow {
         position: absolute;
-        top: -12px;
+        top: 0;
         left: 50%;
-        transform: translateX(-50%);
-        width: 0;
-        height: 0;
-        border-left: 12px solid transparent;
-        border-right: 12px solid transparent;
-        border-top: 18px solid #FFFFFF;
-        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
-        transition: left 0.05s;
+        width: calc(var(--u) * 0.42);
+        height: 100%;
+        margin-left: calc(var(--u) * -0.21);
+        background: #FFFFFF;
+        border-radius: calc(var(--u) * 0.2);
+        box-shadow: 0 0 calc(var(--u) * 0.5) rgba(0,0,0,0.9), 0 0 calc(var(--u) * 0.4) rgba(255,255,255,0.9);
+        transition: left 0.05s linear;
       }
-      
+      .hud-balance-meter.danger { border-color: var(--red); }
+      .hud-balance-meter.danger .hud-balance-label { color: var(--red); animation: wantedPulse 0.4s infinite; }
+
+      /* ---- transient centre elements ------------------------------------- */
       .hud-spin-counter {
         position: absolute;
-        top: 25%;
+        top: 33%;
         left: 50%;
         transform: translateX(-50%);
-        font-size: 48px;
-        font-weight: bold;
-        color: #FFD700;
-        text-shadow: 0 0 20px rgba(255,215,0,0.8), 3px 3px 6px rgba(0,0,0,0.9);
+        font-size: calc(var(--u) * 3.2);
+        font-weight: 900;
+        color: var(--gold);
+        text-shadow: 0 0 calc(var(--u) * 1.2) rgba(255,192,30,0.8), 0 3px 6px rgba(0,0,0,0.9);
         opacity: 0;
         transition: opacity 0.15s ease-out;
-        letter-spacing: 4px;
+        letter-spacing: calc(var(--u) * 0.2);
       }
-      
-      .hud-spin-counter.active {
-        opacity: 1;
-        animation: spinPulse 0.15s ease-out;
-      }
-      
+      .hud-spin-counter.active { opacity: 1; animation: spinPulse 0.15s ease-out; }
       @keyframes spinPulse {
         0% { transform: translateX(-50%) scale(1.3); }
         100% { transform: translateX(-50%) scale(1); }
       }
-      
-      .hud-controls {
-        position: absolute;
-        bottom: 20px;
-        left: 20px;
-        font-size: 12px;
-        font-family: 'Kanit', sans-serif;
-        color: rgba(255,255,255,0.6);
-        line-height: 1.6;
-      }
-      
-      .hud-title {
-        position: absolute;
-        top: 20px;
-        left: 20px;
-        font-size: 24px;
-        color: #00FF88;
-      }
 
-      .hud-goals {
+      .hud-trick-popup {
         position: absolute;
-        top: 120px;
-        right: 20px;
-        width: 250px;
-        font-size: 13px;
-        line-height: 1.45;
-        text-align: left;
-        background: rgba(0,0,0,0.35);
-        border-left: 3px solid rgba(0,255,136,0.7);
-        padding: 8px 10px;
-        border-radius: 3px;
+        top: 43%;
+        left: 50%;
+        transform: translateX(-50%);
+        text-align: center;
+        opacity: 0;
+        transition: opacity 0.3s;
       }
-      .hud-goals-title {
-        font-size: 11px;
-        letter-spacing: 2px;
-        color: rgba(255,255,255,0.55);
-        margin-bottom: 4px;
+      .hud-trick-popup.show { opacity: 1; animation: trickPop 0.5s ease-out; }
+      @keyframes trickPop {
+        0% { transform: translateX(-50%) scale(0.5); opacity: 0; }
+        50% { transform: translateX(-50%) scale(1.18); }
+        100% { transform: translateX(-50%) scale(1); opacity: 1; }
       }
-      .hud-goal {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        color: rgba(255,255,255,0.85);
-      }
-      .hud-goal.done { color: #00FF88; text-decoration: line-through; opacity: 0.75; }
-      .hud-goal.failed { color: #FF5555; opacity: 0.6; }
-      .hud-goal-detail { color: rgba(255,255,255,0.5); font-size: 11px; white-space: nowrap; }
+      .hud-trick-name { font-size: calc(var(--u) * 2.1); font-weight: 900; color: #5FE3FF; }
+      .hud-trick-points { font-size: calc(var(--u) * 1.4); font-weight: 800; color: var(--green); }
 
       .hud-goal-popup {
         position: absolute;
-        top: 34%;
+        top: 50%;
         left: 50%;
         transform: translate(-50%, -50%) scale(0.7);
-        font-size: 30px;
-        font-weight: 700;
-        color: #00FF88;
+        font-size: calc(var(--u) * 2.1);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.08);
+        color: var(--green);
         opacity: 0;
         transition: opacity 0.25s ease-out, transform 0.25s ease-out;
         text-align: center;
       }
       .hud-goal-popup.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-      .hud-goal-popup small { display: block; font-size: 16px; color: #FFD700; font-weight: 400; }
-
-      .hud-wanted {
-        position: absolute;
-        top: 74px;
-        right: 20px;
-        font-size: 26px;
-        letter-spacing: 3px;
-        color: #FFB000;
-        opacity: 0;
-        transition: opacity 0.25s ease-out;
-        text-shadow: 0 0 10px rgba(255,60,0,0.8);
+      .hud-goal-popup small {
+        display: block;
+        font-size: calc(var(--u) * 1.05);
+        color: var(--gold);
+        font-weight: 600;
+        letter-spacing: 0;
+        margin-top: calc(var(--u) * 0.2);
       }
-      .hud-wanted.active { opacity: 1; }
-      .hud-wanted.hot { animation: wantedPulse 0.6s infinite; }
-      @keyframes wantedPulse { 0%,100% { color: #FFB000; } 50% { color: #FF3B30; } }
+
+      /* ---- bottom bars (SPEED left, BOOST right) -------------------------- */
+      .hud-bar {
+        position: absolute;
+        bottom: calc(var(--u) * 1.1);
+        display: flex;
+        align-items: center;
+        gap: calc(var(--u) * 0.6);
+        padding: calc(var(--u) * 0.38) calc(var(--u) * 0.75);
+      }
+      .hud-bar.left { left: calc(var(--u) * 1.1); }
+      .hud-bar.right { right: calc(var(--u) * 1.1); }
+      .hud-bar-icon {
+        width: calc(var(--u) * 1.7);
+        height: calc(var(--u) * 1.7);
+        flex: 0 0 auto;
+        border-radius: calc(var(--u) * 0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: calc(var(--u) * 1.0);
+        text-shadow: none;
+      }
+      .hud-bar-icon.speed { background: linear-gradient(180deg, #57F0A2, #17A96A); }
+      .hud-bar-icon.boost { background: linear-gradient(180deg, #7BFFC2, #21C97C); }
+      .hud-bar-label {
+        font-size: calc(var(--u) * 0.85);
+        font-weight: 900;
+        letter-spacing: calc(var(--u) * 0.13);
+        color: #FFFFFF;
+        margin-bottom: calc(var(--u) * 0.22);
+      }
+      .hud-bar-track {
+        display: flex;
+        gap: calc(var(--u) * 0.13);
+        width: calc(var(--u) * 13);
+        height: calc(var(--u) * 0.95);
+        padding: calc(var(--u) * 0.13);
+        background: rgba(0,0,0,0.62);
+        border-radius: calc(var(--u) * 0.28);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+      }
+      .hud-seg {
+        flex: 1;
+        border-radius: calc(var(--u) * 0.08);
+        background: rgba(255,255,255,0.07);
+        transition: background 0.12s linear;
+      }
+      .hud-seg.on { background: var(--green); }
+      .hud-seg.on.warm { background: var(--gold); }
+      .hud-seg.on.hot { background: var(--red); }
+      .hud-seg.boost.on { background: linear-gradient(180deg, #FFD75E, #FF9A00); }
+      .hud-bar.full { border-color: rgba(255,215,0,0.9); animation: boostGlow 0.6s infinite alternate ease-in-out; }
+      @keyframes boostGlow {
+        from { box-shadow: 0 0 calc(var(--u) * 0.6) rgba(255,192,30,0.5); }
+        to   { box-shadow: 0 0 calc(var(--u) * 1.4) rgba(255,192,30,0.95); }
+      }
+
+      /* ---- controls hint -------------------------------------------------- */
+      .hud-controls {
+        position: absolute;
+        bottom: calc(var(--u) * 4.4);
+        left: calc(var(--u) * 1.1);
+        font-size: calc(var(--u) * 0.72);
+        color: rgba(255,255,255,0.62);
+        line-height: 1.55;
+        padding: calc(var(--u) * 0.4) calc(var(--u) * 0.7);
+        max-width: calc(var(--u) * 22);
+      }
     `;
     document.head.appendChild(style);
-    
+
     // Create HUD container
     const hud = document.createElement('div');
     hud.className = 'hud-container';
-    
-    // Title
-    const title = document.createElement('div');
-    title.className = 'hud-title';
-    title.textContent = 'TONY STONKS';
-    hud.appendChild(title);
-    
-    // Stonks counter — prominent with $ sign
-    this.scoreElement = document.createElement('div');
-    this.scoreElement.className = 'hud-score';
-    this.scoreElement.innerHTML = `
-      <div class="hud-score-label">📈 STONKS</div>
-      <div class="hud-score-value">$0</div>
-    `;
-    hud.appendChild(this.scoreElement);
 
-    // Speed stock chart (bottom-right, above special meter)
-    this.speedChartElement = document.createElement('div');
-    this.speedChartElement.className = 'hud-speed-chart';
-    const barsContainer = document.createElement('div');
-    barsContainer.className = 'hud-speed-bars';
-    const numBars = 12;
-    for (let i = 0; i < numBars; i++) {
-      const bar = document.createElement('div');
-      bar.className = 'hud-speed-bar';
-      bar.style.height = '2px';
-      barsContainer.appendChild(bar);
-      this.speedBars.push(bar);
-    }
-    const speedLabel = document.createElement('div');
-    speedLabel.className = 'hud-speed-label';
-    speedLabel.textContent = '⚡ SPEED';
-    this.speedChartElement.appendChild(speedLabel);
-    this.speedChartElement.appendChild(barsContainer);
-    hud.appendChild(this.speedChartElement);
-    
-    // Combo display
-    this.comboElement = document.createElement('div');
-    this.comboElement.className = 'hud-combo';
-    this.comboElement.innerHTML = `
-      <div class="hud-combo-tricks"></div>
-      <div class="hud-combo-score"></div>
-      <div class="hud-combo-multiplier"></div>
-      <div class="hud-combo-timer">
-        <div class="hud-combo-timer-fill"></div>
+    // ---- STONKS hero counter (top-left) ---------------------------------
+    this.scoreElement = document.createElement('div');
+    this.scoreElement.className = 'hud-stonks hud-panel';
+    this.scoreElement.innerHTML = `
+      <div class="hud-coin">$</div>
+      <div class="hud-stonks-text">
+        <div class="hud-stonks-label">STONKS</div>
+        <div class="hud-stonks-value">$0</div>
       </div>
     `;
-    this.comboTimerFill = this.comboElement.querySelector('.hud-combo-timer-fill')!;
+    this.scoreValue = this.scoreElement.querySelector('.hud-stonks-value') as HTMLElement;
+    hud.appendChild(this.scoreElement);
+
+    this.deltaElement = document.createElement('div');
+    this.deltaElement.className = 'hud-delta';
+    hud.appendChild(this.deltaElement);
+
+    // ---- WANTED stars (top-right) ---------------------------------------
+    this.wantedElement = document.createElement('div');
+    this.wantedElement.className = 'hud-wanted';
+    const starRow = document.createElement('div');
+    starRow.className = 'hud-wanted-stars hud-panel';
+    for (let i = 0; i < WANTED_STARS; i++) {
+      const s = document.createElement('span');
+      s.className = 'hud-star';
+      s.textContent = '★';
+      starRow.appendChild(s);
+      this.wantedStarEls.push(s);
+    }
+    const wantedTag = document.createElement('div');
+    wantedTag.className = 'hud-wanted-tag hud-panel';
+    wantedTag.textContent = 'WANTED';
+    this.wantedElement.appendChild(starRow);
+    this.wantedElement.appendChild(wantedTag);
+    hud.appendChild(this.wantedElement);
+
+    // ---- Goal panel (top-right, under WANTED) ---------------------------
+    this.goalsElement = document.createElement('div');
+    this.goalsElement.className = 'hud-goals hud-panel';
+    this.goalsElement.style.display = 'none';
+    this.goalsElement.innerHTML = `
+      <div class="hud-goals-head">
+        <div class="hud-goals-title">GOALS</div>
+        <div class="hud-goals-count">0/0</div>
+      </div>
+      <div class="hud-goals-tiers"></div>
+      <div class="hud-goals-list"></div>
+    `;
+    this.goalsCount = this.goalsElement.querySelector('.hud-goals-count') as HTMLElement;
+    this.goalsTiers = this.goalsElement.querySelector('.hud-goals-tiers') as HTMLElement;
+    this.goalsList = this.goalsElement.querySelector('.hud-goals-list') as HTMLElement;
+    hud.appendChild(this.goalsElement);
+
+    // ---- Combo (top-centre) ---------------------------------------------
+    this.comboElement = document.createElement('div');
+    this.comboElement.className = 'hud-combo hud-panel';
+    this.comboElement.innerHTML = `
+      <div class="hud-combo-tricks"></div>
+      <div class="hud-combo-main">
+        <div class="hud-combo-score"></div>
+        <div class="hud-combo-multiplier"></div>
+      </div>
+      <div class="hud-combo-timer"><div class="hud-combo-timer-fill"></div></div>
+    `;
+    this.comboTricks = this.comboElement.querySelector('.hud-combo-tricks') as HTMLElement;
+    this.comboScore = this.comboElement.querySelector('.hud-combo-score') as HTMLElement;
+    this.comboMult = this.comboElement.querySelector('.hud-combo-multiplier') as HTMLElement;
+    this.comboTimerFill = this.comboElement.querySelector('.hud-combo-timer-fill') as HTMLElement;
     hud.appendChild(this.comboElement);
-    
-    // Trick popup
+
+    // ---- Balance meter ---------------------------------------------------
+    this.balanceMeter = document.createElement('div');
+    this.balanceMeter.className = 'hud-balance-meter hud-panel';
+    this.balanceMeter.innerHTML = `
+      <div class="hud-balance-label">BALANCE</div>
+      <div class="hud-balance-track">
+        <div class="hud-balance-zones">
+          <div class="hud-balance-danger"></div>
+          <div class="hud-balance-safe"></div>
+          <div class="hud-balance-danger"></div>
+        </div>
+        <div class="hud-balance-arrow"></div>
+      </div>
+    `;
+    this.balanceArrow = this.balanceMeter.querySelector('.hud-balance-arrow') as HTMLElement;
+    hud.appendChild(this.balanceMeter);
+
+    // ---- Spin counter ----------------------------------------------------
+    this.spinCounterElement = document.createElement('div');
+    this.spinCounterElement.className = 'hud-spin-counter';
+    hud.appendChild(this.spinCounterElement);
+
+    // ---- Trick popup -----------------------------------------------------
     this.trickPopup = document.createElement('div');
     this.trickPopup.className = 'hud-trick-popup';
     this.trickPopup.innerHTML = `
       <div class="hud-trick-name"></div>
       <div class="hud-trick-points"></div>
     `;
+    this.trickName = this.trickPopup.querySelector('.hud-trick-name') as HTMLElement;
+    this.trickPoints = this.trickPopup.querySelector('.hud-trick-points') as HTMLElement;
     hud.appendChild(this.trickPopup);
-    
-    // Special meter
-    this.specialMeter = document.createElement('div');
-    this.specialMeter.className = 'hud-special-meter';
-    this.specialMeter.innerHTML = `
-      <div class="hud-special-label">SPECIAL</div>
-      <div class="hud-special-fill"></div>
-    `;
-    this.specialFill = this.specialMeter.querySelector('.hud-special-fill')!;
-    hud.appendChild(this.specialMeter);
-    
-    // Balance meter (shown when grinding)
-    this.balanceMeter = document.createElement('div');
-    this.balanceMeter.className = 'hud-balance-meter';
-    this.balanceMeter.innerHTML = `
-      <div class="hud-balance-label">⚖️ BALANCE</div>
-      <div class="hud-balance-zones">
-        <div class="hud-balance-danger"></div>
-        <div class="hud-balance-safe"></div>
-        <div class="hud-balance-danger"></div>
-      </div>
-      <div class="hud-balance-arrow"></div>
-    `;
-    this.balanceArrow = this.balanceMeter.querySelector('.hud-balance-arrow')!;
-    hud.appendChild(this.balanceMeter);
-    
-    // Spin counter (shown during air spins)
-    this.spinCounterElement = document.createElement('div');
-    this.spinCounterElement.className = 'hud-spin-counter';
-    hud.appendChild(this.spinCounterElement);
-    
-    // Goal checklist
-    this.goalsElement = document.createElement('div');
-    this.goalsElement.className = 'hud-goals';
-    this.goalsElement.style.display = 'none';
-    this.goalsElement.innerHTML = `<div class="hud-goals-title">GOALS</div><div class="hud-goals-list"></div>`;
-    this.goalsList = this.goalsElement.querySelector('.hud-goals-list') as HTMLElement;
-    hud.appendChild(this.goalsElement);
 
-    // Goal-complete popup
+    // ---- Goal-complete banner -------------------------------------------
     this.goalPopup = document.createElement('div');
     this.goalPopup.className = 'hud-goal-popup';
     hud.appendChild(this.goalPopup);
 
-    // Wanted stars
-    this.wantedElement = document.createElement('div');
-    this.wantedElement.className = 'hud-wanted';
-    hud.appendChild(this.wantedElement);
+    // ---- SPEED bar (bottom-left) ----------------------------------------
+    this.speedChartElement = document.createElement('div');
+    this.speedChartElement.className = 'hud-bar left hud-panel';
+    this.speedChartElement.appendChild(makeBarIcon('speed', '⚡'));
+    const speedCol = document.createElement('div');
+    const speedLabel = document.createElement('div');
+    speedLabel.className = 'hud-bar-label';
+    speedLabel.textContent = 'SPEED';
+    const speedTrack = document.createElement('div');
+    speedTrack.className = 'hud-bar-track';
+    for (let i = 0; i < SPEED_SEGMENTS; i++) {
+      const seg = document.createElement('div');
+      seg.className = 'hud-seg';
+      speedTrack.appendChild(seg);
+      this.speedBars.push(seg);
+    }
+    speedCol.appendChild(speedLabel);
+    speedCol.appendChild(speedTrack);
+    this.speedChartElement.appendChild(speedCol);
+    hud.appendChild(this.speedChartElement);
 
-    // Controls hint (hidden if player has played before)
+    // ---- BOOST / SPECIAL bar (bottom-right) ------------------------------
+    this.specialMeter = document.createElement('div');
+    this.specialMeter.className = 'hud-bar right hud-panel';
+    this.specialMeter.appendChild(makeBarIcon('boost', '⚡'));
+    const boostCol = document.createElement('div');
+    const boostLabel = document.createElement('div');
+    boostLabel.className = 'hud-bar-label';
+    boostLabel.textContent = 'BOOST';
+    const boostTrack = document.createElement('div');
+    boostTrack.className = 'hud-bar-track';
+    for (let i = 0; i < BOOST_SEGMENTS; i++) {
+      const seg = document.createElement('div');
+      seg.className = 'hud-seg boost';
+      boostTrack.appendChild(seg);
+      this.specialSegments.push(seg);
+    }
+    boostCol.appendChild(boostLabel);
+    boostCol.appendChild(boostTrack);
+    this.specialMeter.appendChild(boostCol);
+    hud.appendChild(this.specialMeter);
+
+    // ---- Controls hint ---------------------------------------------------
     this.controlsHint = document.createElement('div');
-    this.controlsHint.className = 'hud-controls';
+    this.controlsHint.className = 'hud-controls hud-panel';
     this.controlsHint.innerHTML = `
       W - Push &nbsp; S - Brake &nbsp; A/D - Turn<br>
       SPACE - Ollie (hold to charge)<br>
@@ -599,19 +774,20 @@ export class HUD {
       SHIFT - Revert &nbsp; Q/E - Spin<br>
       J+K - Special (meter full) &nbsp; ESC - Pause
     `;
-
-    // Check if player has played before
     const hasPlayed = localStorage.getItem(STORAGE_KEY_HAS_PLAYED) === 'true';
     if (hasPlayed) {
       this.controlsHint.style.display = 'none';
       this.controlsHidden = true;
     }
-    
     hud.appendChild(this.controlsHint);
-    
+
     this.container.appendChild(hud);
   }
-  
+
+  // -------------------------------------------------------------------------
+  // Score
+  // -------------------------------------------------------------------------
+
   /**
    * Pure display sink for the banked balance.
    *
@@ -622,114 +798,98 @@ export class HUD {
    */
   setScore(score: number): void {
     if (!Number.isFinite(score)) return;
+
+    const delta = score - this.currentScore;
+    if (this.suppressDelta) {
+      this.suppressDelta = false;
+    } else if (Math.abs(delta) >= 1) {
+      this.showDelta(delta);
+    }
+
     if (score < this.displayedScore) {
       // A bail took stonks away: snap down rather than counting backwards forever.
       this.displayedScore = score;
-      const el = this.scoreElement.querySelector('.hud-score-value') as HTMLElement;
-      if (el) el.textContent = '$' + Math.round(score).toLocaleString();
+      this.scoreValue.textContent = '$' + Math.round(score).toLocaleString();
     }
     this.currentScore = score;
   }
 
+  /** Flash the rising/falling ticker under the hero counter. */
+  private showDelta(delta: number): void {
+    const up = delta > 0;
+    const amount = Math.abs(Math.round(delta)).toLocaleString();
+    this.deltaElement.textContent = `${up ? '▲ +$' : '▼ -$'}${amount}`;
+    this.deltaElement.className = 'hud-delta';
+    void this.deltaElement.offsetWidth;
+    this.deltaElement.className = `hud-delta show ${up ? 'up' : 'down'}`;
+
+    this.scoreValue.classList.remove('gain', 'loss');
+    this.scoreValue.classList.add(up ? 'gain' : 'loss');
+
+    if (this.deltaTimer) clearTimeout(this.deltaTimer);
+    this.deltaTimer = setTimeout(() => {
+      this.deltaElement.classList.remove('show');
+    }, 1300);
+
+    if (this.flashTimer) clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => {
+      this.scoreValue.classList.remove('gain', 'loss');
+    }, 550);
+  }
+
   /**
-   * Update speed stock-chart indicator
+   * Update the SPEED bar (segmented, bottom-left).
    * @param speed - current speed (0–20 typical)
    */
   setSpeed(speed: number): void {
     const maxSpeed = 20;
-    const numBars = this.speedBars.length;
-
-    // Shift history left and append current reading
-    // We track the last N speed values (one per bar)
-    const normalized = Math.min(1, speed / maxSpeed);
-    const maxBarH = 28;
-
-    // Simple: each bar independently represents current speed
-    // For a "stock chart" feel, we keep a rolling history
-    if (!this._speedHistory) this._speedHistory = new Array(numBars).fill(0);
-    this._speedHistory.push(normalized);
-    if (this._speedHistory.length > numBars) this._speedHistory.shift();
-
-    for (let i = 0; i < numBars; i++) {
-      const val = this._speedHistory[i] ?? 0;
-      const h = Math.max(2, Math.round(val * maxBarH));
-      const bar = this.speedBars[i];
-      bar.style.height = h + 'px';
-      // Color: green when climbing, yellow when high, red at max
-      if (val < 0.5) {
-        bar.style.background = '#00FF88';
-      } else if (val < 0.8) {
-        bar.style.background = '#FFD700';
-      } else {
-        bar.style.background = '#FF4444';
-      }
+    const normalized = Math.max(0, Math.min(1, speed / maxSpeed));
+    const lit = Math.round(normalized * SPEED_SEGMENTS);
+    for (let i = 0; i < this.speedBars.length; i++) {
+      const seg = this.speedBars[i];
+      const on = i < lit;
+      const frac = (i + 1) / SPEED_SEGMENTS;
+      seg.className = 'hud-seg' + (on ? ' on' + (frac > 0.85 ? ' hot' : frac > 0.65 ? ' warm' : '') : '');
     }
   }
-  private _speedHistory?: number[];
-  
+
   /**
    * Update displayed score (called each frame for smooth counting)
    * Uses ease-out curve for satisfying score counting
    */
   update(dt: number): void {
-    // Smooth score counting with ease-out
     if (this.displayedScore < this.currentScore) {
       const diff = this.currentScore - this.displayedScore;
-      
-      // Ease-out: fast at first, slows down as it approaches target
-      // The larger the diff, the faster we count
-      // Minimum speed of 10/sec, max proportional to difference
-      const speed = Math.max(10, diff * 3); // Increased speed multiplier for snappier feel
+      const speed = Math.max(10, diff * 3);
       const increment = Math.max(1, Math.round(speed * dt));
-      
+
       const prevScore = this.displayedScore;
       this.displayedScore = Math.min(this.currentScore, this.displayedScore + increment);
-      
-      const scoreValue = this.scoreElement.querySelector('.hud-score-value') as HTMLElement;
-      if (scoreValue) {
-        scoreValue.textContent = '$' + this.displayedScore.toLocaleString();
-        
-        // Add subtle scale pop when score is actively counting up big numbers
-        if (diff > 100 && this.displayedScore !== prevScore) {
-          // Calculate scale based on how fast we're counting (more = bigger pop)
-          const scale = 1 + Math.min(0.15, (increment / 500));
-          scoreValue.style.transform = `scale(${scale})`;
-          scoreValue.style.transition = 'transform 0.1s ease-out';
-          
-          // Reset scale shortly after
-          setTimeout(() => {
-            scoreValue.style.transform = 'scale(1)';
-          }, 50);
-        }
+      this.scoreValue.textContent = '$' + this.displayedScore.toLocaleString();
+
+      if (diff > 100 && this.displayedScore !== prevScore) {
+        const scale = 1 + Math.min(0.12, increment / 500);
+        this.scoreValue.style.transform = `scale(${scale})`;
+        setTimeout(() => { this.scoreValue.style.transform = 'scale(1)'; }, 50);
       }
     }
   }
-  
+
   /**
    * Show trick popup with color based on trick type
    */
   showTrick(name: string, points: number, multiplier: number, trickType?: TrickType): void {
-    const nameEl = this.trickPopup.querySelector('.hud-trick-name') as HTMLElement;
-    const pointsEl = this.trickPopup.querySelector('.hud-trick-points');
-    
-    if (nameEl) {
-      nameEl.textContent = name;
-      // Color based on trick type
-      nameEl.style.color = trickType ? TRICK_TYPE_COLORS[trickType] : '#00FFFF';
-    }
-    if (pointsEl) pointsEl.textContent = `+${points} × ${multiplier}`;
-    
+    this.trickName.textContent = name;
+    this.trickName.style.color = trickType ? TRICK_TYPE_COLORS[trickType] : '#5FE3FF';
+    this.trickPoints.textContent = `+${points} × ${multiplier}`;
+
     this.trickPopup.classList.remove('show');
-    // Force reflow
     void this.trickPopup.offsetWidth;
     this.trickPopup.classList.add('show');
-    
-    // Hide after delay
-    setTimeout(() => {
-      this.trickPopup.classList.remove('show');
-    }, 1500);
+
+    setTimeout(() => { this.trickPopup.classList.remove('show'); }, 1500);
   }
-  
+
   /**
    * Update combo timer bar
    * @param timeRemaining - Time left in ms to extend combo
@@ -738,24 +898,14 @@ export class HUD {
   updateComboTimer(timeRemaining: number, maxTime: number): void {
     const percent = Math.max(0, Math.min(100, (timeRemaining / maxTime) * 100));
     this.comboTimerFill.style.width = `${percent}%`;
-    
-    // Add urgent animation when timer is low (< 30%)
-    if (percent < 30 && percent > 0) {
-      this.comboTimerFill.classList.add('urgent');
-    } else {
-      this.comboTimerFill.classList.remove('urgent');
-    }
+    this.comboTimerFill.classList.toggle('urgent', percent < 30 && percent > 0);
   }
-  
+
   /**
    * Render the live combo from ScoreSystem's ComboState. Display only — this never
    * touches the banked score.
    */
   setComboState(state: ComboState | null): void {
-    const tricksEl = this.comboElement.querySelector('.hud-combo-tricks') as HTMLElement;
-    const scoreEl = this.comboElement.querySelector('.hud-combo-score');
-    const multEl = this.comboElement.querySelector('.hud-combo-multiplier') as HTMLElement;
-
     if (!state || !state.open || state.tricks.length === 0) {
       this.comboElement.classList.remove('active');
       this.lastMultiplier = 1;
@@ -764,23 +914,22 @@ export class HUD {
 
     this.comboElement.classList.add('active');
 
-    const recent = state.tricks.slice(-5);
-    if (tricksEl) {
-      tricksEl.innerHTML = recent
-        .map((t) => `<span style="color:#00FFFF">${t.name}</span>`)
-        .join(' <span style="color:#888">+</span> ');
-    }
-    if (scoreEl) scoreEl.textContent = state.formattedUnrealised;
-    if (multEl) {
-      multEl.textContent = state.formattedMultiplier;
-      if (state.multiplier > this.lastMultiplier + 0.001) {
-        multEl.classList.remove('pulse');
-        void multEl.offsetWidth;
-        multEl.classList.add('pulse');
-      }
+    const recent = state.tricks.slice(-6).map((t) => t.name);
+    const prefix = state.tricks.length > recent.length ? '… ' : '';
+    this.comboTricks.textContent = prefix + recent.join('  +  ');
+
+    this.comboScore.textContent = state.formattedUnrealised;
+    this.comboMult.textContent = state.formattedMultiplier;
+    if (state.multiplier > this.lastMultiplier + 0.001) {
+      this.comboMult.classList.remove('pulse');
+      void this.comboMult.offsetWidth;
+      this.comboMult.classList.add('pulse');
     }
     this.lastMultiplier = state.multiplier;
-    this.updateComboTimer(state.timeRemaining, Math.max(1, state.timeRemaining / Math.max(0.001, state.timeFraction)));
+
+    const pct = Math.max(0, Math.min(1, state.timeFraction)) * 100;
+    this.comboTimerFill.style.width = `${pct}%`;
+    this.comboTimerFill.classList.toggle('urgent', pct < 30);
   }
 
   /**
@@ -794,22 +943,16 @@ export class HUD {
         break;
 
       case 'land':
-        this.scoreElement.style.color = '#00FF88';
-        setTimeout(() => { this.scoreElement.style.color = ''; }, 300);
         this.comboElement.classList.remove('active');
         break;
 
       case 'bail':
-        this.comboElement.style.color = '#FF4444';
-        setTimeout(() => {
-          this.comboElement.style.color = '';
-          this.comboElement.classList.remove('active');
-        }, 500);
-        this.showGoalBanner(event.headline, event.formattedLoss, '#FF4444');
+        this.comboElement.classList.remove('active');
+        this.showGoalBanner('BAILED', `${event.headline}  ${event.formattedLoss}`, '#FF5A3C');
         break;
 
       case 'tierReached':
-        this.showGoalBanner(event.label, '', '#FFD700');
+        this.showGoalBanner(event.label, '', '#FFC01E');
         break;
 
       case 'balanceChanged':
@@ -821,37 +964,123 @@ export class HUD {
   // Goals
   // -------------------------------------------------------------------------
 
-  /** Render the level checklist. Cheap to call every frame: it diffs before touching the DOM. */
+  /**
+   * Render the level checklist. Cheap to call every frame: rows are built once and then
+   * only their text / classes / progress bars are touched.
+   *
+   * Layout contract: every goal is its own grid row, `description | progress`, with the
+   * description clamped to two lines and ellipsised. Nothing can wrap into the value
+   * column, which was the r4 defect.
+   */
   setGoals(goals: GoalProgress[]): void {
     if (!goals || goals.length === 0) {
       this.goalsElement.style.display = 'none';
-      this.goalSignature = '';
+      this.goalOrderSig = '';
+      this.goalRows.clear();
+      this.goalsTiers.innerHTML = '';
+      this.goalsList.innerHTML = '';
       return;
     }
     this.goalsElement.style.display = '';
 
-    const sig = goals.map((g) => `${g.id}:${g.current}:${g.complete ? 1 : 0}:${g.failed ? 1 : 0}:${g.secret ? 1 : 0}`).join('|');
-    if (sig === this.goalSignature) return;
-    this.goalSignature = sig;
+    const orderSig = goals.map((g) => g.id + (g.kind === 'scoreTier' ? 'T' : '')).join('|');
+    if (orderSig !== this.goalOrderSig) {
+      this.goalOrderSig = orderSig;
+      this.rebuildGoalRows(goals);
+    }
 
-    this.goalsList.innerHTML = goals
-      .map((g) => {
-        const cls = g.complete ? 'hud-goal done' : g.failed ? 'hud-goal failed' : 'hud-goal';
-        const label = g.secret && !g.complete ? '???' : escapeHtml(g.description);
-        const detail = g.secret && !g.complete ? '' : escapeHtml(g.detail ?? '');
-        return `<div class="${cls}"><span>${g.complete ? '\u2714 ' : ''}${label}</span><span class="hud-goal-detail">${detail}</span></div>`;
-      })
-      .join('');
+    let done = 0;
+    for (const g of goals) {
+      if (g.complete) done++;
+      const row = this.goalRows.get(g.id);
+      if (!row) continue;
+
+      const hidden = g.secret && !g.complete;
+      const label = row.isTier
+        ? (g.tier ? g.tier.toUpperCase() + ' SCORE' : g.description)
+        : hidden
+          ? '? ? ?'
+          : g.description;
+      const tick = g.complete ? '✔ ' : '';
+      const nextText = tick + label;
+      if (row.text.textContent !== nextText) row.text.textContent = nextText;
+
+      const detail = hidden ? '' : (g.detail ?? '');
+      if (row.detail.textContent !== detail) row.detail.textContent = detail;
+
+      const base = row.isTier ? 'hud-tier' : 'hud-goal';
+      const cls =
+        base +
+        (g.complete ? ' done' : '') +
+        (!g.complete && g.failed ? ' failed' : '') +
+        (!row.isTier && hidden ? ' secret' : '');
+      if (row.root.className !== cls) row.root.className = cls;
+
+      if (row.bar) {
+        const pct = Math.round(Math.max(0, Math.min(1, g.fraction)) * 100);
+        const w = pct + '%';
+        if (row.bar.style.width !== w) row.bar.style.width = w;
+      }
+    }
+
+    const countText = `${done}/${goals.length}`;
+    if (this.goalsCount.textContent !== countText) this.goalsCount.textContent = countText;
+  }
+
+  private rebuildGoalRows(goals: GoalProgress[]): void {
+    this.goalRows.clear();
+    this.goalsTiers.innerHTML = '';
+    this.goalsList.innerHTML = '';
+
+    const tiers = goals.filter((g) => g.kind === 'scoreTier');
+    const others = goals.filter((g) => g.kind !== 'scoreTier');
+    this.goalsTiers.style.display = tiers.length > 0 ? '' : 'none';
+
+    for (const g of tiers) {
+      const root = document.createElement('div');
+      root.className = 'hud-tier';
+      const name = document.createElement('div');
+      name.className = 'hud-tier-name';
+      const detail = document.createElement('div');
+      detail.className = 'hud-tier-detail';
+      const barWrap = document.createElement('div');
+      barWrap.className = 'hud-tier-bar';
+      const bar = document.createElement('i');
+      barWrap.appendChild(bar);
+      root.appendChild(name);
+      root.appendChild(detail);
+      root.appendChild(barWrap);
+      this.goalsTiers.appendChild(root);
+      this.goalRows.set(g.id, { root, text: name, detail, bar, isTier: true });
+    }
+
+    for (const g of others) {
+      const root = document.createElement('div');
+      root.className = 'hud-goal';
+      const text = document.createElement('div');
+      text.className = 'hud-goal-text';
+      const detail = document.createElement('div');
+      detail.className = 'hud-goal-detail';
+      root.appendChild(text);
+      root.appendChild(detail);
+      this.goalsList.appendChild(root);
+      this.goalRows.set(g.id, { root, text, detail, bar: null, isTier: false });
+    }
   }
 
   /** Big centred banner when a goal completes. */
   showGoalComplete(goal: GoalProgress): void {
-    this.showGoalBanner('GOAL COMPLETE', `${goal.description}  +$${goal.reward.toLocaleString()}`, '#00FF88');
+    this.showGoalBanner('GOAL COMPLETE', `${goal.description}  +$${goal.reward.toLocaleString()}`, '#3BE38B');
   }
 
   private showGoalBanner(title: string, sub: string, color: string): void {
     this.goalPopup.style.color = color;
-    this.goalPopup.innerHTML = `${escapeHtml(title)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}`;
+    this.goalPopup.textContent = title;
+    if (sub) {
+      const small = document.createElement('small');
+      small.textContent = sub;
+      this.goalPopup.appendChild(small);
+    }
     this.goalPopup.classList.remove('show');
     void this.goalPopup.offsetWidth;
     this.goalPopup.classList.add('show');
@@ -863,54 +1092,62 @@ export class HUD {
   // Wanted level
   // -------------------------------------------------------------------------
 
-  /** 0..5 stars. 0 hides the indicator. */
+  /**
+   * Drive the WANTED row straight from PoliceSquad.heatLevel (0..1).
+   * Four stars; anything above zero heat shows at least one.
+   */
+  setHeat(heat01: number): void {
+    if (!Number.isFinite(heat01)) return;
+    const h = Math.max(0, Math.min(1, heat01));
+    this.applyStars(h <= 0.001 ? 0 : Math.max(1, Math.ceil(h * WANTED_STARS)));
+  }
+
+  /** Legacy entry point: a star count. Values above 4 are rescaled onto the four-star row. */
   setWanted(stars: number): void {
-    const n = Math.max(0, Math.min(5, Math.round(stars)));
-    if (n === this.wantedStars) return;
-    this.wantedStars = n;
-    if (n <= 0) {
-      this.wantedElement.classList.remove('active', 'hot');
-      this.wantedElement.textContent = '';
-      return;
+    if (!Number.isFinite(stars)) return;
+    const n = Math.max(0, Math.round(stars));
+    this.applyStars(n <= 0 ? 0 : Math.min(WANTED_STARS, Math.ceil((n / 5) * WANTED_STARS)));
+  }
+
+  private applyStars(n: number): void {
+    const lit = Math.max(0, Math.min(WANTED_STARS, n));
+    if (lit === this.wantedStars) return;
+    this.wantedStars = lit;
+    for (let i = 0; i < this.wantedStarEls.length; i++) {
+      this.wantedStarEls[i].classList.toggle('on', i < lit);
     }
-    this.wantedElement.textContent = '\u2605'.repeat(n) + '\u2606'.repeat(5 - n);
-    this.wantedElement.classList.add('active');
-    this.wantedElement.classList.toggle('hot', n >= 3);
+    this.wantedElement.classList.toggle('active', lit > 0);
+    this.wantedElement.classList.toggle('hot', lit >= 3);
   }
 
   /**
-   * Update special meter
+   * Update the BOOST (special) meter, 0..1.
    */
   setSpecial(amount: number): void {
     this.specialAmount = Math.min(1, Math.max(0, amount));
-    this.specialFill.style.width = `${this.specialAmount * 100}%`;
-    
-    if (this.specialAmount >= 1) {
-      this.specialMeter.classList.add('full');
-    } else {
-      this.specialMeter.classList.remove('full');
+    const lit = Math.round(this.specialAmount * BOOST_SEGMENTS);
+    for (let i = 0; i < this.specialSegments.length; i++) {
+      this.specialSegments[i].classList.toggle('on', i < lit);
     }
+    this.specialMeter.classList.toggle('full', this.specialAmount >= 1);
   }
-  
+
   /**
    * Show/hide balance meter
    */
   setBalanceVisible(visible: boolean): void {
-    if (visible) {
-      this.balanceMeter.classList.add('active');
-    } else {
-      this.balanceMeter.classList.remove('active');
-    }
+    this.balanceMeter.classList.toggle('active', visible);
   }
-  
+
   /**
    * Update balance position (0 = left edge, 0.5 = center, 1 = right edge)
    */
   setBalance(position: number): void {
-    const percent = Math.min(100, Math.max(0, position * 100));
-    this.balanceArrow.style.left = `${percent}%`;
+    const p = Math.min(1, Math.max(0, position));
+    this.balanceArrow.style.left = `${p * 100}%`;
+    this.balanceMeter.classList.toggle('danger', Math.abs(p - 0.5) > 0.34);
   }
-  
+
   /**
    * Reset HUD for new level
    */
@@ -918,32 +1155,35 @@ export class HUD {
     this.currentScore = 0;
     this.displayedScore = 0;
     this.specialAmount = 0;
-    this._speedHistory = new Array(this.speedBars.length).fill(0);
-    this.speedBars.forEach(b => { b.style.height = '2px'; b.style.background = '#00FF88'; });
-    
-    const scoreValue = this.scoreElement.querySelector('.hud-score-value');
-    if (scoreValue) {
-      scoreValue.textContent = '$0';
-    }
-    
-    this.specialFill.style.width = '0%';
-    this.specialMeter.classList.remove('full');
+    this.suppressDelta = true;
+
+    this.scoreValue.textContent = '$0';
+    this.scoreValue.classList.remove('gain', 'loss');
+    this.deltaElement.className = 'hud-delta';
+
+    this.setSpeed(0);
+    this.setSpecial(0);
+
     this.comboElement.classList.remove('active');
     this.comboTimerFill.style.width = '100%';
     this.comboTimerFill.classList.remove('urgent');
     this.trickPopup.classList.remove('show');
-    this.balanceMeter.classList.remove('active');
+    this.balanceMeter.classList.remove('active', 'danger');
     this.spinCounterElement.classList.remove('active');
     this.spinCounterElement.textContent = '';
     this.lastMultiplier = 1;
-    this.goalSignature = '';
+
+    this.goalOrderSig = '';
+    this.goalRows.clear();
+    this.goalsTiers.innerHTML = '';
     this.goalsList.innerHTML = '';
     this.goalsElement.style.display = 'none';
     this.goalPopup.classList.remove('show');
+
     this.wantedStars = -1;
-    this.setWanted(0);
+    this.applyStars(0);
   }
-  
+
   /**
    * Update spin counter display
    * Shows "180", "360", "540", etc. during air spins
@@ -953,43 +1193,34 @@ export class HUD {
     if (degrees >= 180) {
       const displayDegrees = Math.floor(degrees / 180) * 180;
       const newText = `${displayDegrees}°`;
-      
-      // Only update if changed (avoids animation spam)
       if (this.spinCounterElement.textContent !== newText) {
         this.spinCounterElement.textContent = newText;
         this.spinCounterElement.classList.remove('active');
-        void this.spinCounterElement.offsetWidth; // Force reflow
+        void this.spinCounterElement.offsetWidth;
         this.spinCounterElement.classList.add('active');
       }
     } else {
-      // Hide when < 180
       this.spinCounterElement.classList.remove('active');
     }
   }
-  
+
   /**
    * Hide controls hint and mark player as having played
    * Called on first input to remember the player knows the controls
    */
   hideControlsHint(): void {
     if (this.controlsHidden) return;
-    
-    // Fade out the controls hint
+
     this.controlsHint.style.transition = 'opacity 0.5s ease-out';
     this.controlsHint.style.opacity = '0';
-    
-    // Hide completely after fade
-    setTimeout(() => {
-      this.controlsHint.style.display = 'none';
-    }, 500);
-    
-    // Remember for next time
+    setTimeout(() => { this.controlsHint.style.display = 'none'; }, 500);
+
     try {
       localStorage.setItem(STORAGE_KEY_HAS_PLAYED, 'true');
     } catch {
       // localStorage might be unavailable
     }
-    
+
     this.controlsHidden = true;
   }
 }
@@ -997,6 +1228,13 @@ export class HUD {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function makeBarIcon(kind: 'speed' | 'boost', glyph: string): HTMLElement {
+  const el = document.createElement('div');
+  el.className = `hud-bar-icon ${kind}`;
+  el.textContent = glyph;
+  return el;
+}
 
 /** ScoreSystem's TrickKind -> the registry's TrickType, for popup colouring. */
 function trickTypeFor(kind: string): TrickType {
@@ -1007,11 +1245,4 @@ function trickTypeFor(kind: string): TrickType {
     case 'special': return 'special';
     default: return 'flip';
   }
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }

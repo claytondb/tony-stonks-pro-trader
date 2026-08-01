@@ -45,9 +45,9 @@ const P = {
   spine: 0.200,       // hips -> chest pivot
   chest: 0.155,       // chest pivot -> neck base
   neck: 0.045,
-  headH: 0.235,
-  headW: 0.212,
-  headD: 0.205,
+  headH: 0.246,
+  headW: 0.228,
+  headD: 0.218,
 
   shoulderX: 0.188,
   shoulderY: 0.082,   // above the chest pivot
@@ -55,10 +55,16 @@ const P = {
   foreArm: 0.230,
 
   hipX: 0.108,
-  thigh: 0.420,
-  shin: 0.405,
-  ankle: 0.072,
-  foot: 0.245,
+  // THIGH / SHIN RATIO IS A POSE CONSTRAINT, NOT A TASTE CALL.
+  // TrickAnimator kneels this figure on a 0.56 m seat pan with the other foot on the floor.
+  // The thigh has to span (pelvis -> knee on the pan) and the whole leg has to span
+  // (pelvis -> floor) at the same pelvis height; a 0.42 thigh forces the hip 0.37 m behind the
+  // knee, which hangs the pelvis right off the front lip of the seat. Trading 35 mm from the
+  // thigh to the shin pulls the pelvis back over the pan without costing any leg reach.
+  thigh: 0.385,
+  shin: 0.415,
+  ankle: 0.070,
+  foot: 0.238,
 } as const;
 
 /** Distance from the root origin down to the soles when the figure is standing. */
@@ -82,18 +88,34 @@ interface SkinSpec {
   rim: number;
 }
 
+/**
+ * VALUE LADDER — the whole point of this table.
+ *
+ * The panel's note was that the hero "reads as a white and dark blob at gameplay distance".
+ * A stylised low-poly figure earns its readability from the ORDER of its values, not from
+ * detail, so the five surfaces are spaced deliberately against what is behind them:
+ *
+ *   shirt   near-white          brightest thing in the frame, and the anchor of the silhouette
+ *   skin    warm mid            two full stops under the shirt, so face and arms do not merge
+ *                               into the shirt the way they did at exposure 1.32
+ *   chair   mid grey  (0x8d8a8a fabric, ~0.13 linear — not ours, but the value we sit against)
+ *   carpet  mid brown (~0.15 linear)
+ *   slacks  dark charcoal       ~0.043 linear: a clear three stops under both chair and carpet,
+ *                               but NOT black, so the leg forms still show their own shading
+ *   shoes   near-black          one more stop down again, via vertex tint on the same material
+ *   hair    near-black brown    the head's dark half; this is what turns the head from one pale
+ *                               box into a readable face
+ *   tie     one saturated red   the only chromatic note on the character
+ */
 const SKINS: Record<CharacterSkin, SkinSpec> = {
-  // The reference figure: bright white short-sleeve shirt, near-black slacks, one saturated
-  // red accent. The shirt is the only high-value surface on the character, which is what makes
-  // the silhouette legible at 40 m against a mid-tone carpet.
   tony_stonks: {
-    shirt: 0xf2efe4, skin: 0xdfa374, hair: 0x4a2c18, tie: 0xc0202a,
-    dark: 0x1d1f26, rim: 0xdbe6f7,
+    shirt: 0xfbf8f0, skin: 0xcb8a55, hair: 0x2a1a12, tie: 0xc4202c,
+    dark: 0x464c5e, rim: 0xdbe6f7,
   },
-  // Second skin reads cooler and older: pale blue shirt, gold tie, grey hair.
+  // Second skin reads cooler and older: pale blue shirt, gold tie, iron-grey hair.
   stonks_guy: {
-    shirt: 0xcedcec, skin: 0xc98d5f, hair: 0x2a2724, tie: 0xe0a129,
-    dark: 0x262832, rim: 0xe8dcc4,
+    shirt: 0xd8e5f2, skin: 0xb47845, hair: 0x24262b, tie: 0xe0a129,
+    dark: 0x4e5163, rim: 0xe8dcc4,
   },
 };
 
@@ -115,13 +137,15 @@ function makeMats(spec: SkinSpec): Mats {
     applyRimLight(m, { color: spec.rim, power: 2.8, strength: rim });
     return m;
   };
-  const shirt = mk(spec.shirt, 0.74, 0.16);
-  const skin = mk(spec.skin, 0.68, 0.22);
-  const hair = mk(spec.hair, 0.86, 0.34);
-  const tie = mk(spec.tie, 0.52, 0.20);
-  // The slacks are the darkest mass in the frame and carry the strongest rim: this single
-  // number is what stops the lower half of the character dissolving into the carpet.
-  const dark = mk(spec.dark, 0.66, 0.60);
+  const shirt = mk(spec.shirt, 0.76, 0.10);
+  const skin = mk(spec.skin, 0.66, 0.16);
+  // Hair carries a strong rim on purpose: it is the darkest big shape on the character and it
+  // is what the follow camera looks straight at, so it needs an edge or it becomes a hole.
+  const hair = mk(spec.hair, 0.88, 0.42);
+  const tie = mk(spec.tie, 0.52, 0.18);
+  // The slacks are the darkest mass below the waist. The rim is what stops the lower half of
+  // the character dissolving into the chair, which is nearly the same value from behind.
+  const dark = mk(spec.dark, 0.68, 0.56);
   return { shirt, skin, hair, tie, dark, all: [shirt, skin, hair, tie, dark] };
 }
 
@@ -320,64 +344,118 @@ export interface CharacterParts {
   materials: THREE.MeshStandardMaterial[];
 }
 
+/**
+ * The head.
+ *
+ * At four metres a head is three shapes and nothing else: a DARK HAIR MASS, a LIGHT FACE PLANE,
+ * and the notch between them. The previous build had those the wrong way round — a thin hair
+ * strip on top of a big pale cranium — so from the follow camera (which is behind him, looking
+ * at the back of his head) the whole head resolved to one undifferentiated warm box.
+ *
+ * So the hair now owns the top 40% of the head AND the whole back of it AND the temples, in a
+ * near-black brown, and the skin is dropped two stops. The result is a dark cap sitting on a
+ * light neck sitting on a white collar: three hard value steps stacked vertically, which is a
+ * silhouette you can still read when the head is thirty pixels tall.
+ */
 function buildHead(m: Mats): THREE.Group {
   const g = new THREE.Group();
   g.name = 'head';
   const b = new PartBuilder();
   const W = P.headW, H = P.headH, D = P.headD;
   const cy = H * 0.5;
+  const F = -D * 0.5;              // the face plane (the character faces -Z)
 
-  // Cranium: one big chamfered mass. The chamfer is deliberately huge (25 mm) so the head
-  // reads as a faceted gem, exactly like the reference, rather than as a rounded ball.
-  b.add(chamferBox(W, H * 0.72, D, 0.026), m.skin, {
-    pos: [0, cy + H * 0.10, 0], tint: { ao: 0.26, back: 0.24, aoTop: cy },
+  // --- skull ---------------------------------------------------------------------------
+  // Upper cranium: mostly hidden under the hair, so it only has to fill the volume.
+  b.add(chamferBox(W * 0.94, H * 0.40, D * 0.94, 0.022), m.skin, {
+    pos: [0, cy + H * 0.22, 0], tint: { ao: 0.30, back: 0.30, aoTop: cy },
   });
-  // Jaw / chin: narrower, pushed forward, tilted. This is the plane that reads as a face.
-  const jaw = chamferBox(W * 0.90, H * 0.36, D * 0.92, 0.020);
-  shear(jaw, 'z', 'y', 0.16);
-  b.add(jaw, m.skin, { pos: [0, cy - H * 0.24, -0.006], tint: { ao: 0.42, back: 0.22 } });
-  // Ears.
-  for (const s of [-1, 1]) {
-    b.add(chamferBox(0.022, 0.058, 0.040, 0.008), m.skin, {
-      pos: [s * (W * 0.5 - 0.002), cy + 0.006, 0.012], tint: { ao: 0.3, tint: 0xe8e8e8 },
-    });
-  }
-  // Nose — a wedge, not a bump.
-  const nose = chamferBox(0.034, 0.048, 0.040, 0.010);
-  taper(nose, 'y', 1.0, 0.55);
-  b.add(nose, m.skin, { pos: [0, cy - 0.016, -D * 0.5 - 0.006], tint: { tint: 0xfff2ea } });
+  // Face block: the plane that has to read. Sheared so the chin leads and the brow overhangs,
+  // and tapered so the jaw is narrower than the cheekbones — a brick has no face.
+  const face = chamferBox(W * 0.92, H * 0.56, D * 0.90, 0.020);
+  taper(face, 'y', 0.82, 1.02);
+  shear(face, 'z', 'y', 0.15);
+  b.add(face, m.skin, { pos: [0, cy - H * 0.14, -0.004], tint: { ao: 0.38, back: 0.24 } });
+  // Cheek / jaw wedge: one more plane on the lower half so the face is not a single flat card.
+  const jaw = chamferBox(W * 0.74, H * 0.20, D * 0.72, 0.016);
+  taper(jaw, 'y', 0.68, 1.0);
+  b.add(jaw, m.skin, { pos: [0, cy - H * 0.40, -0.012], tint: { ao: 0.34, back: 0.22 } });
 
-  // Eyes: flat dark rectangles set into the face plane. The reference does exactly this —
-  // no sculpted sockets, no whites, just two graphic shapes that read at thumbnail size.
+  // Ears: small, but they break the head's outline where the hair meets the jaw.
   for (const s of [-1, 1]) {
-    b.add(chamferBox(0.040, 0.030, 0.016, 0.004), m.dark, {
-      pos: [s * 0.048, cy + 0.026, -D * 0.5 + 0.004], tint: { tint: 0x2a2a30 },
+    b.add(chamferBox(0.020, 0.060, 0.042, 0.008), m.skin, {
+      pos: [s * (W * 0.47), cy - 0.004, 0.014], tint: { ao: 0.34, tint: 0xdedede },
     });
   }
-  // Brows — the only thing giving the face an expression at distance.
-  for (const s of [-1, 1]) {
-    b.add(chamferBox(0.048, 0.014, 0.018, 0.004), m.hair, {
-      pos: [s * 0.049, cy + 0.056, -D * 0.5 + 0.006], rot: [0, 0, -s * 0.16],
-      tint: { tint: 0xbfbfbf },
-    });
-  }
+  // Nose — a wedge off the face plane, not a bump.
+  const nose = chamferBox(0.036, 0.052, 0.046, 0.010);
+  taper(nose, 'y', 1.0, 0.50);
+  b.add(nose, m.skin, { pos: [0, cy - 0.020, F - 0.012], tint: { tint: 0xfff0e4 } });
 
-  // Hair: a chunky angular cap plus a swept fringe, in three separate planes so it catches
-  // three different values off the key.
-  b.add(chamferBox(W * 1.03, H * 0.30, D * 1.03, 0.024), m.hair, {
-    pos: [0, H * 0.86, 0.004], tint: { ao: 0.18, back: 0.28 },
+  // --- graphic features ----------------------------------------------------------------
+  // Eyes: flat dark rectangles set into the face plane. The reference does exactly this — no
+  // sockets, no whites, two shapes that survive being twelve pixels wide.
+  for (const s of [-1, 1]) {
+    b.add(chamferBox(0.042, 0.026, 0.018, 0.004), m.dark, {
+      pos: [s * 0.052, cy + 0.014, F + 0.005], tint: { tint: 0x1a1a1e },
+    });
+  }
+  // Brows in hair colour, angled in, with a clear band of skin between them and the eyes. Set
+  // them any closer and eye + brow merge into one dark bar across the face and he reads as
+  // wearing sunglasses, which is what the first pass did.
+  for (const s of [-1, 1]) {
+    b.add(chamferBox(0.050, 0.010, 0.020, 0.004), m.hair, {
+      pos: [s * 0.053, cy + 0.074, F + 0.007], rot: [0, 0, -s * 0.20],
+      tint: { tint: 0xd0d0d0 },
+    });
+  }
+  // Mouth: one dark bar, short and set just under the nose. Any lower and it lands in the jaw's
+  // own occlusion gradient and reads as a second chin.
+  b.add(chamferBox(0.046, 0.011, 0.014, 0.003), m.dark, {
+    pos: [0, cy - 0.050, F + 0.008], tint: { tint: 0x141418 },
   });
-  const fringe = chamferBox(W * 0.94, H * 0.14, D * 0.42, 0.014);
-  shear(fringe, 'y', 'z', -0.22);
+
+  // --- hair: the dark half of the head --------------------------------------------------
+  // Crown cap. Wider than the skull and tapered in at the top, so the head silhouette has a
+  // shoulder on it rather than ending in a flat lid.
+  const cap = chamferBox(W * 1.07, H * 0.26, D * 1.07, 0.022);
+  taper(cap, 'y', 1.02, 0.78);
+  b.add(cap, m.hair, { pos: [0, H * 0.925, 0.008], tint: { ao: 0.10, back: 0.30 } });
+  // A second, brighter crown plane under the cap. Two tints on the top of the head is the only
+  // thing that stops it being one flat dark rectangle from directly behind — which is the angle
+  // the chase camera holds for the entire game.
+  const crown = chamferBox(W * 1.04, H * 0.13, D * 1.02, 0.020);
+  b.add(crown, m.hair, { pos: [0, H * 0.795, 0.006], tint: { tint: 0xe2e2e2, back: 0.30 } });
+  // Back of the head down to the nape, TAPERED IN at the bottom. The taper is the whole point:
+  // a rectangular back-of-head is a rectangle in silhouette, and a rectangle on top of a
+  // rectangular torso is the "undifferentiated box" the review called out. Narrowing the nape
+  // puts a visible shoulder in the outline where hair meets neck.
+  const backHair = chamferBox(W * 1.00, H * 0.48, D * 0.36, 0.018);
+  taper(backHair, 'y', 0.62, 1.04);
+  b.add(backHair, m.hair, {
+    pos: [0, cy + H * 0.16, D * 0.40], tint: { ao: 0.40, back: 0.34 },
+  });
+  // Hairline step across the nape: one more hard horizontal edge between the dark head mass
+  // and the skin of the neck below it.
+  b.add(chamferBox(W * 0.62, H * 0.10, D * 0.26, 0.012), m.hair, {
+    pos: [0, cy - H * 0.20, D * 0.40], rot: [0.18, 0, 0], tint: { ao: 0.5, tint: 0xc4c4c4 },
+  });
+  // Temples: hair down the sides to just above the ear.
+  for (const s of [-1, 1]) {
+    b.add(chamferBox(W * 0.15, H * 0.36, D * 0.72, 0.014), m.hair, {
+      pos: [s * (W * 0.48), cy + H * 0.19, 0.012], tint: { ao: 0.28, back: 0.28 },
+    });
+  }
+  // Fringe: a wedge overhanging the brow, swept across. This is the notch in the silhouette
+  // that stops the head reading as a cylinder from any angle.
+  const fringe = chamferBox(W * 1.00, H * 0.17, D * 0.42, 0.012);
+  shear(fringe, 'y', 'z', -0.32);
   b.add(fringe, m.hair, {
-    pos: [0.010, H * 0.735, -D * 0.34], rot: [0.12, 0, 0.06], tint: { back: 0.2 },
+    pos: [0.014, H * 0.775, F * 0.72], rot: [0.10, 0, 0.08], tint: { ao: 0.12, back: 0.20 },
   });
-  b.add(chamferBox(W * 0.62, H * 0.16, D * 0.36, 0.016), m.hair, {
-    pos: [-0.026, H * 0.94, -D * 0.20], rot: [0, 0.22, 0.10], tint: { back: 0.2 },
-  });
-  // Sideburns / back of the neck hairline.
-  b.add(chamferBox(W * 0.98, H * 0.20, D * 0.30, 0.014), m.hair, {
-    pos: [0, H * 0.60, D * 0.40], tint: { ao: 0.4, back: 0.3 },
+  // Raised tuft, off centre and rotated, so the crown is asymmetric from every angle.
+  b.add(chamferBox(W * 0.54, H * 0.17, D * 0.44, 0.014), m.hair, {
+    pos: [-0.030, H * 1.00, -D * 0.12], rot: [0.04, 0.26, 0.15], tint: { back: 0.22 },
   });
 
   b.flushInto(g, 'head');
@@ -393,14 +471,20 @@ function buildTorso(m: Mats): { chest: THREE.Group; hips: THREE.Group; tie: THRE
   const pelvis = chamferBox(0.320, 0.150, 0.250, 0.032);
   taper(pelvis, 'y', 0.92, 1.0);
   hb.add(pelvis, m.dark, { pos: [0, 0.020, 0.012], tint: { ao: 0.55, back: 0.18 } });
-  // Belt: same material, lifted a value by vertex tint so it reads as a separate band.
-  hb.add(chamferBox(0.336, 0.036, 0.262, 0.010), m.dark, {
-    pos: [0, 0.086, 0.012], tint: { tint: 0x8e8e96 },
+  // Belt: same material, dropped a value by vertex tint so it reads as a hard dark band
+  // directly under the white shirt hem. That white-over-black step is the waistline.
+  hb.add(chamferBox(0.336, 0.040, 0.262, 0.010), m.dark, {
+    pos: [0, 0.084, 0.012], tint: { tint: 0x5a5a64 },
   });
   // Buckle — a tiny bright note dead centre.
-  hb.add(chamferBox(0.044, 0.030, 0.016, 0.005), m.dark, {
-    pos: [0, 0.086, -0.128], tint: { tint: 0xd8c898 },
+  hb.add(chamferBox(0.046, 0.032, 0.016, 0.005), m.dark, {
+    pos: [0, 0.084, -0.130], tint: { tint: 0xffe9a8 },
   });
+  // Shirt hem: the tail of the shirt hangs over the belt, so the value ladder up the body is
+  // charcoal -> black belt -> white, with no ambiguous transition in between.
+  const hem = chamferBox(0.318, 0.062, 0.248, 0.020);
+  taper(hem, 'y', 1.0, 1.05);
+  hb.add(hem, m.shirt, { pos: [0, 0.128, 0.010], tint: { ao: 0.44, back: 0.34, aoTop: 0.03 } });
   hb.flushInto(hips, 'hips');
 
   // --- chest ----------------------------------------------------------------
@@ -427,19 +511,30 @@ function buildTorso(m: Mats): { chest: THREE.Group; hips: THREE.Group; tie: THRE
     });
   }
 
-  // Collar: two angled planes making a V, plus the back of the collar.
+  // Collar: two angled planes making a V at the front, plus a raised band round the back.
+  // The back band is what the follow camera sees — a bright horizontal edge that separates the
+  // dark hair mass above from the shirt below.
+  // One continuous band round the neck, split at the front into a shallow V. Built as three
+  // pieces of the SAME depth and height so it reads as a collar rather than as loose plates
+  // stuck to the chest, which is what a set of individually rotated slabs looks like head-on.
   for (const s of [-1, 1]) {
-    cb.add(chamferBox(0.086, 0.052, 0.030, 0.008), m.shirt, {
-      pos: [s * 0.050, 0.146, -0.088], rot: [0.30, 0, -s * 0.42], tint: { tint: 0xf6f6f6 },
+    cb.add(chamferBox(0.062, 0.044, 0.104, 0.010), m.shirt, {
+      pos: [s * 0.062, 0.150, -0.036], rot: [0.10, s * 0.30, -s * 0.16], tint: { tint: 0xf0f0f0 },
     });
   }
-  cb.add(chamferBox(0.150, 0.048, 0.036, 0.009), m.shirt, {
-    pos: [0, 0.152, 0.070], rot: [-0.24, 0, 0], tint: { tint: 0xc8c8c8 },
+  for (const s of [-1, 1]) {
+    cb.add(chamferBox(0.070, 0.042, 0.048, 0.009), m.shirt, {
+      pos: [s * 0.036, 0.146, -0.098], rot: [0.16, 0, -s * 0.36], tint: { tint: 0xffffff },
+    });
+  }
+  cb.add(chamferBox(0.150, 0.048, 0.052, 0.010), m.shirt, {
+    pos: [0, 0.156, 0.056], rot: [-0.16, 0, 0], tint: { tint: 0xffffff },
   });
 
-  // Neck.
-  cb.add(chamferBox(0.088, P.chest * 0.52, 0.086, 0.014), m.skin, {
-    pos: [0, P.chest - 0.048, 0.008], tint: { ao: 0.65, aoTop: P.chest },
+  // Neck. Deliberately a full value below the shirt and a full value above the hair, so the
+  // head is joined to the body by a visible step rather than by a seam.
+  cb.add(chamferBox(0.090, P.chest * 0.62, 0.088, 0.014), m.skin, {
+    pos: [0, P.chest - 0.058, 0.010], tint: { ao: 0.70, aoTop: P.chest },
   });
   cb.flushInto(chest, 'chest');
 
@@ -470,15 +565,30 @@ function buildArm(m: Mats, side: number): Arm {
   shoulder.position.set(side * P.shoulderX, P.shoulderY, 0);
 
   const sb = new PartBuilder();
-  // Short shirt sleeve — the reference wears one, and the hard cuff line is a free extra
-  // silhouette break halfway down the upper arm.
-  const sleeve = chamferBox(0.118, 0.124, 0.118, 0.022);
-  taper(sleeve, 'y', 0.86, 1.0);
-  sb.add(sleeve, m.shirt, { pos: [0, -0.052, 0], tint: { ao: 0.30, back: 0.30 } });
-  // Bicep.
-  const bicep = chamferBox(0.086, P.upperArm - 0.10, 0.090, 0.020);
-  taper(bicep, 'y', 0.86, 1.02);
-  sb.add(bicep, m.skin, { pos: [0, -(P.upperArm - 0.10) * 0.5 - 0.098, 0], tint: { ao: 0.26, back: 0.22 } });
+  // Shirt sleeve, running most of the way to the elbow.
+  //
+  // The previous sleeve was 50 mm long, so 80% of both arms was bare skin. Held out in front
+  // of him on the backrest, that put two big warm tubes either side of a warm head with a small
+  // white torso hidden behind them: the character read as skin-coloured, and the white shirt —
+  // the thing that is supposed to carry the silhouette — barely appeared at all. A long sleeve
+  // spends the arms on the shirt's value instead, and its cuff is a hard break mid-limb.
+  const sleeveLen = P.upperArm * 0.60;
+  const sleeve = chamferBox(0.114, sleeveLen, 0.114, 0.020);
+  taper(sleeve, 'y', 0.80, 1.08);
+  sb.add(sleeve, m.shirt, {
+    pos: [0, -sleeveLen * 0.5 + 0.010, 0], tint: { ao: 0.26, back: 0.32, aoTop: 0.02 },
+  });
+  sb.add(chamferBox(0.106, 0.024, 0.106, 0.008), m.shirt, {
+    pos: [0, -sleeveLen + 0.004, 0], tint: { tint: 0xb8b8b8 },
+  });
+  // Bare lower half of the upper arm. Slimmer than before — the reference's arms are lean, and
+  // a thinner limb reads as a limb instead of as a pipe.
+  const bareLen = P.upperArm - sleeveLen;
+  const bicep = chamferBox(0.074, bareLen + 0.028, 0.078, 0.018);
+  taper(bicep, 'y', 0.90, 1.0);
+  sb.add(bicep, m.skin, {
+    pos: [0, -sleeveLen - bareLen * 0.5 + 0.006, 0], tint: { ao: 0.28, back: 0.24 },
+  });
   sb.flushInto(shoulder, 'upperArm');
 
   const elbow = new THREE.Group();
@@ -487,15 +597,20 @@ function buildArm(m: Mats, side: number): Arm {
   shoulder.add(elbow);
 
   const eb = new PartBuilder();
-  const fore = chamferBox(0.082, P.foreArm, 0.084, 0.018);
-  taper(fore, 'y', 0.80, 1.04);
+  const fore = chamferBox(0.072, P.foreArm, 0.076, 0.016);
+  taper(fore, 'y', 0.78, 1.06);
   eb.add(fore, m.skin, { pos: [0, -P.foreArm * 0.5, 0], tint: { ao: 0.24, back: 0.22 } });
-  // Fist wrapped round the armrest: a chunky block plus a thumb ridge, angled inboard.
-  eb.add(chamferBox(0.082, 0.086, 0.104, 0.020), m.skin, {
-    pos: [0, -P.foreArm - 0.038, -0.008], rot: [0.25, 0, 0], tint: { ao: 0.42, back: 0.2 },
+  // Fist CLOSED ROUND A RAIL. TrickAnimator solves the wrist onto the backrest's top edge, so
+  // the hand has to look like it is wrapped over a bar from any angle: a block for the palm, a
+  // knuckle ridge across the far side, and a thumb laid along the inboard face.
+  eb.add(chamferBox(0.076, 0.082, 0.096, 0.018), m.skin, {
+    pos: [0, -P.foreArm - 0.036, -0.006], rot: [0.28, 0, 0], tint: { ao: 0.44, back: 0.2 },
   });
-  eb.add(chamferBox(0.030, 0.052, 0.052, 0.012), m.skin, {
-    pos: [-side * 0.040, -P.foreArm - 0.026, -0.036], rot: [0.35, 0, 0], tint: { tint: 0xf2f2f2 },
+  eb.add(chamferBox(0.078, 0.030, 0.038, 0.010), m.skin, {
+    pos: [0, -P.foreArm - 0.060, -0.044], rot: [0.28, 0, 0], tint: { tint: 0xfff4ea },
+  });
+  eb.add(chamferBox(0.028, 0.050, 0.050, 0.011), m.skin, {
+    pos: [-side * 0.038, -P.foreArm - 0.024, -0.034], rot: [0.38, 0, 0], tint: { tint: 0xf2f2f2 },
   });
   eb.flushInto(elbow, 'foreArm');
 
@@ -508,9 +623,12 @@ function buildLeg(m: Mats, side: number): Leg {
   hip.position.set(side * P.hipX, -0.010, -0.010);
 
   const hb = new PartBuilder();
-  const thigh = chamferBox(0.146, P.thigh, 0.156, 0.030);
-  taper(thigh, 'y', 0.80, 1.04);
-  hb.add(thigh, m.dark, { pos: [0, -P.thigh * 0.5, 0], tint: { ao: 0.34, back: 0.24 } });
+  // Thigh. Tapered hard from a full hip to a narrow knee, and DEEPER than it is wide, so the
+  // top plane of the trouser leg catches the key and draws the limb's direction. A leg that is
+  // square in section reads as a post from every angle, which is why the legs did not parse.
+  const thigh = chamferBox(0.150, P.thigh, 0.168, 0.028);
+  taper(thigh, 'y', 0.72, 1.06);
+  hb.add(thigh, m.dark, { pos: [0, -P.thigh * 0.5, 0], tint: { ao: 0.34, back: 0.26 } });
   hb.flushInto(hip, 'thigh');
 
   const knee = new THREE.Group();
@@ -519,12 +637,18 @@ function buildLeg(m: Mats, side: number): Leg {
   hip.add(knee);
 
   const kb = new PartBuilder();
-  const shin = chamferBox(0.122, P.shin, 0.132, 0.026);
-  taper(shin, 'y', 0.68, 1.02);
-  kb.add(shin, m.dark, { pos: [0, -P.shin * 0.5, 0], tint: { ao: 0.30, back: 0.24 } });
+  // Knee cap: a proud block ON the joint, one value up. This is what makes a bent leg read as
+  // BENT rather than as a kinked pipe — the eye finds the corner because the corner is lit
+  // differently from the two segments either side of it.
+  kb.add(chamferBox(0.130, 0.070, 0.146, 0.020), m.dark, {
+    pos: [0, -0.008, -0.008], tint: { tint: 0xd6d6de, ao: 0.18 },
+  });
+  const shin = chamferBox(0.124, P.shin, 0.134, 0.024);
+  taper(shin, 'y', 0.66, 1.0);
+  kb.add(shin, m.dark, { pos: [0, -P.shin * 0.5, 0], tint: { ao: 0.30, back: 0.26 } });
   // Trouser cuff — a hard break just above the shoe so the leg does not read as one taper.
-  kb.add(chamferBox(0.112, 0.042, 0.122, 0.012), m.dark, {
-    pos: [0, -P.shin + 0.028, 0.002], tint: { tint: 0xb4b4b4 },
+  kb.add(chamferBox(0.110, 0.044, 0.124, 0.012), m.dark, {
+    pos: [0, -P.shin + 0.030, 0.002], tint: { tint: 0xbcbcc4 },
   });
   kb.flushInto(knee, 'shin');
 
@@ -534,19 +658,34 @@ function buildLeg(m: Mats, side: number): Leg {
   knee.add(ankle);
 
   const ab = new PartBuilder();
-  // Shoe: chunky, angled, near-black. Vertex tint drops it below the slacks so the two masses
-  // separate without spending a second material on it.
-  const shoe = chamferBox(0.108, 0.078, P.foot, 0.020);
-  shear(shoe, 'y', 'z', 0.10);
+  // Shoe: chunky, angled, near-black. Vertex tint drops it two stops under the slacks so the
+  // two masses separate without spending a second material on it.
+  //
+  // The shoe's bulk is deliberately kept close under the ankle. TrickAnimator measures how far
+  // the geometry hangs below the ankle joint (`footDrop`) and lifts every planted-foot IK target
+  // by exactly that much, so a deep shoe costs the push leg reach it does not have — the pelvis
+  // sits 0.83 m up and the leg is 0.80 m long.
+  //
+  // Its mass also has to stay biased toward -Z: TrickAnimator's `detectFacing` votes on which
+  // way the shoe points to decide which way the whole rig faces, and this rig has no toe joint
+  // for it to use instead. Flip this and the rider rides backwards.
+  const shoe = chamferBox(0.106, 0.072, P.foot, 0.018);
+  shear(shoe, 'y', 'z', 0.09);
   ab.add(shoe, m.dark, {
-    pos: [0, -P.ankle - 0.006, -P.foot * 0.5 + 0.062], tint: { tint: 0x6e6e74, ao: 0.35 },
+    pos: [0, -P.ankle - 0.002, -P.foot * 0.5 + 0.058], tint: { tint: 0x3c3c42, ao: 0.35 },
   });
-  // Sole: one value up, so the shoe has an edge.
-  ab.add(chamferBox(0.114, 0.024, P.foot * 0.98, 0.008), m.dark, {
-    pos: [0, -P.ankle - 0.044, -P.foot * 0.5 + 0.062], tint: { tint: 0x9a9aa2 },
+  // Sole: a lighter sliver under the shoe. It is the ground-contact cue — without it a black
+  // shoe on a dark carpet has no bottom edge and the foot looks like it is sinking.
+  ab.add(chamferBox(0.112, 0.020, P.foot * 0.98, 0.007), m.dark, {
+    pos: [0, -P.ankle - 0.032, -P.foot * 0.5 + 0.058], tint: { tint: 0x9aa0ac },
   });
-  ab.add(chamferBox(0.100, 0.060, 0.070, 0.016), m.dark, {
-    pos: [0, -P.ankle + 0.020, 0.020], tint: { tint: 0x5e5e64 },
+  // Toe cap: a separate plane on the front of the shoe, angled up.
+  ab.add(chamferBox(0.094, 0.044, 0.062, 0.014), m.dark, {
+    pos: [0, -P.ankle + 0.004, -P.foot + 0.048], rot: [-0.22, 0, 0], tint: { tint: 0x50505a },
+  });
+  // Heel / ankle collar.
+  ab.add(chamferBox(0.098, 0.058, 0.068, 0.015), m.dark, {
+    pos: [0, -P.ankle + 0.024, 0.022], tint: { tint: 0x2e2e34 },
   });
   ab.flushInto(ankle, 'foot');
 
@@ -616,7 +755,10 @@ export class StonksCharacter {
     this.torso.add(this.chest);
 
     this.head = buildHead(m);
-    this.head.position.set(0, P.chest - 0.010, 0.006);
+    // Lifted clear of the collar so a band of neck stays visible between the shirt and the
+    // hair from behind. Without that band the head sits straight on the shoulders and the whole
+    // upper body reads as one shape.
+    this.head.position.set(0, P.chest + 0.008, 0.006);
     this.chest.add(this.head);
 
     this.chest.add(this.tie);

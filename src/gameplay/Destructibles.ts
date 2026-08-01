@@ -482,7 +482,27 @@ function callBuilder(name: string, opts: AnyRecord): THREE.Object3D | null {
   }
 }
 
+/**
+ * A loose office chair.
+ *
+ * This used to call `ChairModel.buildOfficeChair` — the PLAYER's fully articulated rig,
+ * which carries named sub-groups for casters, gas lift, tilt and armrest animation and
+ * therefore cannot be merged. Four of them cost 105 meshes (~230 draw calls) for four
+ * props that never animate; they only ever get toppled as a whole. `OfficeProps.makeDeskChair`
+ * is the same silhouette, is already the chair used throughout the office (so the loose ones
+ * now match the dressed ones), and merges internally to ~3 meshes.
+ *
+ * Falls back to ChairModel, then to primitive geometry, if the builder is missing.
+ */
 function buildEmptyChair(seed: number): THREE.Object3D | null {
+  const desk = callBuilder('makeDeskChair', {
+    seed,
+    variant: 1,
+    knocked: false,
+    merge: true,
+  });
+  if (desk) return desk;
+
   const fn = (ChairModelNS as unknown as AnyRecord)['buildOfficeChair'];
   if (typeof fn !== 'function') return null;
   try {
@@ -494,6 +514,27 @@ function buildEmptyChair(seed: number): THREE.Object3D | null {
   } catch (err) {
     console.warn('[Destructibles] ChairModel.buildOfficeChair threw, using fallback geometry', err);
     return null;
+  }
+}
+
+/**
+ * Collapse a built prop to one mesh per material family via OfficeProps.mergePropsByMaterial.
+ *
+ * The merge is done in the prop's OWN local space (the object has no parent yet, so its
+ * world matrix is its local matrix), which keeps the floor-origin convention intact.
+ * If the export is missing or throws, the unmerged object is returned unchanged — this is
+ * a pure optimisation and must never be able to make a prop disappear.
+ */
+function mergeVisual(obj: THREE.Object3D): THREE.Object3D {
+  if ((obj as THREE.Mesh).isMesh) return obj; // already a single mesh
+  const fn = (OfficeProps as unknown as AnyRecord)['mergePropsByMaterial'];
+  if (typeof fn !== 'function') return obj;
+  try {
+    const merged = (fn as (o: readonly THREE.Object3D[]) => unknown)([obj]);
+    return merged instanceof THREE.Object3D ? merged : obj;
+  } catch (err) {
+    console.warn('[Destructibles] mergePropsByMaterial threw, keeping unmerged art', err);
+    return obj;
   }
 }
 
@@ -1169,6 +1210,14 @@ export class DestructibleManager {
     }
 
     if (!obj) obj = this.buildFallback(profile);
+
+    // A destructible's art is only ever moved, scaled, hidden and shown AS A WHOLE (see the
+    // wreck/reset paths) — nothing addresses a sub-mesh by name — so it can always be
+    // collapsed to one mesh per material family. Unmerged cone and paper stacks were 66
+    // meshes for ten props; every mesh in the scene is drawn three times a frame (shadow
+    // map, GTAO prepass, main pass), so this is worth ~2.4 draw calls per mesh removed.
+    obj = mergeVisual(obj);
+
     obj.name = `${kind}_art`;
     return obj;
   }

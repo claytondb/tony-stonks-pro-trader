@@ -36,7 +36,15 @@
  * Game.ts can keep setting exposure normally. On `setQuality('off')` or
  * `dispose()` the original tone mapping is restored.
  * Side effect: `tools/shoot.mjs --json` will report `toneMapping: 0` whenever
- * PostFX is active. That is expected, not a regression.
+ * PostFX is active. That is expected, not a regression — VERIFIED r5: the grade
+ * shader's tonemapACES() is a line-for-line match of three's ACESFilmicToneMapping
+ * (same `exposure / 0.6` pre-scale, same ACES input/output matrices, same
+ * RRTAndODTFit rational), so the curve applied is ACESFilmic, just applied on the
+ * HDR buffer inside the composer instead of by OutputPass at the very end. Doing
+ * it here is deliberate: the lift, the black-point re-anchor, the contrast S-curve
+ * and the split tone all need to run AFTER the tone curve, in a display-referred
+ * space, and OutputPass would put the curve after all of them.
+ * `renderer.__toneMapping` carries a human-readable statement of this at runtime.
  *
  * Grade tuned against refs/scene-office2.png and refs/scene-office3.png, whose
  * measured signature is: lifted blacks (p5 luma ~20/255), median luma ~0.37,
@@ -72,7 +80,14 @@ export interface GradeOptions {
   bloomRadius?: number;
   bloomThreshold?: number;
   aoIntensity?: number;
+  /** CA at frame centre. Ships at 0 — see the note in sampleScene(). */
   chromaticBase?: number;
+  /** Extra CA in the corners at uSpeed = 1. */
+  chromaticSpeed?: number;
+  /** Highlight path-to-white amount (0 = off). */
+  bleach?: number;
+  /** Luma at which the path-to-white starts. */
+  bleachKnee?: number;
 }
 
 /** GTAO debug views. 'default' is the shipping composite. */
@@ -121,8 +136,11 @@ uniform float uTime;
 uniform float uExposure;
 uniform float uSpeed;        // 0..1 radial blur / CA driver
 uniform float uPulse;        // 0..1 impact flash, decays over ~0.3s
-uniform float uChromaBase;   // baseline chromatic aberration
+uniform float uChromaBase;   // baseline chromatic aberration (see note in sampleScene)
+uniform float uChromaSpeed;  // additional CA at full speed
 uniform float uVignette;
+uniform float uBleach;       // highlight path-to-white amount
+uniform float uBleachKnee;   // luma at which the path-to-white starts
 uniform float uGrain;
 uniform float uSaturation;
 uniform float uContrast;
@@ -215,6 +233,23 @@ float hash21( vec2 p ) {
 }
 
 // Radial blur + chromatic aberration, both driven off distance from centre.
+//
+// CHROMATIC ABERRATION — WHY THE NUMBERS ARE THIS SMALL.
+// This pass runs on the HDR buffer, BEFORE the tone curve. A ceiling troffer sits at
+// ~2.2 linear against a ~0.15 linear tile: a 15:1 step across a line that is one or two
+// pixels wide on screen. Splitting R and B by even a third of a pixel across that step
+// leaves one channel on the fixture and another on the tile, and ACES then maps the pair
+// to a fully saturated magenta/green fringe. The old tuning did exactly that ALL THE
+// TIME: uChromaBase 0.0005 with a smoothstep(0.08, 0.78) falloff is ~0.4 px of split at
+// the frame edge and still ~0.15 px a third of the way out from centre — at rest, with
+// no speed input at all. Every fluorescent in the room got a red/cyan edge and the frame
+// read as a broken renderer rather than as a lens.
+//
+// So: the baseline is ZERO (the branch below then takes the single-tap path and the
+// frame is bit-exact clean at rest), the whole effect is gated on uSpeed SQUARED so it
+// stays invisible at a cruise and only announces itself flat out, and the radial term is
+// smoothstep(0.34, 1.0) SQUARED — genuinely nothing in the middle half of the frame,
+// ramping only into the corners where a real lens has lateral colour.
 vec3 sampleScene( vec2 uv, float jitter ) {
   vec2 dir = uv - CENTER;
   float rad = length( dir );
@@ -225,7 +260,10 @@ vec3 sampleScene( vec2 uv, float jitter ) {
   // so the curve is now slightly SUPERLINEAR-in-reverse — most of the effect arrives
   // early, then saturates.
   float blur = pow( uSpeed, 1.25 ) * 0.16 * edge;
-  float ca = ( uChromaBase + uSpeed * 0.020 ) * edge;
+
+  float caEdge = smoothstep( 0.34, 1.0, rad );
+  caEdge *= caEdge;
+  float ca = ( uChromaBase + uSpeed * uSpeed * uChromaSpeed ) * caEdge;
 
   if ( blur < 0.0009 ) {
     if ( ca < 0.00006 ) return texture2D( tDiffuse, uv ).rgb;
@@ -325,6 +363,24 @@ void main() {
     col = min( col, vec3( k ) ) + ( 1.0 - k ) * ( over / ( over + ( 1.0 - k ) ) );
   }
 
+  // highlight path-to-white ----------------------------------------------
+  // The shoulder above stops a channel CLIPPING, but it does nothing about hue: a hot
+  // surface keeps whatever chroma its albedo had, all the way to the top of the range.
+  // That is where the blown yellow-green slab on the near cubicle worktops came from —
+  // a warm laminate (albedo R/B ~3.0) under the warm key (R/B ~1.19) lands at R/B 1.8
+  // with a luma of 190/255, i.e. a big saturated yellow shape rather than a highlight.
+  // Film does not do that. Above a knee, real stock desaturates toward white.
+  //
+  // Mixing toward the MAX channel, not toward luma: toward luma would pull R and G down
+  // (darkening the highlight); toward max only pushes the deficient channel up, so the
+  // highlight brightens into white the way an over-exposed surface actually does. The
+  // knee keeps it off the amber floor pools and the warm mid-tones entirely.
+  {
+    float bl = dot( clamp( col, 0.0, 1.0 ), LUMA );
+    float mx = max( max( col.r, col.g ), col.b );
+    col = mix( col, vec3( mx ), uBleach * smoothstep( uBleachKnee, 1.0, bl ) );
+  }
+
   // vignette (aspect corrected, tightens slightly with speed) ------------
   float aspect = uResolution.x / max( uResolution.y, 1.0 );
   vec2 v = ( vUv - CENTER ) * vec2( aspect, 1.0 );
@@ -384,13 +440,28 @@ const GRADE_DEFAULTS = {
   black: 0.038,
   // 0.30 -> 0.24. At 0.30 the corners were the darkest thing in every frame,
   // which is where that p1 = 1.7 came from.
-  vignette: 0.24,
+  // 0.24 -> 0.20: with the AO now producing real near-black contact cores, the vignette
+  // no longer has to carry the bottom of the range, and at 0.24 it was over-contributing
+  // to a sub-32 population 4 points above the references'.
+  vignette: 0.2,
   grain: 0.026,
   // The split itself was right. It is now applied around a NEUTRAL white point
   // (see the tints below), so it can come down a little without losing the
   // separation it buys.
   split: 0.66,
-  chromaticBase: 0.0005,
+  // ZERO at rest. See the long note above sampleScene(): any non-zero baseline splits
+  // the channels across the 15:1 HDR step at every fluorescent edge and the "lens effect"
+  // reads as a rendering artifact. 0.0 also means the shader takes the single-tap branch,
+  // so a stationary frame is bit-exact.
+  chromaticBase: 0.0,
+  // Corner-only, speed-squared. 0.0055 uv at rad = 1 is ~5 px of split in the extreme
+  // corner at flat out, and ~1.4 px at a 0.5 speed cruise — under the radial blur, where
+  // it reads as velocity instead of as fringing.
+  chromaticSpeed: 0.0055,
+  // Highlight path-to-white. Knee sits above the amber floor pools (luma ~0.55-0.6) so
+  // the warm/cool split survives and only genuinely blown surfaces bleach.
+  bleach: 0.72,
+  bleachKnee: 0.56,
   // Refs never reach true black: their 1st-percentile luma is 6-9/255, and the
   // lift is cool because an office's darkest pixels are shadow, not fixture.
   lift: new THREE.Vector3(0.032, 0.034, 0.043),
@@ -406,8 +477,11 @@ const GRADE_DEFAULTS = {
   // cast. 1.11 here still reads amber against a 0.69 R/B shadow.
   shadowTint: new THREE.Vector3(0.825, 0.955, 1.155),
   highlightTint: new THREE.Vector3(1.09, 1.0, 0.90),
-  // Knee for the soft highlight shoulder in the grade shader.
-  shoulder: 0.9,
+  // Knee for the soft highlight shoulder in the grade shader. 0.90 -> 0.93: the knee
+  // exists to stop per-channel CLIPPING, and the new path-to-white below it now handles
+  // the hue side of a blown highlight, so the knee can sit higher and give the fixtures
+  // and the lit worktops back the top 3% of the range they were being compressed out of.
+  shoulder: 0.93,
 };
 
 // threshold 0.85 linear was above everything in the scene EXCEPT the emissive
@@ -424,7 +498,24 @@ const GRADE_DEFAULTS = {
 // genuine sources qualify, strength down by ~40% and the radius tightened so the
 // halo stays a halo. Paired with the grade's new highlight shoulder, the fixture
 // now keeps a visible gradient into its core instead of clipping flat.
-const BLOOM_DEFAULTS = { strength: 0.2, radius: 0.6, threshold: 0.72 };
+//
+// r5: THRESHOLD IS A GATE, NOT A SOFT KNEE. three's LuminosityHighPassShader is
+//   alpha = smoothstep( threshold, threshold + 0.01, luma );  out = mix( black, texel, alpha )
+// — a 0.01-wide step that passes the FULL texel through. So "threshold 0.72" did not mean
+// "bright things bloom a bit more"; it meant every pixel above 0.72 linear entered the
+// pyramid at full radiance. In this room that is not just the fixtures: the key is 4.6 and
+// a warm laminate worktop directly under a troffer lands at 1.5-2.5 linear, i.e. the DESKS
+// were blooming as hard as the lights. That is the yellow-green band smearing across the
+// ceiling/wall junction on the far side of the floorplate.
+//
+// The fixtures are the only things that should qualify. fluorescentDiffuser emits at
+// emissiveIntensity 2.2 with emissiveClamp 2.2 (luma ~2.05) and the pendant bulbs share
+// that clamp, so 1.5 sits comfortably below every fixture in the level and comfortably
+// above every merely-lit surface. Radius 0.6 -> 0.30 keeps the halo inside the troffer's
+// own tile instead of spilling a tile-and-a-half in every direction; strength comes up a
+// little because the pyramid now has far fewer contributors and the fixtures still have to
+// read as light.
+const BLOOM_DEFAULTS = { strength: 0.26, radius: 0.3, threshold: 1.5 };
 
 /** Wrap an addon constructor so a broken/absent pass degrades instead of throwing. */
 function tryMake<T>(label: string, factory: () => T): T | null {
@@ -496,8 +587,16 @@ export class PostFX {
     // factor, i.e. a hard black hole with no gradient. With the gate fixed the AO
     // buffer carries real range, so a mild extrapolation is all that's needed to
     // survive the grade's lift.
-    aoIntensity: 1.2,
+    // 1.2 -> 1.4. The blend is `mix(1, ao, i)`, so at 1.4 a fully-occluded texel lands at
+    // 1 + 1.4 * (0 - 1) = -0.4, clamped to black — which is exactly the "genuine near-black
+    // shadow core" the notes ask for, reached only where the geometry really does close up
+    // (the carpet line under a desk pedestal, a cubicle skirting, the chair caster cluster).
+    // Anything with ao > 0.29 still gets a gradient rather than a hole.
+    aoIntensity: 1.4,
     chromaticBase: GRADE_DEFAULTS.chromaticBase,
+    chromaticSpeed: GRADE_DEFAULTS.chromaticSpeed,
+    bleach: GRADE_DEFAULTS.bleach,
+    bleachKnee: GRADE_DEFAULTS.bleachKnee,
   };
 
   constructor(
@@ -606,12 +705,23 @@ export class PostFX {
         // exceeds it. `scale` is an EXPONENT on the AO term (ao = pow(ao, scale)), so
         // with the gate opened it has to come down from 2.6 or every contact turns
         // into a black hole.
+        //
+        // r5: radius 0.9 -> 0.62. 0.9 m is ROOM-scale occlusion — it darkens the whole
+        // inside of a cubicle bay by a similar small amount and puts almost nothing
+        // specifically at the contact line, which is why the frame still read as
+        // "everything hovers on a flat carpet". The contacts that have to be visible are
+        // small: a desk pedestal meeting the floor, a cubicle skirting, the caster
+        // cluster, a filing cabinet base — all sub-0.5 m features. Sizing the radius to
+        // them concentrates the same AO budget into a tight, dark, soft band exactly at
+        // the junction. thickness stays comfortably above the radius (the gate rule that
+        // made AO work at all) and `scale`, being an exponent, comes up to deepen the
+        // core now that the term is narrow enough not to grey out the whole bay.
         p.updateGtaoMaterial({
-          radius: 0.9,
-          distanceExponent: 1.2,
-          thickness: 1.6,
+          radius: 0.62,
+          distanceExponent: 1.0,
+          thickness: 1.8,
           distanceFallOff: 1.0,
-          scale: 1.5,
+          scale: 1.7,
           samples: tier.aoSamples,
           screenSpaceRadius: false,
         });
@@ -673,6 +783,9 @@ export class PostFX {
           uSpeed: { value: 0 },
           uPulse: { value: 0 },
           uChromaBase: { value: this.opts.chromaticBase },
+          uChromaSpeed: { value: this.opts.chromaticSpeed },
+          uBleach: { value: this.opts.bleach },
+          uBleachKnee: { value: this.opts.bleachKnee },
           uVignette: { value: this.opts.vignette },
           uGrain: { value: this.opts.grain },
           uSaturation: { value: this.opts.saturation },
@@ -721,6 +834,35 @@ export class PostFX {
     } else {
       this.renderer.toneMapping = this.savedToneMapping;
     }
+    this.stampToneMappingMarker();
+  }
+
+  /**
+   * Leave a human-readable marker on the renderer describing WHO is tone mapping.
+   *
+   * `tools/shoot.mjs --json` only reports `renderer.toneMapping`, and while PostFX is
+   * live that is always 0 / NoToneMapping. Reading that number on its own has twice been
+   * mistaken for "ACES is not being applied". It is being applied — by the grade shader,
+   * on the HDR buffer, with three's exact ACESFilmic maths (the same 1/0.6 pre-scale, the
+   * same ACES input/output matrices, the same RRT+ODT fit) so that the curve sits BEFORE
+   * the grade rather than after it. Anything else and the lift/S-curve/split would be
+   * operating on already-display-referred pixels.
+   *
+   * Inspect at runtime with `game.renderer.__toneMapping`.
+   */
+  private stampToneMappingMarker(): void {
+    const active = this.composer !== null && this.gradePass !== null;
+    (this.renderer as unknown as Record<string, unknown>)['__toneMapping'] = active
+      ? `ACESFilmic (PostFX grade shader, HDR-side); renderer.toneMapping forced to ` +
+        `NoToneMapping so OutputPass only does the sRGB transfer. exposure=${this.lastSeenExposure}`
+      : `renderer-side, toneMapping=${this.renderer.toneMapping}, exposure=${this.lastSeenExposure}`;
+  }
+
+  /** What is actually tone mapping this frame, and where. Diagnostic. */
+  get toneMappingReport(): string {
+    return String(
+      (this.renderer as unknown as Record<string, unknown>)['__toneMapping'] ?? 'unknown'
+    );
   }
 
   private teardown(): void {
@@ -748,6 +890,7 @@ export class PostFX {
   private restoreToneMapping(): void {
     this.renderer.toneMapping = this.savedToneMapping;
     this.renderer.info.autoReset = true;
+    this.stampToneMappingMarker();
   }
 
   // -------------------------------------------------------------------------
@@ -863,6 +1006,9 @@ export class PostFX {
       u['uSplit'].value = this.opts.split;
       u['uShoulder'].value = this.opts.shoulder;
       u['uChromaBase'].value = this.opts.chromaticBase;
+      u['uChromaSpeed'].value = this.opts.chromaticSpeed;
+      u['uBleach'].value = this.opts.bleach;
+      u['uBleachKnee'].value = this.opts.bleachKnee;
     }
     if (this.bloomPass) {
       this.bloomPass.strength = this.opts.bloomStrength;
@@ -898,6 +1044,7 @@ export class PostFX {
     // Adopt any exposure change Game.ts made, then keep tone mapping ours.
     if (this.renderer.toneMappingExposure !== this.lastSeenExposure) {
       this.lastSeenExposure = this.renderer.toneMappingExposure;
+      this.stampToneMappingMarker();
     }
     if (this.gradePass) {
       if (this.renderer.toneMapping !== THREE.NoToneMapping) {

@@ -178,12 +178,34 @@ function withUV1(g: THREE.BufferGeometry): THREE.BufferGeometry {
   return out;
 }
 
-function plane(w: number, h: number): THREE.BufferGeometry {
-  return withUV1(new THREE.PlaneGeometry(w, h));
+/**
+ * Scale a geometry's UVs in place, once per distinct attribute object (withUV1 clones, but be
+ * defensive — an aliased uv1 would otherwise get the factor applied twice).
+ *
+ * This exists so wall bands can be drawn with the SAME `drywall` material instance the props
+ * use. Tiling density asked for as a material `repeat` forks the texture set, forks the merge
+ * bucket, and costs a permanent draw call; the same density expressed in the vertices is free.
+ */
+function scaleUV(g: THREE.BufferGeometry, su: number, sv: number): THREE.BufferGeometry {
+  const seen = new Set<unknown>();
+  for (const name of ['uv', 'uv1']) {
+    const a = g.getAttribute(name);
+    if (!a || seen.has(a)) continue;
+    seen.add(a);
+    for (let i = 0; i < a.count; i++) a.setXY(i, a.getX(i) * su, a.getY(i) * sv);
+    a.needsUpdate = true;
+  }
+  return g;
 }
 
-function box(w: number, h: number, d: number): THREE.BufferGeometry {
-  return withUV1(new THREE.BoxGeometry(w, h, d));
+function plane(w: number, h: number, uv?: [number, number]): THREE.BufferGeometry {
+  const g = withUV1(new THREE.PlaneGeometry(w, h));
+  return uv ? scaleUV(g, uv[0], uv[1]) : g;
+}
+
+function box(w: number, h: number, d: number, uv?: [number, number]): THREE.BufferGeometry {
+  const g = withUV1(new THREE.BoxGeometry(w, h, d));
+  return uv ? scaleUV(g, uv[0], uv[1]) : g;
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +424,15 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // into the level's existing deskLaminate / cubicleTrim buckets. Net: five buckets to zero.
   const DADO_H = 1.15;
   const RAIL_H = 0.085;
-  const WALL_REPEAT: [number, number] = [W / 4, H / 2.6];
+  // THE REPEAT IS THE LIBRARY'S, AND THE DENSITY LIVES IN THE UVs.
+  //
+  // These bands used to ask for `drywall` at [W/4, H/2.6]. OfficeProps' partition walls ask for
+  // the SAME surface at the library default [3, 2]. Two repeats = two texture sets = two merge
+  // buckets = a permanent extra draw call for a wall that is already merged into the batch. So
+  // the material is now shared and the tiling is baked into each band's UVs via WALL_UV, which
+  // reproduces exactly the density that shipped.
+  const WALL_REPEAT: [number, number] = [3, 2];
+  const WALL_UV: [number, number] = [W / 4 / WALL_REPEAT[0], H / 2.6 / WALL_REPEAT[1]];
   const wallMat = MaterialLibrary.get('drywall', { repeat: WALL_REPEAT, color: 0xd6cfc2 });
   const dadoMat = MaterialLibrary.get('drywall', { repeat: WALL_REPEAT, color: 0x33405c });
   const railMat = MaterialLibrary.get('deskLaminate', { color: 0xc9a877 });
@@ -420,13 +450,13 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     const inZ = spec.z + nz * 0.0;
 
     // Painted plaster above the rail.
-    const upper = new THREE.Mesh(plane(spec.w, H - DADO_H - RAIL_H), wallMat);
+    const upper = new THREE.Mesh(plane(spec.w, H - DADO_H - RAIL_H, WALL_UV), wallMat);
     upper.receiveShadow = true;
     upper.castShadow = false;
     place(acc, upper, inX, (H + DADO_H + RAIL_H) / 2, inZ, spec.rotY, { collide: false });
 
     // Saturated dado. Proud of the plaster by 25 mm so the rail throws a real shadow line.
-    const dado = new THREE.Mesh(box(spec.w, DADO_H, 0.05), dadoMat);
+    const dado = new THREE.Mesh(box(spec.w, DADO_H, 0.05, WALL_UV), dadoMat);
     dado.receiveShadow = true;
     dado.castShadow = false;
     place(acc, dado, inX + nx * 0.025, DADO_H / 2, inZ + nz * 0.025, spec.rotY, { collide: false });
@@ -501,7 +531,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // establishing shot, it stripes it out. A vertical band at the perimeter never occludes.
   const parapetMat = MaterialLibrary.get('drywall', { repeat: WALL_REPEAT, color: 0x5a5348 });
   for (const spec of wallSpecs) {
-    const band = new THREE.Mesh(plane(spec.w, 1.9), parapetMat);
+    const band = new THREE.Mesh(plane(spec.w, 1.9, WALL_UV), parapetMat);
     band.castShadow = false;
     band.receiveShadow = false;
     place(acc, band, spec.x, H + 0.9, spec.z, spec.rotY, { collide: false });

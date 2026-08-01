@@ -187,6 +187,17 @@ export interface AnimatorConfig {
   pelvisForward: number;
   /** Pelvis lateral offset, metres. */
   pelvisLateral: number;
+  /**
+   * SOLVE `pelvisForward` and clamp `pelvisAboveSeat` from the rig's real bone lengths and the
+   * chair's real pan height, instead of trusting the authored numbers.
+   *
+   * The planted thigh is an AIM, not a position solve: the knee always lands one thigh-length
+   * from the hip joint, so the pelvis has exactly one Z that puts the knee on the spot we asked
+   * for. Authoring that Z by hand is only correct for one rig and one chair tier; get it wrong
+   * and the knee walks off the front of the cushion or buries itself in the backrest. Solving
+   * it makes the kneel exact on all four tiers and on any rig proportions.
+   */
+  autoPelvis: boolean;
 
   /**
    * Radius of the shin's flesh, metres. The knee JOINT is a centreline, so a shin resting ON the
@@ -859,6 +870,15 @@ const _decompScale = new THREE.Vector3();
 const _ikA = new THREE.Vector3();
 const _ikN = new THREE.Vector3();
 const _ikJoint = new THREE.Vector3();
+/**
+ * solveTwoBone's own aim scratch. It MUST NOT be one of the general-purpose _v1.._v3, because
+ * every caller builds its pole vector in one of those and passes it in by reference — writing
+ * the aim direction over _v3 silently overwrote the caller's pole with the aim itself, which
+ * made pole and aim parallel, which sent the solver down its degenerate fallback branch every
+ * single time. That is why both elbows broke upward instead of outward-and-down, and why the
+ * rider's arms read as a T-rex reach no matter what the pole was set to.
+ */
+const _ikDir = new THREE.Vector3();
 const _accQ = new THREE.Quaternion();
 const _accV = new THREE.Vector3();
 const _armPos = new THREE.Vector3();
@@ -923,16 +943,29 @@ export class TrickAnimator {
     rigForward: 1,
     autoFacing: true,
     modelYaw: 0,
-    stance: 'regular',
+    // STANCE IS A FRAMING DECISION, not an ergonomic one.
+    //
+    // The chair is a solid object roughly the size of the rider's whole lower body, so exactly
+    // one of the two legs is ever visible: whichever one is on the camera's side. The knee on
+    // the pan is behind the backrest from every angle; the leg that reaches the floor is the
+    // only part of the stance that can actually be seen, and it is the part that says "he is
+    // kicking this thing along" rather than "he is sitting in it".
+    //
+    // `goofy` (right knee planted, LEFT leg working) puts that working leg on the chair's +X
+    // side, which is the open side in the two hero cameras and is symmetric in the chase
+    // camera. Trick signatures are authored for `regular` and mirrored at evaluation time, so
+    // nothing else in this file has to know.
+    stance: 'goofy',
 
     pelvisAboveSeat: 0.265,
-    pelvisForward: -0.275,
+    pelvisForward: -0.245,      // solved at bind time unless autoPelvis is off
     pelvisLateral: 0,
+    autoPelvis: true,
 
-    shinRadius: 0.072,
-    kneeSink: 0.020,
-    kneeForward: 0.100,
-    kneeOutboard: 0.135,
+    shinRadius: 0.066,
+    kneeSink: 0.006,
+    kneeForward: 0.085,
+    kneeOutboard: 0.150,
     shinDroop: 0.02,
 
     backTopY: CHAIR_BACK_TOP_Y[1],
@@ -940,17 +973,25 @@ export class TrickAnimator {
     handsApart: CHAIR_BACK_GRIP_HALF_W[1],
     gripRise: 0.045,
 
-    ankleRise: 0.090,
-    pushReach: 0.265,
-    pushDrive: -0.285,
-    pushApart: 0.310,
+    ankleRise: 0.075,
+    pushReach: 0.290,
+    pushDrive: -0.300,
+    pushApart: 0.325,
     pushLift: 0.150,
-    pushCycle: 0.60,
-    coastLift: 0.055,
-    coastTrail: -0.120,
+    pushCycle: 0.62,
+    coastLift: 0.045,
+    coastTrail: -0.135,
 
-    leanBase: 0.340,
-    leanSpeed: 0.240,
+    // LEAN. This is not a taste knob — it is what decides the arms.
+    //
+    // The grip line is fixed in space (it is the backrest's top edge) and the shoulders are
+    // wherever the lean puts them, so the arm bend falls out of the difference. At the old
+    // 0.34 rad the shoulders sat 0.45 m from the rail on a 0.48 m arm: 94% extension, both
+    // arms locked out horizontally in front of the chest, which is the T-rex reach the review
+    // called out. 0.55 rad brings the shoulders to ~0.38 m — a visibly bent arm — and reads as
+    // a man driving a scooter rather than a man sitting up straight holding a tray.
+    leanBase: 0.550,
+    leanSpeed: 0.260,
     leanSpeedRef: 12,
 
     fallbackHipHeight: 0.95,
@@ -1000,6 +1041,8 @@ export class TrickAnimator {
   private lenForeArm = 0.26;
   /** How far the rig's shoe hangs below its ankle joint, metres. Measured at bind time. */
   private footDrop = 0;
+  /** The pelvis height as authored, before solvePelvis() clamps it to the leg's reach. */
+  private authoredPelvisAbove = NaN;
 
   // Per-frame IK outputs. Reused, never reallocated.
   private ikUpper = new THREE.Vector3();
@@ -1357,23 +1400,23 @@ export class TrickAnimator {
     const maxReach = (l1 + l2) * 0.995;
     const minReach = Math.abs(l1 - l2) + 1e-3;
     let d = target.length();
-    if (d < 1e-5) { _v3.set(0, -1, 0); d = minReach; } else _v3.copy(target).divideScalar(d);
+    if (d < 1e-5) { _ikDir.set(0, -1, 0); d = minReach; } else _ikDir.copy(target).divideScalar(d);
     d = Math.min(maxReach, Math.max(minReach, d));
 
     const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
     const h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
 
-    _ikN.copy(pole).addScaledVector(_v3, -pole.dot(_v3));
+    _ikN.copy(pole).addScaledVector(_ikDir, -pole.dot(_ikDir));
     if (_ikN.lengthSq() < 1e-8) {
-      _ikN.set(0, 0, 1).addScaledVector(_v3, -_v3.z);
-      if (_ikN.lengthSq() < 1e-8) _ikN.set(1, 0, 0).addScaledVector(_v3, -_v3.x);
+      _ikN.set(0, 0, 1).addScaledVector(_ikDir, -_ikDir.z);
+      if (_ikN.lengthSq() < 1e-8) _ikN.set(1, 0, 0).addScaledVector(_ikDir, -_ikDir.x);
     }
     _ikN.normalize();
 
-    _ikJoint.copy(_v3).multiplyScalar(a).addScaledVector(_ikN, h);
+    _ikJoint.copy(_ikDir).multiplyScalar(a).addScaledVector(_ikN, h);
     outUpper.copy(_ikJoint).normalize();
-    _ikA.copy(_v3).multiplyScalar(d).sub(_ikJoint);
-    if (_ikA.lengthSq() < 1e-10) _ikA.copy(_v3);
+    _ikA.copy(_ikDir).multiplyScalar(d).sub(_ikJoint);
+    if (_ikA.lengthSq() < 1e-10) _ikA.copy(_ikDir);
     outLower.copy(_ikA).normalize();
   }
 
@@ -1444,13 +1487,71 @@ export class TrickAnimator {
     out.set(hx * horiz, dy, hz * horiz);
   }
 
+  /**
+   * Solve the pelvis against the rig's own leg and the chair's own pan, so the kneel is exact
+   * on every tier and every rig instead of only on the one it was authored against.
+   *
+   * TWO constraints, applied in that order:
+   *
+   *  1. HEIGHT is capped by the push leg. The pelvis is as high as it can be while the kicking
+   *     foot still reaches the floor out beside the caster ring, with 6% of the leg kept in
+   *     reserve so the knee never locks straight. Past that the shoe simply hovers, which is
+   *     the "foot floating above the floor" defect.
+   *  2. DEPTH then follows exactly. Given that height, the planted thigh has a fixed vertical
+   *     drop onto the pan, so its horizontal run is fixed too, so there is precisely one pelvis
+   *     Z that lands the knee on the spot we asked for. No guessing.
+   */
+  private solvePelvis(): void {
+    const c = this.config;
+    const i = this.plantedIndex();
+    const side = i === 0 ? 1 : -1;
+    const legLen = this.lenThigh + this.lenShin;
+    // Remember what was asked for: the clamp below only ever lowers the pelvis, so re-solving
+    // for a shorter chair has to start from the authored height, not from the last answer.
+    if (!Number.isFinite(this.authoredPelvisAbove)) this.authoredPelvisAbove = c.pelvisAboveSeat;
+    else c.pelvisAboveSeat = this.authoredPelvisAbove;
+
+    // --- 1. height, capped by the push leg's reach to the floor -------------------------
+    const pi = this.pushIndex();
+    const rise = Math.max(c.ankleRise, this.footDrop + 0.006);
+    const lateral = Math.abs((pi === 0 ? 1 : -1) * c.pushApart - this.hipJointRel[pi].x);
+    const usable = legLen * 0.94;
+    const vDrop = Math.sqrt(Math.max(0.01, usable * usable - lateral * lateral));
+    // hipJointY = seat.y + h + hipJointRel.y, and it may sit at most vDrop above the ankle.
+    const hMax = (rise + vDrop) - this.seatLocal.y - this.hipJointRel[pi].y;
+    const h = Math.min(c.pelvisAboveSeat, Math.max(0.10, hMax));
+    c.pelvisAboveSeat = h;
+
+    // --- 2. depth, solved so the knee lands on the pan where we asked ------------------
+    const hipY = this.seatLocal.y + h + this.hipJointRel[i].y;
+    let dy = (this.kneeTopY() - hipY) / Math.max(0.05, this.lenThigh);
+    dy = Math.max(-0.985, Math.min(0.985, dy));
+    const horiz = this.lenThigh * Math.sqrt(Math.max(0, 1 - dy * dy));
+    const dx = side * c.kneeOutboard - (c.pelvisLateral + this.hipJointRel[i].x);
+    const run = Math.sqrt(Math.max(0, horiz * horiz - dx * dx));
+    // knee z = pelvisZ + hipJointRel.z + run  =>  pelvisForward = kneeForward - run - hipRel.z
+    c.pelvisForward = c.kneeForward - run - this.hipJointRel[i].z;
+  }
+
   private solveRidePose(): void {
     const c = this.config;
 
     this.lenThigh = this.limbLength(THIGH_L, SHIN_L, 0.42);
     this.lenShin = this.limbLength(SHIN_L, FOOT_L, 0.40);
     this.lenUpArm = this.limbLength(UARM_L, FARM_L, 0.28);
-    this.lenForeArm = this.limbLength(FARM_L, HAND_L, 0.26);
+    // A rig with no hand joint (the procedural rider has none — the fist is part of the forearm
+    // mesh) used to fall back to a flat 0.26 m forearm. On a 0.245 m upper arm that is 6% of
+    // over-estimate on the reach, and the grip IK spends it by leaving both hands short of the
+    // rail. Scale the fallback off the upper arm instead, which every humanoid roughly matches.
+    this.lenForeArm = this.limbLength(FARM_L, HAND_L, this.lenUpArm * 0.95);
+
+    for (let i = 0; i < 2; i++) {
+      this.restOffsetFromHips(i === 0 ? THIGH_L : THIGH_R, this.hipJointRel[i],
+        (i === 0 ? 1 : -1) * 0.09, -0.06, 0);
+      this.restOffsetFromHips(i === 0 ? UARM_L : UARM_R, this.armRootRel[i],
+        (i === 0 ? 1 : -1) * 0.17, 0.42, 0);
+    }
+    if (c.autoPelvis) this.solvePelvis();
 
     // Pelvis in the chair's frame (this is where placeModel() will put the hips bone).
     const pelvisY = this.seatLocal.y + c.pelvisAboveSeat;
@@ -1458,9 +1559,6 @@ export class TrickAnimator {
 
     for (let i = 0; i < 2; i++) {
       const side = i === 0 ? 1 : -1;   // model-space X sign: 0 = left (+X), 1 = right (-X)
-
-      this.restOffsetFromHips(i === 0 ? THIGH_L : THIGH_R, this.hipJointRel[i], side * 0.09, -0.06, 0);
-      this.restOffsetFromHips(i === 0 ? UARM_L : UARM_R, this.armRootRel[i], side * 0.17, 0.42, 0);
 
       // --- backrest grip, relative to the hips bone -------------------------------------
       this.gripRel[i].set(
@@ -1476,10 +1574,15 @@ export class TrickAnimator {
         pelvisZ + this.hipJointRel[i].z, this.kneelThigh[i]);
 
       // Shin trails back along the pan behind him, drooping just enough that the ankle clears
-      // the cushion instead of intersecting it.
-      this.kneelShin[i].set(side * 0.10, -c.shinDroop, -1).normalize();
-      // Foot hangs off the leading edge, toes down and back.
-      this.kneelFoot[i].set(side * 0.06, -0.62, -0.78).normalize();
+      // the cushion instead of intersecting it, and swung OUTBOARD so the ankle leaves the pan
+      // over its front corner rather than dead ahead. That outboard component is what makes the
+      // planted leg visible at all: run the shin straight down the centre line and the backrest
+      // hides the entire limb from the follow camera, which sits behind the rider. The angle is
+      // held under ~13 deg so the shin still passes in FRONT of the armrest's leading edge
+      // (z -0.128 on tier 1) instead of through the pad.
+      this.kneelShin[i].set(side * 0.22, -0.07 - c.shinDroop, -0.97).normalize();
+      // Foot hangs off the leading corner, toes down and back.
+      this.kneelFoot[i].set(side * 0.10, -0.66, -0.74).normalize();
     }
   }
 
@@ -2001,15 +2104,22 @@ export class TrickAnimator {
     }
     _v1.set(side * c.pushApart, footY, footZ);
 
-    // --- the coasting target: tucked up alongside the chair, clear of the floor ------------
-    // Down beside the caster ring and trailing behind him, hovering `coastLift` off the carpet:
-    // close enough to the floor to read as "ready to kick again", far enough back that the shoe
-    // never ploughs through a spoke or drags a shin across the seat.
-    _v2.set(side * (c.pushApart + 0.050), floorY + rise + c.coastLift, c.coastTrail);
+    // --- the coasting target: tucked in alongside the chair --------------------------------
+    // Down beside the caster ring and trailing behind him, far enough back that the shoe never
+    // ploughs through a spoke or drags a shin across the seat.
+    //
+    // The lift off the carpet is SPEED SCALED, and that matters more than it looks. At a
+    // standstill a foot hovering five centimetres over the floor is the single most obvious
+    // tell that a character is not standing on anything — and a standstill is exactly the frame
+    // every screenshot and every menu idle catches. So: sole planted when stopped, tucked up
+    // only once he is actually rolling and the lift reads as a tuck rather than as a bug.
+    const roll = Math.min(1, this.speedSm / 3.5);
+    _v2.set(side * (c.pushApart + 0.045), floorY + rise + c.coastLift * roll, c.coastTrail);
 
     const drive = Math.max(0, Math.min(1, this.pushSm)) * (1 - this.airSm);
     _v1.lerp(_v2, 1 - drive);
-    toeDown = toeDown * drive + 0.15 * (1 - drive);
+    // Flat sole while the foot is down and stopped; toe drops as it comes off the floor.
+    toeDown = toeDown * drive + (0.04 + 0.16 * roll) * (1 - drive);
 
     // --- turn counterweight ----------------------------------------------------------------
     // The free leg is the only mass he can throw, so it swings out and back on the outside of a

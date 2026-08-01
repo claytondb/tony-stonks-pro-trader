@@ -54,6 +54,7 @@ const KEYS = String(arg('keys', '')).split(',').map((s) => s.trim()).filter(Bool
 const SHOW_HUD = has('hud');
 const SETTLE = Number(arg('settle', 900));
 const WANT_JSON = has('json');
+const NO_SHOT = has('noshot');
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
 
 const freePort = () =>
@@ -202,6 +203,20 @@ async function main() {
       const g = window.game;
       const r = g?.renderer;
       let tris = 0, meshes = 0, mats = new Set(), texs = new Set();
+      // Draw calls are roughly (visible meshes) x (number of scene passes: shadow map,
+      // GTAO depth/normal prepass, main). So the useful diagnostic is not the raw mesh
+      // count but how many are VISIBLE, how many of those cast shadows, and which
+      // subtree they belong to. `owners` is the census that tells you where to optimise.
+      let visibleMeshes = 0, shadowCasters = 0;
+      const owners = {};
+      const isShown = (o) => { for (let p = o; p; p = p.parent) if (!p.visible) return false; return true; };
+      const ownerOf = (o) => {
+        let name = '';
+        for (let p = o; p && p.parent; p = p.parent) if (p.name) name = p.name;
+        // Meshes parented straight onto the scene have no named ancestor; fall back to the
+        // mesh's own name, then its material's, so nothing lands in an opaque "unknown" bucket.
+        return name || o.name || (o.material && o.material.name) || `anon:${o.type}`;
+      };
       g?.scene?.traverse?.((o) => {
         if (o.isMesh) {
           meshes++;
@@ -210,12 +225,22 @@ async function main() {
           else if (gm?.attributes?.position) tris += gm.attributes.position.count / 3;
           const m = o.material;
           (Array.isArray(m) ? m : [m]).forEach((mm) => mm && mats.add(mm.uuid));
+          if (isShown(o)) {
+            visibleMeshes++;
+            if (o.castShadow) shadowCasters++;
+            const k = ownerOf(o);
+            owners[k] = (owners[k] || 0) + 1;
+          }
         }
       });
+      const topOwners = Object.entries(owners).sort((a, b) => b[1] - a[1]).slice(0, 12);
       return {
         drawCalls: r?.info?.render?.calls ?? null,
         triangles: Math.round(tris),
         meshes,
+        visibleMeshes,
+        shadowCasters,
+        topOwners,
         materials: mats.size,
         programs: r?.info?.programs?.length ?? null,
         textures: r?.info?.memory?.textures ?? null,
@@ -229,7 +254,10 @@ async function main() {
     // Software WebGL (SwiftShader) renders the full post-FX stack at a fraction of a
     // frame per second, so a single screenshot can take minutes. The default 30s cap
     // was silently failing every capture once GTAO + bloom + SMAA came online.
-    await page.screenshot({ path: OUT, timeout: 240000, animations: 'allow' });
+    // --nostat/--noshot: the PNG encode under SwiftShader is minutes; when you are only
+    // iterating on draw calls the stats block above is all you need, and skipping the
+    // screenshot turns a 3-minute probe into a 30-second one.
+    if (!NO_SHOT) await page.screenshot({ path: OUT, timeout: 240000, animations: 'allow' });
   } catch (e) {
     report.errors.push(`HARNESS: ${String(e).slice(0, 600)}`);
     exitCode = 1;

@@ -174,6 +174,37 @@ function finalize(geo: THREE.BufferGeometry, smooth = false): THREE.BufferGeomet
 }
 
 /**
+ * Scale a geometry's UVs in place.
+ *
+ * TILING DENSITY BELONGS IN THE UVs, NOT IN A MATERIAL FORK. Asking MaterialLibrary for the
+ * same surface at a different `repeat` forks the texture set, which forks the merge bucket,
+ * which costs a draw call in every batch that prop appears in — forever. Scaling the vertices'
+ * UVs costs nothing and merges.
+ *
+ * `finalize()` aliases uv1 to the SAME BufferAttribute as uv, so scale each attribute object at
+ * most once or the second pass squares the factor.
+ */
+function scaleUV(g: THREE.BufferGeometry, su: number, sv: number): THREE.BufferGeometry {
+  const seen = new Set<unknown>();
+  for (const name of ['uv', 'uv1']) {
+    const a = g.getAttribute(name);
+    if (!a || seen.has(a)) continue;
+    seen.add(a);
+    for (let i = 0; i < a.count; i++) a.setXY(i, a.getX(i) * su, a.getY(i) * sv);
+    a.needsUpdate = true;
+  }
+  return g;
+}
+
+/**
+ * Ramp decks are built with ExtrudeGeometry, whose default UV generator emits METRES. The deck
+ * laminate used to buy its own material (repeat 0.55 x 0.42) to compensate; this factor moves
+ * that same density onto the geometry so the deck can be drawn with the level's one desk
+ * laminate. 0.55/3 and 0.42/2 against the library's [3, 2] repeat = the tiling that shipped.
+ */
+const RAMP_UV: [number, number] = [0.55 / 3, 0.42 / 2];
+
+/**
  * Emit one convex, planar polygon as a triangle fan with a hard face normal and a planar
  * UV projection. Winding is derived, not assumed: the polygon normal is computed with
  * Newell's method and flipped if it points at the origin, which is correct for every
@@ -439,9 +470,35 @@ const PAINT = (color: number): [MaterialId, MaterialOptions] => [
 const PAPER_ROUGHNESS = 0.95; // = the library spec, so MAT.paper joins the same family
 const PAPER = (color: number): [MaterialId, MaterialOptions] => ['paper', { color, roughness: PAPER_ROUGHNESS }];
 
+/**
+ * THE ONE STEEL FAMILY.
+ *
+ * `familyKey()` buckets two materials together when they differ ONLY in `.color` — a colour
+ * difference becomes a vertex attribute and costs nothing. Anything else (a different `repeat`,
+ * a different `roughness`, a different `envMapIntensity`) forks the texture set, forks the
+ * bucket, and buys a draw call FOREVER — in the office batch, and again in every grind rail,
+ * kicker and water cooler the level data places, and again in every destructible spawned from
+ * an OfficeProps builder.
+ *
+ * There used to be FIVE metal families here: `brushedMetal` default (repeat 2x2, rough 0.38),
+ * `brushedMetal` at rough 0.42 for desk frames, `chrome` (no map, rough 0.06), `grindMetal`
+ * (repeat 8x1, rough 0.22) and a 0.11-roughness "polished" fork of it. Five shaders and five
+ * draw calls for what the eye reads as one material: office steel. They are now one spec, and
+ * the visual difference between them is carried by albedo, which is free.
+ *
+ * Anisotropic tiling (8x1) is the right default for all of it: brushed steel IS directional,
+ * and every part that uses it — desk legs, rail shafts, coping, cooler trim — is a long thin
+ * extrusion whose UVs run along its length.
+ */
+const STEEL_OPTS = { repeat: [8, 1] as [number, number] };
+const STEEL = (color?: number): [MaterialId, MaterialOptions] => [
+  'grindMetal',
+  color === undefined ? STEEL_OPTS : { ...STEEL_OPTS, color },
+];
+
 const MAT = {
   deskTop: ['deskLaminate', undefined] as [MaterialId, MaterialOptions | undefined],
-  deskFrame: ['brushedMetal', { color: 0xa9aeb5, roughness: 0.42 }] as [MaterialId, MaterialOptions],
+  deskFrame: STEEL(0xa9aeb5),
   pedestal: PAINT(0xb4b9bf),
   panelFabric: ['cubicleFabric', undefined] as [MaterialId, MaterialOptions | undefined],
   /**
@@ -453,29 +510,50 @@ const MAT = {
   panelCap: ['cubicleTrim', undefined] as [MaterialId, MaterialOptions | undefined],
   plastic: ['darkPlastic', undefined] as [MaterialId, MaterialOptions | undefined],
   plasticLight: ['darkPlastic', { color: 0xb9c0c8 }] as [MaterialId, MaterialOptions],
-  metal: ['brushedMetal', undefined] as [MaterialId, MaterialOptions | undefined],
-  chrome: ['chrome', undefined] as [MaterialId, MaterialOptions | undefined],
+  metal: STEEL(),
+  /** Bright steel trim. Same family as every other metal in the level — see STEEL above. */
+  chrome: STEEL(0xf1f3f6),
   cabinetBeige: PAINT(0xd6ccb4),
   cabinetGrey: PAINT(0xc3c7cb),
   applianceGrey: PAINT(0xdedbd4),
   lampShade: PAINT(0x2c3646),
   binDark: PAINT(0x4a5059),
-  ceramic: ['whiteboard', { color: 0xf2f0ec, roughness: 0.18 }] as [MaterialId, MaterialOptions],
+  /**
+   * Glazed ceramic — mugs, whiteboard faces, clock bezels. The roughness override that used to
+   * live here (0.18 against the library's 0.10) forked the whiteboard family in three, for a
+   * gloss difference nothing in the level is close enough to the camera to resolve.
+   */
+  ceramic: ['whiteboard', { color: 0xf2f0ec }] as [MaterialId, MaterialOptions],
   paper: ['paper', undefined] as [MaterialId, MaterialOptions | undefined],
   cork: ['cardboard', { color: 0xa89070 }] as [MaterialId, MaterialOptions],
   cardboard: ['cardboard', undefined] as [MaterialId, MaterialOptions | undefined],
   glass: ['glass', undefined] as [MaterialId, MaterialOptions | undefined],
   plant: ['plantGreen', undefined] as [MaterialId, MaterialOptions | undefined],
-  pot: ['terracotta', undefined] as [MaterialId, MaterialOptions | undefined],
-  wood: ['woodFloor', { color: 0x7d6042, roughness: 0.55 }] as [MaterialId, MaterialOptions],
+  /**
+   * Terracotta. Drawn on the `plantGreen` spec — both are untextured flat-shaded dielectrics
+   * that differ only in albedo, and albedo is the one thing the family merge carries for free.
+   * A dedicated `terracotta` material bought a second draw call in the office batch and a
+   * second one inside every potted plant the level and the destructible system spawn.
+   */
+  pot: ['plantGreen', { color: 0x7d3f20 }] as [MaterialId, MaterialOptions],
+  /**
+   * Dark timber — conference tables, manager desks. Was its OWN `woodFloor` surface for one
+   * table top; a tinted desk laminate is indistinguishable at gameplay distance and joins the
+   * family every desk in the level is already drawn in.
+   */
+  wood: ['deskLaminate', { color: 0x7d6042 }] as [MaterialId, MaterialOptions],
   /**
    * Ramp deck. Office laminate, not floorboard: the ramps in this game are improvised out of
    * office furniture, and — more practically — ExtrudeGeometry emits UVs in METRES, so the
    * library's woodFloor plank map tiled across a 3 m wedge as a saturated orange
-   * chequerboard. deskLaminate at ~one tile per 2 m gives a fine warm grain that holds up at
-   * the distance the player actually looks at a kicker from.
+   * chequerboard.
+   *
+   * The `repeat`/`roughness` overrides that used to live here forked the desk-laminate family
+   * for the sake of one prop type. Tiling density belongs in the geometry's UVs, not in the
+   * material (same doctrine as the grind steel below) — `wedge()` and `transition()` scale
+   * their own UVs by RAMP_UV so the deck grain lands at the same density it always did.
    */
-  plywood: ['deskLaminate', { color: 0xd8c49a, roughness: 0.52, repeat: [0.55, 0.42] }] as [MaterialId, MaterialOptions],
+  plywood: ['deskLaminate', { color: 0xd8c49a }] as [MaterialId, MaterialOptions],
   /**
    * Rail steel. POWDER-COATED, not bare metal: a metalness-1 shaft in a dim interior has
    * nothing but a dark IBL to reflect, so bare-metal rails render as black bars. The polished
@@ -507,7 +585,7 @@ const MAT = {
   soil: ['cardboard', { color: 0x4b3a2a }] as [MaterialId, MaterialOptions],
 
   // ---- CANONICAL GRIND STEEL ------------------------------------------------
-  // THERE ARE EXACTLY TWO OF THESE AND THERE MUST NEVER BE A THIRD.
+  // THERE IS EXACTLY ONE OF THESE AND THERE MUST NEVER BE A SECOND.
   //
   // Every angle iron, coping lip and caster strip in the level used to ask MaterialLibrary for
   // `grindMetal` with a `repeat` derived from the piece's own length — [10,1] on a kicker,
@@ -518,9 +596,14 @@ const MAT = {
   //
   // Tiling density that actually needs to vary is baked into the geometry UVs instead (see
   // `sboxUV`), which costs nothing and merges.
-  grindSteel: ['grindMetal', { repeat: [8, 1] }] as [MaterialId, MaterialOptions],
-  /** The caster-polished contact strip: the one true mirror on a rail. */
-  grindPolish: ['grindMetal', { repeat: [8, 1], roughness: 0.11 }] as [MaterialId, MaterialOptions],
+  grindSteel: STEEL(),
+  /**
+   * The caster-polished contact strip. Was a 0.11-roughness fork of the line above — one extra
+   * draw call in the office batch, in all six level rails, in all four kickers and in every
+   * quarter pipe, to make a 35 mm strip 0.11 gloss instead of 0.22. It is now the same steel
+   * with a brighter albedo, which reads as polish from every distance the player is ever at.
+   */
+  grindPolish: STEEL(0xf6f8fa),
 } as const;
 
 /** Accent tints applied to the odd filing cabinet / bin / box so the aisle has colour rhythm. */
@@ -555,8 +638,16 @@ function mat(ref: MatRef): THREE.MeshStandardMaterial {
   return MaterialLibrary.get(ref[0], ref[1]);
 }
 
-/** Screen tints seen in the refs: cool blue, terminal green, and a warm amber spreadsheet. */
-const SCREEN_TINTS: readonly number[] = [0x4f9ee8, 0x3fcf78, 0xf0a02a, 0x54c6d8];
+/**
+ * Screen tints seen in the refs: cool blue and terminal green.
+ *
+ * TWO, not four. `emissive` is part of `familyKey()` — it has to be, because it changes the
+ * shading result and cannot ride on a vertex colour — so every screen tint is a permanent draw
+ * call in the office batch AND in every prop batch that contains a monitor. Four tints bought
+ * two extra draw calls for a colour difference on a 12 cm quad. Blue and green are the two the
+ * refs actually show; the amber and cyan were decoration on decoration.
+ */
+const SCREEN_TINTS: readonly number[] = [0x4f9ee8, 0x3fcf78];
 const STICKY_TINTS: readonly number[] = [0xffd34d, 0xff9a52, 0x7fd4f0, 0xf28fb0, 0xbfe986];
 
 // ---------------------------------------------------------------------------
@@ -1172,9 +1263,11 @@ const MUG_TINTS: readonly number[] = [0xf2f0ec, 0xd8574a, 0x4f79b5, 0xe8dcc0];
 export function makeMug(o?: PropOptions): THREE.Group {
   const ctx = begin('mug', o, 57);
   const r = ctx.rng;
+  // Colour ONLY — `familyKey()` folds a pure tint into a vertex attribute, so four mug colours
+  // are free. The roughness override that used to sit here was not: it forked the glazed-ceramic
+  // family and cost a draw call in the office batch and in every smashable mug.
   const body = MaterialLibrary.get('whiteboard', {
     color: MUG_TINTS[r.int(0, MUG_TINTS.length - 1)],
-    roughness: 0.2,
   });
 
   const rad = 0.042;
@@ -1337,7 +1430,9 @@ export function makeWaterCooler(o?: PropOptions): THREE.Group {
 
   if (ctx.variant < 2) {
     const jugH = 0.42;
-    const water = MaterialLibrary.get('glass', { color: 0x9fd2e2, roughness: 0.06 });
+    // No roughness override: the library glass is already 0.05, and a 0.06 fork bought a
+    // whole extra draw call in every water cooler in the level.
+    const water = MaterialLibrary.get('glass', { color: 0x9fd2e2 });
     const jug = mesh(cyl(0.155, 0.105, jugH, 10), water, { pos: [0, bh + jugH / 2 - 0.04, 0], receive: false });
     jug.renderOrder = 1;
     ctx.root.add(jug);
@@ -1422,26 +1517,38 @@ export function makeCeilingTileGrid(width: number, depth: number, o?: PropOption
     const step = 2;
     const barsX = Math.floor(nx / step);
     const barsZ = Math.floor(nz / step);
+    // ONE InstancedMesh FOR BOTH AXES. A run along X and a run along Z are the same bar seen
+    // from two directions, so they share a unit-length bar geometry and differ only by an
+    // instance matrix (scale along the run, quarter-turn for the cross runners). Two instanced
+    // meshes were two draw calls in the ceiling batch and again in the depth prepass; this is
+    // one, for the whole suspended grid of a 46 m plate.
     const barMat = mat(['ceilingGrid', { repeat: [4, 1] }]);
-    const barX = new THREE.InstancedMesh(sbox(0.055, 0.05, depth), barMat, barsX + 1);
-    const barZ = new THREE.InstancedMesh(sbox(width, 0.05, 0.055), barMat, barsZ + 1);
-    barX.castShadow = false;
-    barX.receiveShadow = true;
-    barZ.castShadow = false;
-    barZ.receiveShadow = true;
+    const bars = new THREE.InstancedMesh(sbox(1, 0.05, 0.055), barMat, barsX + barsZ + 2);
+    bars.castShadow = false;
+    bars.receiveShadow = true;
 
     const m = new THREE.Matrix4();
+    const p = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    const sc = new THREE.Vector3();
+    const acrossZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    let k = 0;
     for (let i = 0; i <= barsX; i++) {
-      m.makeTranslation(-width / 2 + (i * width) / barsX, 0, 0);
-      barX.setMatrixAt(i, m);
+      p.set(-width / 2 + (i * width) / barsX, 0, 0);
+      sc.set(depth, 1, 1);
+      m.compose(p, acrossZ, sc);
+      bars.setMatrixAt(k++, m);
     }
+    q.identity();
     for (let i = 0; i <= barsZ; i++) {
-      m.makeTranslation(0, 0, -depth / 2 + (i * depth) / barsZ);
-      barZ.setMatrixAt(i, m);
+      p.set(0, 0, -depth / 2 + (i * depth) / barsZ);
+      sc.set(width, 1, 1);
+      m.compose(p, q, sc);
+      bars.setMatrixAt(k++, m);
     }
-    barX.instanceMatrix.needsUpdate = true;
-    barZ.instanceMatrix.needsUpdate = true;
-    ctx.root.add(barX, barZ);
+    bars.instanceMatrix.needsUpdate = true;
+    bars.computeBoundingSphere();
+    ctx.root.add(bars);
   }
 
   return finish(ctx, o, { size: [width, 0.06, depth], offset: [0, 0, 0] });
@@ -1493,8 +1600,11 @@ export function makePendantLamp(o?: PropOptions): THREE.Group {
   const shadeH = 0.3;
   const shadeR = 0.24;
 
-  ctx.root.add(mesh(sbox(0.09, 0.03, 0.09), MAT.plastic, { pos: [0, -0.015, 0], cast: false }));
-  ctx.root.add(mesh(cyl(0.009, 0.009, cord, 4, true), MAT.plastic, { pos: [0, -0.03 - cord / 2, 0], receive: false }));
+  // Canopy and cord in the SHADE's painted metal, not dark plastic. They are painted steel on
+  // a real pendant, and it keeps the ceiling batch from carrying a `darkPlastic` bucket that
+  // exists solely for two centimetres of cord — one draw call, every frame, forever.
+  ctx.root.add(mesh(sbox(0.09, 0.03, 0.09), MAT.lampShade, { pos: [0, -0.015, 0], cast: false }));
+  ctx.root.add(mesh(cyl(0.009, 0.009, cord, 4, true), MAT.lampShade, { pos: [0, -0.03 - cord / 2, 0], receive: false }));
 
   const topY = -0.03 - cord;
   // Outer shade
@@ -1502,7 +1612,10 @@ export function makePendantLamp(o?: PropOptions): THREE.Group {
   ctx.root.add(mesh(disc(0.055, 12), MAT.lampShade, { pos: [0, topY - 0.001, 0], cast: false }));
   // Inner reflector — warm and slightly emissive so the cone interior glows like the refs
   ctx.root.add(
-    mesh(cylInner(0.05, shadeR - 0.012, shadeH - 0.02, 12), ['fluorescentDiffuser', { emissiveIntensity: 0.55 }], {
+    // Shade interior and bulb share ONE emissive intensity so they share one merge bucket:
+    // two intensities on the same surface is two draw calls in the ceiling batch, and nothing
+    // in the frame resolves the difference between a 0.55 and a 0.9 bounce inside a shade.
+    mesh(cylInner(0.05, shadeR - 0.012, shadeH - 0.02, 12), ['fluorescentDiffuser', { emissiveIntensity: 0.9 }], {
       pos: [0, topY - shadeH / 2, 0],
       cast: false,
       receive: false,
@@ -2406,7 +2519,7 @@ function wedge(w: number, d: number, h: number, bevel = 0.02): THREE.BufferGeome
     // which is correctly centred, come off in a different direction. The ramp comes apart.)
     g.rotateY(-Math.PI / 2);
     g.translate(w / 2 - bevel, 0, 0);
-    return finalize(g);
+    return scaleUV(finalize(g), RAMP_UV[0], RAMP_UV[1]);
   });
 }
 
@@ -2503,7 +2616,7 @@ function transition(w: number, d: number, h: number, seg = 7): THREE.BufferGeome
     // Same axis correction as `wedge`: profile is authored in XY and extruded along +Z.
     g.rotateY(-Math.PI / 2);
     g.translate(w / 2, 0, 0);
-    return finalize(g);
+    return scaleUV(finalize(g), RAMP_UV[0], RAMP_UV[1]);
   });
 }
 
@@ -2689,7 +2802,7 @@ export function makeVendingMachine(o?: PropOptions): THREE.Group {
   // Illuminated product window. Low emissive intensity on purpose — this is a lit panel in
   // the room, not a light source, and it must not compete with the ceiling troffers.
   ctx.root.add(
-    mesh(quad(w - 0.16, h - 0.62), ['screenOn', { emissive: cold ? SCREEN_TINTS[0] : SCREEN_TINTS[2] }], {
+    mesh(quad(w - 0.16, h - 0.62), ['screenOn', { emissive: cold ? SCREEN_TINTS[0] : SCREEN_TINTS[1] }], {
       pos: [0, h * 0.60, d / 2 + 0.006],
       cast: false,
       receive: false,

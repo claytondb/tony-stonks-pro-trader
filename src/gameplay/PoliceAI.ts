@@ -38,10 +38,13 @@
  * RENDER COST
  * -----------
  * The articulated rig is 19 merged meshes (one per material per animated bone group) and ~1.3k
- * triangles. Beyond `lodDistance` (default 34 m) each officer swaps to a single-piece merged proxy
- * baked into a mid-stride pose: 4 meshes, same triangle count. Beyond `cullDistance` (default 70 m)
- * the model is hidden entirely and only the simulation runs. Four officers on screen at close range
- * therefore cost 76 draw calls; four officers across the room cost 16.
+ * triangles. Past the LOD distance each officer swaps to a single-piece merged proxy baked into a
+ * mid-stride pose: 4 meshes, same triangle count. The swap distance is state-aware, because the
+ * only difference between rig and proxy is whether the limbs swing: an officer who is chasing,
+ * alert or searching holds the rig out to `lodDistance` (34 m), one who is merely patrolling or
+ * idle swaps at `lodDistanceIdle` (14 m). Beyond `cullDistance` (70 m) the model is hidden entirely
+ * and only the simulation runs. Four officers chasing at close range cost 76 meshes; four idle
+ * across the room cost 16.
  */
 
 import * as THREE from 'three';
@@ -118,6 +121,11 @@ export interface OfficerSnapshot {
 const EYE_HEIGHT = 1.55;
 const CHEST_HEIGHT = 0.60;
 const KNEE_HEIGHT = 0.28;
+/**
+ * Tallest rise an officer may step up onto. A kerb or a low platform edge, yes; a desk (0.75 m)
+ * or a cubicle panel (1.14 m), no — the ground ray hits those just as happily as it hits carpet.
+ */
+const STEP_UP = 0.45;
 /** Heights the wall-deflection ray is cast at: torso, and the height of a desk edge. */
 const DEFLECT_HEIGHTS = [0.60, 0.28];
 /** Target height on the player used for the line-of-sight ray (chair seat + a bit of torso). */
@@ -160,6 +168,8 @@ const _f = new THREE.Vector3();
 const _g = new THREE.Vector3();
 const _origin = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+/** Dedicated to placeOnFloor: it calls groundAt in a loop, and groundAt clobbers _origin/_dir. */
+const _place = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -594,8 +604,10 @@ export class PoliceSquad {
   private playerSpeed = 0;
   private noise = 0;
 
-  /** Beyond this, an officer renders as the 4-draw merged proxy. */
+  /** Beyond this, a CHASING/ALERT/SEARCHING officer renders as the 4-draw merged proxy. */
   lodDistance = 34;
+  /** Beyond this, an officer who is merely patrolling or idle uses the proxy. */
+  lodDistanceIdle = 14;
   /** Beyond this, an officer is not rendered at all (the simulation keeps running). */
   cullDistance = 70;
 
@@ -715,14 +727,23 @@ export class PoliceSquad {
     return best;
   }
 
-  /** Floor height under `p`, searching from `fromY + 1.1` downward. Null = no floor / a drop. */
+  /**
+   * Floor height under `p`, searching from `fromY + 1.1` downward. Null = no floor / a drop.
+   *
+   * The downward ray hits ANY collider, not just the carpet — desks, credenzas and cubicle
+   * panel tops are all "ground" as far as Rapier is concerned. Without the STEP_UP test below,
+   * an officer whose spawn post landed inside a cubicle pod had his very first ray (cast from
+   * 1.6 m, above the 1.14 m panel top) snap him onto the partition, and every subsequent ray
+   * then started from 1.14 + 1.1 = 2.24 m and re-hit the same panel — so he was stuck standing
+   * in mid-air on top of the cubicle wall for the whole level. A step DOWN was already refused;
+   * this is the missing symmetric case.
+   */
   private groundAt(p: THREE.Vector3, fromY: number): number | null {
     _origin.set(p.x, fromY + 1.1, p.z);
     if (this.groundFn) {
       const g = this.groundFn(_origin, 3.2);
       if (g && g.point) {
-        // Refuse to step off a ledge: officers are not supposed to pratfall off the mezzanine.
-        if (g.point.y < fromY - 0.85) return null;
+        if (!this.walkable(g.point.y, fromY)) return null;
         return g.point.y;
       }
       return null;
@@ -732,12 +753,52 @@ export class PoliceSquad {
       const hit = this.ray(_origin, _dir, 3.2);
       if (hit) {
         const y = _origin.y - hit.toi;
-        if (y < fromY - 0.85) return null;
+        if (!this.walkable(y, fromY)) return null;
         return y;
       }
       return null;
     }
     return 0; // No physics at all: assume the level's floor is the y = 0 plane.
+  }
+
+  /**
+   * Can a walking officer get from `fromY` to `y` in one step? Down: a ledge he would fall off
+   * (he is not supposed to pratfall off the mezzanine). Up: anything taller than a kerb is
+   * furniture he would have to climb, which he cannot do and must never appear to have done.
+   */
+  private walkable(y: number, fromY: number): boolean {
+    return y >= fromY - 0.85 && y <= fromY + STEP_UP;
+  }
+
+  /**
+   * Put `pos` on standable floor, in place.
+   *
+   * A patrol post is authored on a ring around the player's spawn without any knowledge of the
+   * furniture layout, so a post regularly lands inside a cubicle pod or on top of a desk. Snapping
+   * straight down is not enough: the honest answer there is "there is no floor for you here", and
+   * an officer left at the authored spot stands inside a desk. So when the post is not standable,
+   * spiral outward for the nearest clear carpet before giving up and dropping him to y = 0.
+   */
+  private placeOnFloor(pos: THREE.Vector3): void {
+    const direct = this.groundAt(pos, pos.y + 0.5);
+    if (direct !== null) {
+      pos.y = direct;
+      return;
+    }
+
+    // Golden-angle spiral: even coverage, no lattice bias toward the cubicle grid's own axes.
+    const GOLDEN = 2.399963;
+    for (let i = 1; i <= 48; i++) {
+      const r = 0.9 * Math.sqrt(i);
+      const a = i * GOLDEN;
+      _place.set(pos.x + Math.cos(a) * r, pos.y, pos.z + Math.sin(a) * r);
+      const gy = this.groundAt(_place, pos.y + 0.5);
+      if (gy !== null) {
+        pos.set(_place.x, gy, _place.z);
+        return;
+      }
+    }
+    pos.y = 0;
   }
 
   // -------------------------------------------------------------------------
@@ -772,9 +833,7 @@ export class PoliceSquad {
     group.add(rig.root, proxy);
 
     const pos = config.position.clone();
-    // Drop onto the floor immediately so the first frame is not a hover.
-    const gy = this.groundAt(pos, pos.y + 0.5);
-    if (gy !== null) pos.y = gy;
+    this.placeOnFloor(pos);
 
     // Face the first patrol leg out of the gate; a cop staring at a wall reads as broken.
     let yaw = 0;
@@ -1594,7 +1653,15 @@ export class PoliceSquad {
     }
     if (!o.group.visible) o.group.visible = true;
 
-    const far = d > this.lodDistance;
+    // The proxy is the same geometry with a mid-stride pose frozen in, so the ONLY artifact
+    // is that the legs stop swinging. That is invisible on a cop standing at a photocopier
+    // across the room and glaring on one actively running at you, so the swap distance is
+    // state-aware rather than a single global number: a chasing/alert officer keeps the
+    // articulated rig out to the full `lodDistance`, an idle one swaps at `lodDistanceIdle`.
+    // Four idle officers at patrol range is 76 meshes -> 16, and every mesh in the scene is
+    // drawn ~2.7 times a frame (shadow map + GTAO prepass + main pass).
+    const moving = o.state === 'chasing' || o.state === 'alert' || o.state === 'searching';
+    const far = d > (moving ? this.lodDistance : this.lodDistanceIdle);
     if (far === o.rig.root.visible) {
       o.rig.root.visible = !far;
       o.proxy.visible = far;
