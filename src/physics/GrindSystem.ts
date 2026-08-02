@@ -45,10 +45,26 @@ export class GrindSystem {
   private readonly GRIND_COOLDOWN_TIME = 0.8;  // seconds before can grind again
   
   // Config
-  private readonly SNAP_DISTANCE = 0.6;       // How close to rail to trigger grind
-  private readonly SNAP_HEIGHT_TOLERANCE = 0.4; // Tight height check
+  //
+  // The capture window is deliberately generous. At 12 m/s a chair covers 0.2 m per frame,
+  // so a 0.6 m lateral window is roughly three frames of overlap for a perpendicular
+  // approach and effectively zero for a shallow one — the level had 211 rails and the
+  // player caught none of them. THPS is forgiving here on purpose: you aim at the rail and
+  // the game meets you. Widening this is the single biggest difference between "there are
+  // rails in the level" and "the level is made of lines".
+  private readonly SNAP_DISTANCE = 1.5;        // Lateral capture radius, metres
+  private readonly SNAP_HEIGHT_TOLERANCE = 0.85; // Vertical capture window, metres
+  /**
+   * The chair rides with its body centre this far above the rail while grinding, so the
+   * height test has to compare against `rail.height + RIDE_HEIGHT`, not `rail.height`.
+   * Comparing against the bare rail height biased every check by a third of a metre and
+   * put the 1.4 m cubicle tops — 140 of the level's 211 rails — permanently out of reach.
+   */
+  private readonly RIDE_HEIGHT = 0.3;
   private readonly MIN_SPEED_TO_GRIND = 2.5;   // Min speed to start grinding
-  private readonly GRIND_FRICTION = 0.995;     // Very little friction (was 0.98)
+  // Per-frame, so 0.995 is a 26%/s bleed — enough to make a long rail end slower than it
+  // started and to break the line that follows it. A grind should hand your speed back.
+  private readonly GRIND_FRICTION = 0.9992;
   private readonly BALANCE_DRIFT = 0.08;       // Slow balance drift
   private readonly BALANCE_CORRECTION = 4.0;   // Fast player correction
   private readonly MIN_GRIND_SPEED = 3.0;      // Don't go slower than this while grinding
@@ -106,25 +122,39 @@ export class GrindSystem {
     const speed = new THREE.Vector3(playerVel.x, 0, playerVel.z).length();
     if (speed < this.MIN_SPEED_TO_GRIND) return null;
     
+    const velDir = new THREE.Vector3(playerVel.x, 0, playerVel.z).normalize();
+
     // Find nearest rail
     let nearestRail: Rail | null = null;
     let nearestDist = this.SNAP_DISTANCE;
     let nearestProgress = 0;
-    
+
     for (const rail of this.rails) {
       const result = this.getClosestPointOnRail(playerPos, rail);
-      
+
+      // Reject rails we would immediately run off the end of. The closest point on a rail
+      // is clamped to its endpoints, so approaching from beyond one end used to "capture"
+      // at progress 1 and end the grind on the very next frame — a lock-on that lasted one
+      // sixtieth of a second and read to the player as the rail not working at all.
+      const travelSign = velDir.dot(rail.direction) >= 0 ? 1 : -1;
+      const remaining = (travelSign > 0 ? 1 - result.progress : result.progress) * rail.length;
+      if (remaining < 0.8) continue;
+
       // Check horizontal distance
       const horizontalDist = new THREE.Vector2(
         playerPos.x - result.point.x,
         playerPos.z - result.point.z
       ).length();
       
-      // Check height - player should be above or near this rail's own height.
+      // Check height against the pose the chair would actually hold on this rail.
       // (Cubicle-panel tops sit at 1.4 m, floor rails at 0.8 m.)
-      const heightDiff = Math.abs(playerPos.y - rail.height);
-      
-      if (horizontalDist < nearestDist && heightDiff < this.SNAP_HEIGHT_TOLERANCE) {
+      const heightDiff = playerPos.y - (rail.height + this.RIDE_HEIGHT);
+      // Dropping onto a rail from above is the normal way to catch one, so the window is
+      // asymmetric: forgiving from above, tight from below.
+      const withinHeight = heightDiff < this.SNAP_HEIGHT_TOLERANCE
+        && heightDiff > -this.SNAP_HEIGHT_TOLERANCE * 0.6;
+
+      if (horizontalDist < nearestDist && withinHeight) {
         nearestDist = horizontalDist;
         nearestRail = rail;
         nearestProgress = result.progress;
@@ -133,9 +163,8 @@ export class GrindSystem {
     
     if (nearestRail) {
       // Determine grind direction based on velocity
-      const velDir = new THREE.Vector3(playerVel.x, 0, playerVel.z).normalize();
       const dot = velDir.dot(nearestRail.direction);
-      
+
       this.grindState = {
         isGrinding: true,
         rail: nearestRail,

@@ -201,8 +201,12 @@ export interface THPSControlsConfig {
 }
 
 export const DEFAULT_CONFIG: THPSControlsConfig = {
-  ollieChargeMs: 380,
-  ollieMinCharge: 0.45,
+  // A tap has to be worth taking. At 0.45 the shortest possible pop cleared 34 cm and was
+  // over in a third of a second — not enough air for a trick to read, so the tap ollie was
+  // functionally a dead button. 0.7 makes the quick pop useful and leaves the full charge
+  // as the difference between clearing a rail and clearing a gap.
+  ollieChargeMs: 340,
+  ollieMinCharge: 0.7,
   manualWindowMs: 250,
   manualCooldownMs: 220,
   specialWindowMs: 140,

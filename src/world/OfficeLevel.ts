@@ -52,7 +52,6 @@ import {
   makeFilingCabinet,
   makeFireExtinguisher,
   makeFluorescentPanel,
-  makeKickerRamp,
   makeLedgeBlock,
   makeManagerOffice,
   makePendantLamp,
@@ -323,6 +322,37 @@ const TILE = 1.22;         // ceiling module
 const WALL_SEG = 5.7;      // corridor-wall panel length
 
 // ---------------------------------------------------------------------------
+// THE LOOP — the numbers below are the whole level design, so they are derived
+// from the game's own constants rather than picked by eye.
+//
+//   cruise speed          ~15 m/s   (measured: median 15.4 holding W)
+//   grind cooldown         0.80 s   GrindSystem.GRIND_COOLDOWN_TIME
+//                                   => rail END to next rail START must exceed 12 m
+//   combo window           2.50 s   ScoreSystem tuning.comboWindowMs
+//                                   => and must stay under 37 m or the line dies
+//   grind capture radius   1.50 m   GrindSystem.SNAP_DISTANCE
+//                                   => every point of a lane must be within 1.5 m
+//                                      of a rail, or the rail is decoration
+//   step-over height       0.42 m   Game.STEP_HEIGHT
+//                                   => a 0.42 m ledge is ridden OVER, never into
+//   turn rate             3.6 rad/s => min turn radius at 15 m/s is 4.2 m
+//
+// RING_IN and the building wall are the two sides of a 6.1 m racetrack running
+// the whole perimeter, and RING_MID carries a 2.4 m wide low ledge down the
+// middle of it. The ledge is that wide for one reason: jammed against EITHER
+// wall the chair's centre is 1.40 m from the near grind edge, inside the 1.50 m
+// capture radius. Anywhere on the loop, pressing grind catches something. That
+// is the single decision that turns "there are rails in the level" into "the
+// level is made of lines" — an earlier cut had the racing line 3.9 m from the
+// wall and a run that drifted wide simply stopped being able to grind.
+const RING_IN = 16.3;      // inner face of the loop: the cubicle wall line
+const RING_OUT = 22.4;     // outer face: the building wall's collider face
+const RING_MID = 19.4;     // the racing line, and where the loop's ledges sit
+const RING_LEDGE_D = 2.4;  // ledge depth; its two grind edges sit at +/-1.17
+const RING_LEDGE_HALF = 9; // ledges span +/-9 m of each side's centre
+const CHAMFER = 4.4;       // 45-degree corner cut, measured back from RING_OUT
+
+// ---------------------------------------------------------------------------
 // Main builder
 // ---------------------------------------------------------------------------
 
@@ -560,14 +590,50 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     }
   }
 
-  // ------------------------------------------------------ corridor walls ----
+  // ============================================================== THE PARK ===
+  //
+  // The plate is a CIRCUIT with a chord across it, not a room with props in it:
+  //
+  //          +---------------- THE LOOP (north straight) ---------------+
+  //          |   .-- perimeter quarter pipes backed onto the wall --.   |
+  //          |   |          16 m ledge on the racing line           |   |
+  //   corner |   +----------- cubicle wall, cap rail 1.40 ----------+   | corner
+  //   chamfer|   |    pod bay          | spine |         pod bay    |   | chamfer
+  //          |   |        --- cross corridor ---------              |   |
+  //          |   |    pod bay          | spine |         pod bay    |   |
+  //          |   +--------------------------------------------------+   |
+  //          +---------------- THE LOOP (south straight) ---------------+
+  //
+  //   THE LOOP        a 4.8 m walled racetrack round the whole perimeter, with a
+  //                   16 m grind ledge down the middle of every straight. The
+  //                   corners are 45-degree chamfer walls: they DEFLECT rather
+  //                   than stop (see Game.resolveObstacles), so a player who
+  //                   simply holds forward is steered round the corner and set
+  //                   back down on the next straight's ledge. A lap is ~145 m,
+  //                   ~9.7 s at cruise, four grinds — and the combo window is
+  //                   2.5 s, so the position stays open for the whole lap.
+  //   THE LONG BENCH  a single unbroken 28 m ledge down the spine at x = 0, the
+  //                   level's signature. It is the chord across the loop, it is
+  //                   what the player is looking straight down at spawn, and it
+  //                   is the longest grind in the game (~1.9 s). Enter the loop,
+  //                   cut the chord, rejoin the loop: a figure of eight.
+  //   THE CROSS       the east/west arms, carrying the level data's floor rails,
+  //                   feed the loop's east and west straights.
+  //
+  // Every rail this file registers is on one of those lines. The previous build
+  // registered 211 — 140 of them cubicle-pod tops out in the middle of the pod
+  // field, reachable only from the air and leading nowhere. Quantity was never
+  // the problem; a rail nothing feeds into is not a feature, it is decoration.
+  const AISLE_H = 1.32; // the hero grind line height, constant along every corridor
+  const CAP_TOP = AISLE_H + 0.08;
+
   /**
    * Lay a continuous run of cubicle panelling and register ONE unbroken grind rail for the
    * whole run. Geometry is chunked into WALL_SEG panels (real cubicle systems are panelised,
    * and it keeps per-chunk bounding spheres tight for culling) but the SKATE LINE is single:
-   * the player commits to it once and holds it for 17 m.
+   * the player commits to it once and holds it.
    */
-  function runWall(x0: number, z0: number, x1: number, z1: number, height: number): void {
+  function runWall(x0: number, z0: number, x1: number, z1: number, height = AISLE_H): void {
     const dx = x1 - x0;
     const dz = z1 - z0;
     const len = Math.hypot(dx, dz);
@@ -587,24 +653,222 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       place(acc, wall, x0 + dx * t, 0, z0 + dz * t, yaw, { collide: true, grind: false });
     }
 
+    // Inset for the same reason runLedge insets: a cap rail that ends flush with the wall
+    // it caps ends AT the corner where the next wall starts, and the grind exit teleports
+    // the chair into it.
     const top = height + 0.08;
+    const inset = Math.min(0.8, len * 0.1);
     acc.rails.push({
-      start: new THREE.Vector3(x0, top, z0),
-      end: new THREE.Vector3(x1, top, z1),
+      start: new THREE.Vector3(x0 + (dx / len) * inset, top, z0 + (dz / len) * inset),
+      end: new THREE.Vector3(x1 - (dx / len) * inset, top, z1 - (dz / len) * inset),
     });
   }
 
-  const AISLE_H = 1.32; // the hero grind line height, constant along every corridor
-  const spineEndZ = halfD - 2.4;
-  const crossEndX = halfW - 2.4;
+  /**
+   * Lay a run of low ledge blocks nose to tail along a line and register the run's TWO edge
+   * rails as single unbroken grinds.
+   *
+   * Why not let each block publish its own grind edges: a 16 m line built from four blocks
+   * would register eight 4 m rails, and GrindSystem rejects any capture with under 0.8 m of
+   * rail left ahead — so the last fifth of every block is dead, and the 0.8 s re-grind
+   * cooldown then swallows the next block whole. One rail per RUN is what makes the run
+   * behave like one feature.
+   *
+   * The height is 0.42 m on purpose: that is exactly Game.STEP_HEIGHT, so the chair rolls
+   * ONTO a ledge it clips instead of being stopped by it. Nothing on the racing line may
+   * ever end a run.
+   */
+  function runLedge(
+    x0: number, z0: number, x1: number, z1: number,
+    o: { height?: number; depth?: number; stripe?: number; seed?: number } = {},
+  ): void {
+    const dx = x1 - x0;
+    const dz = z1 - z0;
+    const len = Math.hypot(dx, dz);
+    if (len < 1) return;
+    const h = o.height ?? 0.42;
+    const d = o.depth ?? 1.2;
+    const yaw = Math.atan2(dx, dz) - Math.PI / 2;
+    const n = Math.max(1, Math.round(len / 4.6));
+    const segLen = len / n;
 
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.5) / n;
+      place(acc, makeLedgeBlock({
+        width: segLen - 0.09,
+        depth: d,
+        height: h,
+        seed: (o.seed ?? 3000) + i * 7,
+        stripe: o.stripe,
+      }), x0 + dx * t, 0, z0 + dz * t, yaw, { collide: true, grind: false });
+    }
+
+    // RAILS ARE INSET FROM THE GEOMETRY. GrindSystem.endGrind teleports the chair to the
+    // rail's endpoint; the chair is a 0.4 m capsule, so an endpoint sitting flush against
+    // the next prop drops it inside that prop's collider and Rapier answers a 0.4 m
+    // penetration with an impulse that fires the chair out of the building. (It did — a run
+    // exiting a loop ledge next to a ramp toe reached y = 57 and z = -90.) Ending the rail
+    // half a metre short of the block it lives on costs nothing and makes every exit land
+    // in clear air.
+    const px = -dz / len;
+    const pz = dx / len;
+    const off = d / 2 - 0.03;
+    const y = h + 0.02;
+    const inset = Math.min(0.55, len * 0.12);
+    const ix = (dx / len) * inset;
+    const iz = (dz / len) * inset;
+    for (const s of [-1, 1]) {
+      acc.rails.push({
+        start: new THREE.Vector3(x0 + ix + px * off * s, y, z0 + iz + pz * off * s),
+        end: new THREE.Vector3(x1 - ix + px * off * s, y, z1 - iz + pz * off * s),
+      });
+    }
+    acc.wear.push({
+      x: (x0 + x1) / 2, z: (z0 + z1) / 2,
+      width: Math.abs(dx) + 2.4, depth: Math.abs(dz) + 2.4,
+      strength: 0.32,
+    });
+  }
+
+  // ------------------------------------------------- the loop's inner wall ---
+  // A cubicle-panel wall all the way round the pod field, with a mouth where each corridor
+  // meets the loop. The cap is the loop's HIGH line: four 11 m rails per side at 1.40 m,
+  // ollie height from the racing line, so the loop can be run low (ledges) or high (caps).
+  const CHAM_A = RING_OUT - CHAMFER;
   for (const sx of [-1, 1]) {
-    // Spine: two unbroken runs per side, split by the cross-corridor intersection.
-    runWall(sx * SPINE_HALF, CROSS_HALF, sx * SPINE_HALF, spineEndZ, AISLE_H);
-    runWall(sx * SPINE_HALF, -CROSS_HALF, sx * SPINE_HALF, -spineEndZ, AISLE_H);
     for (const sz of [-1, 1]) {
-      // Cross corridor: one unbroken run per quadrant.
-      runWall(sx * SPINE_HALF, sz * CROSS_HALF, sx * crossEndX, sz * CROSS_HALF, AISLE_H);
+      // North / south inner wall, broken by the spine mouth.
+      runWall(sx * SPINE_HALF, sz * RING_IN, sx * RING_IN, sz * RING_IN);
+      // East / west inner wall, broken by the cross mouth.
+      runWall(sx * RING_IN, sz * CROSS_HALF, sx * RING_IN, sz * RING_IN);
+      // 45-degree corner chamfer. This is the piece that makes the loop a loop: it meets an
+      // incoming line at 45 degrees, and resolveObstacles slides the chair along the face
+      // instead of stopping it, so the corner is taken at speed with no input at all.
+      runWall(sx * RING_OUT, sz * CHAM_A, sx * CHAM_A, sz * RING_OUT);
+    }
+  }
+
+  // --------------------------------------------- the loop's racing surface ---
+  // TWO 8.4 m ledges per straight with a MOUTH between them, and the mouth is always where
+  // something joins the loop: the spine north and south, the cross east and west.
+  //
+  // The spacing is arithmetic, not taste, and the number it is measured against is 0.85 s,
+  // not the 2.5 s combo window. Coming off a rail the chair pops (vy = 3) and is airborne
+  // ~0.45 s; touchdown then arms Game.LANDING_GRACE, another 0.40 s. So a position stays
+  // open across a gap of about 0.85 s with NO input at all — measured, not assumed: a 0.80 s
+  // gap held the combo in the harness and a 1.00 s gap dropped it.
+  //
+  //   grind a 9.35 m ledge                    0.62 s
+  //   mouth gap, ledge end to ledge start     10.5 m = 0.70 s
+  //   corner, ledge end to next ledge start   ~11 m  = 0.73 s
+  //   longest gap anywhere on the lap         0.73 s   < 0.85 s
+  // A lap is ~160 m, ~10.7 s, EIGHT grinds, and the position never has to close. Ollie in a
+  // gap and the margin roughly doubles.
+  const LOOP_STRIPE = [0xe8722a, 0x2f6f7d];
+  const MOUTH_HALF = 5.25;     // half-width of the mouth in the middle of each straight
+  const LOOP_END = RING_LEDGE_HALF + 5.6; // ledges run out to +/-14.6, then the corner
+  const loopRuns: [number, number, number, number][] = [
+    [-LOOP_END, RING_MID, -MOUTH_HALF, RING_MID],   // north-west half, ridden +X
+    [MOUTH_HALF, RING_MID, LOOP_END, RING_MID],     // north-east half, ridden +X
+    [RING_MID, LOOP_END, RING_MID, MOUTH_HALF],     // east-north half, ridden -Z
+    [RING_MID, -MOUTH_HALF, RING_MID, -LOOP_END],   // east-south half, ridden -Z
+    // The south mouth is 1.2 m wider each side than the others: the conference-table ramps
+    // stand in it, and a rail end has to finish clear of a collider (see runLedge).
+    [LOOP_END, -RING_MID, MOUTH_HALF + 1.2, -RING_MID],   // south-east half, ridden -X
+    [-(MOUTH_HALF + 1.2), -RING_MID, -LOOP_END, -RING_MID], // south-west half, ridden -X
+    [-RING_MID, -LOOP_END, -RING_MID, -MOUTH_HALF], // west-south half, ridden +Z
+    [-RING_MID, MOUTH_HALF, -RING_MID, LOOP_END],   // west-north half, ridden +Z
+  ];
+  loopRuns.forEach((r, i) => {
+    runLedge(r[0], r[1], r[2], r[3], {
+      height: 0.42, depth: RING_LEDGE_D, stripe: LOOP_STRIPE[(i >> 1) % 2], seed: 3100 + i * 31,
+    });
+  });
+
+  // ================================================== THE BOARDROOM TABLE ====
+  // The level data puts a 7 x 4 m conference table (a fun box, deck at 0.80 m) at z = -18 —
+  // which lands it squarely in the middle of the loop's south straight, and a 0.80 m box is
+  // 38 cm above Game.STEP_HEIGHT, i.e. a wall the chair cannot climb. Left alone it is the
+  // one thing on the circuit that can stop a run dead.
+  //
+  // So bank all three approaches. The south straight now rides UP onto the table, across
+  // seven metres of boardroom at 0.80 m, and off the far side; the spine's south mouth ramps
+  // onto the same deck head-on. That is the level's set piece, it is on the fastest straight,
+  // and it is made of a prop the level data already owned.
+  const TABLE_Z = -18;
+  const TABLE_HALF_X = 3.5;
+  const TABLE_H = 0.80;
+  const TABLE_QP_D = 1.5;
+  for (const s of [-1, 1]) {
+    // Lip against the table's +/-X face, toe pointing out along the straight.
+    place(acc, makeQuarterPipe({
+      width: 4.3, depth: TABLE_QP_D, height: TABLE_H, seed: 4400 + s,
+    }), s * (TABLE_HALF_X + TABLE_QP_D / 2 + 0.05), 0, TABLE_Z, s > 0 ? -Math.PI / 2 : Math.PI / 2, {
+      collide: true, grind: true,
+    });
+  }
+  // And head-on from the spine mouth.
+  place(acc, makeQuarterPipe({
+    width: 6.8, depth: TABLE_QP_D, height: TABLE_H, seed: 4410,
+  }), 0, 0, TABLE_Z + 2.0 + TABLE_QP_D / 2 + 0.05, Math.PI, { collide: true, grind: true });
+  acc.wear.push({ x: 0, z: TABLE_Z + 3.4, width: 8.0, depth: 3.0, strength: 0.55 });
+  acc.paperSeeds.push({ x: rand(-2.5, 2.5), z: TABLE_Z + 3.2, radius: 1.6 });
+
+  // ------------------------------------------------------- the loop's banks ---
+  // Quarter pipes standing in the loop's INNER lane with their coping flush with the cubicle
+  // cap rail behind them, two to a straight. Pump the bank, pop the lip, hold the 11 m cap
+  // rail: the loop can be run low on the ledge or high on the wall, and the bank is the
+  // transfer between them. This is the level's vertical variety, and it is deliberately NOT
+  // on the outer side — the building wall is the loop's outer boundary and has to stay a
+  // clean, continuous face, or a wide line stops being able to reach the ledge at all.
+  const QP_D = 1.4;
+  for (const side of [0, 1, 2, 3]) {
+    const along = side % 2 === 0 ? 'x' : 'z';      // 0/2 = north/south, 1/3 = east/west
+    const sgn = side < 2 ? 1 : -1;
+    const base = sgn * (RING_IN + QP_D / 2 + 0.05);
+    for (const t of [-10.4, 10.4]) {
+      const x = along === 'x' ? t : base;
+      const z = along === 'x' ? base : t;
+      if (blocked(keepClear, x, z, 2.6, 2.6)) continue;
+      // rotY maps the ramp's local +Z (its tall end) onto (sin rotY, cos rotY); the tall end
+      // has to sit against the cubicle wall, so it points back toward the middle of the room.
+      const rotY = along === 'x' ? (sgn > 0 ? Math.PI : 0) : (sgn > 0 ? -Math.PI / 2 : Math.PI / 2);
+      place(acc, makeQuarterPipe({
+        width: 4.6, depth: QP_D, height: CAP_TOP - 0.06, seed: 3800 + side * 17 + Math.round(t),
+      }), x, 0, z, rotY, { collide: true, grind: true });
+      acc.wear.push({ x: x + (along === 'x' ? 0 : sgn * 1.9), z: z + (along === 'x' ? sgn * 1.9 : 0),
+        width: 4.8, depth: 4.8, strength: 0.45 });
+      acc.paperSeeds.push({ x, z: z + (along === 'x' ? sgn * 1.6 : 0), radius: 1.3 });
+    }
+  }
+
+  // ----------------------------------------------------- corridor walls -----
+  // The spine and the cross run from the plaza out to their mouths in the loop wall.
+  for (const sx of [-1, 1]) {
+    runWall(sx * SPINE_HALF, CROSS_HALF, sx * SPINE_HALF, RING_IN);
+    runWall(sx * SPINE_HALF, -CROSS_HALF, sx * SPINE_HALF, -RING_IN);
+    for (const sz of [-1, 1]) {
+      runWall(sx * SPINE_HALF, sz * CROSS_HALF, sx * RING_IN, sz * CROSS_HALF);
+    }
+  }
+
+  // ========================================================= THE LONG BENCH ==
+  // The signature. A single unbroken 28 m ledge straight down the middle of the spine —
+  // the longest grind in the level at ~1.9 s, the first thing in shot at spawn, and the
+  // chord that turns the loop into a figure of eight.
+  //
+  // x = 0 is the one lane on the spine nothing else claims: the level data's kickers sit at
+  // x = +/-2.4 (3.4 m wide, so their edge is at 0.7) and its floor rails at x = +/-4.0. The
+  // bench is 1.2 m deep, edge at 0.6, which clears the kickers by 10 cm. It stops at
+  // |z| = 14 so the conference-table fun box (z = -18) and the stairwell (z = 20) — and the
+  // gap goals that reference both — keep their run-ups.
+  const BENCH_HALF = 14;
+  if (!blocked(keepClear, 0, 0, 0.7, BENCH_HALF)) {
+    runLedge(0, -BENCH_HALF, 0, BENCH_HALF, {
+      height: 0.42, depth: 1.2, stripe: 0xe8722a, seed: 3200,
+    });
+    for (let k = -2; k <= 2; k++) {
+      acc.paperSeeds.push({ x: rand(-2.2, 2.2), z: k * 5.4, radius: 1.2 });
     }
   }
 
@@ -620,6 +884,19 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
         rotation: rand(0, 3.14),
         strength: 0.5,
       });
+    }
+  }
+
+  // Corner dressing behind the chamfers: the leftover triangle at each corner of the
+  // building, which the loop routes around. Props here are never on a line.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const cx = sx * (halfW - 1.4);
+      const cz = sz * (halfD - 1.4);
+      if (blocked(keepClear, cx, cz, 1.2, 1.2)) continue;
+      place(acc, makeBoxStack({ seed: 401 + sx * 3 + sz * 5 }), cx, 0, cz, rand(0, Math.PI), { collide: true });
+      place(acc, makePottedPlant({ variant: 0, seed: 411 + sx * 7 + sz * 11 }),
+        cx - sx * 1.9, 0, cz - sz * 0.4, 0, { collide: true });
     }
   }
 
@@ -653,19 +930,22 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   const colBase = SPINE_HALF + WALL_GAP + POD_SIZE / 2;
   const rowBase = CROSS_HALF + WALL_GAP + POD_SIZE / 2;
 
+  // The field now stops at the loop's inner wall instead of running to the building wall:
+  // the outer 6 m of the plate is the racetrack. Two bays deep in each direction per
+  // quadrant, which is what a 4.8 m loop plus two 5 m corridors leaves of a 46 m plate.
   const cols: number[] = [];
-  for (let x = colBase, i = 0; x + POD_SIZE / 2 < halfW - 1.6; x += POD_PITCH + rand(-0.45, 0.5), i++) {
+  for (let x = colBase, i = 0; x + POD_SIZE / 2 < RING_IN - 0.5; x += POD_PITCH + rand(-0.3, 0.3), i++) {
     cols.push(Number(x.toFixed(2)));
   }
   const rows: number[] = [];
-  for (let z = rowBase; z + POD_SIZE / 2 < halfD - 1.6; z += POD_PITCH + rand(-0.45, 0.5)) {
+  for (let z = rowBase; z + POD_SIZE / 2 < RING_IN - 0.5; z += POD_PITCH + rand(-0.3, 0.3)) {
     rows.push(Number(z.toFixed(2)));
   }
 
   // Landmark cells, addressed as `${sx}${sz}:${ci},${ri}`. Hand-placed, not rolled: the
   // point of a landmark is that the player learns where it is.
   const CONFERENCE_CELL = '1,1:1,1';
-  const MANAGER_CELLS = ['-1,-1:1,1', '-1,1:0,2'];
+  const MANAGER_CELLS = ['-1,-1:0,1'];
   const consumed = new Set<string>();
 
   let podIndex = 0;
@@ -774,8 +1054,15 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
           // Full desk colliders only in the corridor-facing column; outer pods get
           // just the panel boxes, which is all the player can ever touch.
           const collide = variant === 0 ? true : 8;
-          // Pod tops are a secondary grind line — register the two near columns.
-          const grind = ci <= 1 && !cleared;
+          // POD TOPS ARE NOT REGISTERED AS RAILS ANY MORE.
+          //
+          // They used to be, and they were 140 of the level's 211 grind edges: 1.8 m panel
+          // segments at 1.40 m, out in the middle of the pod field, with no ramp feeding
+          // them and nothing to land on off the end. Every one of them was decoration that
+          // the nearest-rail search still had to consider. The high line now lives on the
+          // corridor and loop cap rails, which are 11-16 m long, sit beside a racing lane,
+          // and lead somewhere.
+          const grind = false;
 
           // Orientation used to be a strict CHECKERBOARD — (ci + ri) parity — which from any
           // wide camera is the most legible pattern a human eye can find, and it read as
@@ -821,237 +1108,114 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
 
   // ------------------------------------------------------------ landmarks ---
-  // Copier bank at the +X end of the cross corridor, vending alcove at the -X end. Both are
-  // visible straight down the corridor from the spawn intersection, which is what a player
-  // needs in order to have any idea where they are.
+  // SIGHTLINES. From the spawn intersection the player is looking down four corridors, and
+  // each one has to terminate in something he can name, or he cannot navigate. Copier bank
+  // east, vending alcove west, both set into the pod field beside the corridor mouth rather
+  // than across it — the mouth itself is a skate line and stays clear.
+  const MOUTH = RING_IN - 2.4;
   for (let i = -1; i <= 1; i++) {
-    const copier = makeCopier({ seed: 700 + i });
-    place(acc, copier, crossEndX + 1.0, 0, i * 1.0, -Math.PI / 2, { collide: true });
+    place(acc, makeCopier({ seed: 700 + i }), MOUTH + i * 0.05, 0, CROSS_HALF + 0.95, Math.PI, { collide: true });
   }
-  place(acc, makeTrashCan({ variant: 0, seed: 711, accent: true }), crossEndX + 0.9, 0, 2.3, 0, { collide: true });
-  place(acc, makeCardboardBox({ variant: 0, seed: 713 }), crossEndX + 0.7, 0, -2.4, 0.4, { collide: true });
-  acc.paperSeeds.push({ x: crossEndX - 0.6, z: 0, radius: 1.6 });
-  acc.wear.push({ x: crossEndX - 1.2, z: 0, width: 3.6, depth: 2.8, strength: 0.55 });
+  place(acc, makeTrashCan({ variant: 0, seed: 711, accent: true }), MOUTH - 2.6, 0, CROSS_HALF + 0.8, 0, { collide: true });
+  acc.paperSeeds.push({ x: MOUTH, z: CROSS_HALF - 0.7, radius: 1.6 });
+  acc.wear.push({ x: MOUTH, z: CROSS_HALF - 1.1, width: 3.6, depth: 2.4, strength: 0.55 });
 
-  for (const vz of [-1.1, 1.1]) {
-    place(acc, makeVendingMachine({ seed: 720 + Math.round(vz * 10) }), -crossEndX - 0.9, 0, vz, Math.PI / 2, {
-      collide: true,
-      lights: true,
-    });
+  for (const vz of [-0.6, 0.6]) {
+    place(acc, makeVendingMachine({ seed: 720 + Math.round(vz * 10) }),
+      -MOUTH + vz * 1.1, 0, -CROSS_HALF - 0.9, 0, { collide: true, lights: true });
   }
-  place(acc, makeFireExtinguisher({ seed: 731 }), -crossEndX - 0.9, 0, 2.6, 0, { collide: true });
-  acc.wear.push({ x: -crossEndX + 1.0, z: 0, width: 3.0, depth: 2.6, strength: 0.45 });
-
-  // ------------------------------------------------------- skate furniture ---
-  // Paired kickers with a landing gap in each arm of the cross corridor. A wide shot has to
-  // show at least three readable lines; the spine has the level-data ramps, the arms have
-  // these, and the corridor rails tie them together.
-  const kickerPairs: { x: number; z: number; rotY: number }[] = [
-    { x: 10.2, z: 1.8, rotY: Math.PI / 2 },
-    { x: 15.8, z: 1.8, rotY: -Math.PI / 2 },
-    { x: -10.2, z: -1.8, rotY: -Math.PI / 2 },
-    { x: -15.8, z: -1.8, rotY: Math.PI / 2 },
-  ];
-  for (const k of kickerPairs) {
-    if (blocked(keepClear, k.x, k.z, 1.8, 1.2)) continue;
-    const ramp = makeKickerRamp({ width: 2.9, depth: 1.7, height: 0.72, seed: Math.round(k.x * 7) });
-    place(acc, ramp, k.x, 0, k.z, k.rotY, { collide: true, grind: true });
-    acc.paperSeeds.push({ x: k.x, z: k.z - 1.6, radius: 1.0 });
-    acc.wear.push({ x: k.x, z: k.z - 1.4, width: 2.2, depth: 1.9, strength: 0.6 });
-  }
+  place(acc, makeFireExtinguisher({ seed: 731 }), -MOUTH + 2.6, 0, -CROSS_HALF - 0.7, 0, { collide: true });
+  acc.wear.push({ x: -MOUTH, z: -CROSS_HALF + 1.0, width: 3.0, depth: 2.4, strength: 0.45 });
 
   // ============================================================ THE PLAZA ====
-  // THIS IS THE FIX FOR "TOO BIG AND TOO EMPTY IN THE MIDDLE".
-  //
-  // The intersection and the two arms of the cross corridor were 10 m of unbroken carpet in
-  // every establishing shot — a car park with cubicles around it. A skate plaza is not an open
-  // floor with obstacles pushed to the edges; it is an ISLAND CHAIN you can link end to end
-  // without ever putting a wheel on flat ground. So: a pair of hero ledges flanking the spawn,
-  // planters on the intersection corners, and a ledge / planter / hubba sequence threaded down
-  // each arm between the existing kickers.
-  //
-  // Every position here is checked against what the level data already owns:
-  //   spine    kickers at x = ±2.4 (z = ±8.5, ±13), floor rails at x = ±4.0 (|z| > 5.5)
-  //   +X arm   floor rail at z = -2.6 (x 7.5 … 18.5), kickers at x = 10.2 / 15.8
-  //   -X arm   floor rail at z = +2.6, kickers at x = -10.2 / -15.8
-  // so the plaza takes the OPPOSITE side of each arm and the gaps between the kickers.
+  // The spawn intersection. Three parallel lines a metre and a half apart — the Long Bench
+  // down the centre and a hero ledge either side — so the opening frame of the level says
+  // "there is a grind within two metres of you in any direction", which is what the first
+  // three seconds of a Tony Hawk level is for.
   const ACCENT_ORANGE = 0xe8722a;
   const ACCENT_TEAL = 0x2f6f7d;
 
-  // --- hero pair at the spawn ------------------------------------------------
-  // Two ledges either side of the spawn point, running along the spine. The player lands on
-  // the floor between them and has a grind within two metres in either direction, which is
-  // what an opening shot of a skate level is supposed to promise.
   for (const sx of [-1, 1]) {
-    const lx = sx * 3.45;
+    const lx = sx * 3.4;
     if (blocked(keepClear, lx, 0, 0.55, 2.7)) continue;
-    const ledge = makeLedgeBlock({
-      width: 5.2,
-      depth: 0.95,
-      height: 0.4,
-      seed: 3300 + sx,
+    place(acc, makeLedgeBlock({
+      width: 5.2, depth: 0.95, height: 0.42, seed: 3300 + sx,
       stripe: sx > 0 ? ACCENT_ORANGE : ACCENT_TEAL,
-    });
-    place(acc, ledge, lx, 0, 0, Math.PI / 2, { collide: true, grind: true });
+    }), lx, 0, 0, Math.PI / 2, { collide: true, grind: true });
     acc.wear.push({ x: lx, z: sx * 3.2, width: 2.2, depth: 2.6, strength: 0.5 });
   }
 
-  // --- intersection corners --------------------------------------------------
+  // Planters on the two intersection corners the corridor walls do not turn through.
   for (const sx of [-1, 1]) {
-    const px = sx * 4.05;
-    const pz = -sx * 3.55;
+    const px = sx * 4.15;
+    const pz = -sx * 3.6;
     if (blocked(keepClear, px, pz, 1.3, 0.7)) continue;
-    place(acc, makePlanterLedge({ width: 2.3, depth: 0.9, height: 0.46, seed: 3400 + sx }), px, 0, pz, 0, {
-      collide: true,
-      grind: true,
+    place(acc, makePlanterLedge({ width: 2.3, depth: 0.9, height: 0.4, seed: 3400 + sx }), px, 0, pz, 0, {
+      collide: true, grind: true,
     });
   }
 
-  // --- the arms --------------------------------------------------------------
-  // Sequence per arm, mirrored: ledge → planter → hubba, all on the side of the arm the
-  // level's floor rail does not use, so the two lines run parallel and can be transferred
-  // between rather than fighting each other.
+  // --- spawn banks ------------------------------------------------------------
+  // A bank at the mouth of each arm, facing outward, so the opening frame says "there is
+  // transition here" sideways as well as forward. x = +/-6.1 is the one lane in the arm
+  // nothing else claims: the hero ledges stop at 3.9 and the arm ledges start at 7.6.
   for (const sx of [-1, 1]) {
-    const lane = sx > 0 ? 3.05 : -3.05;
-    const items: { x: number; build: () => THREE.Object3D }[] = [
-      { x: 7.3, build: () => makeLedgeBlock({ width: 3.6, depth: 0.9, height: 0.4, seed: 3500 + sx, stripe: ACCENT_TEAL }) },
-      { x: 13.0, build: () => makePlanterLedge({ width: 3.4, depth: 1.0, height: 0.5, seed: 3600 + sx }) },
-      { x: 19.0, build: () => makeLedgeBlock({ width: 3.4, depth: 1.0, height: 0.62, seed: 3700 + sx, stripe: ACCENT_ORANGE }) },
-    ];
-    for (const it of items) {
-      const px = sx * it.x;
-      if (Math.abs(px) + 1.9 > halfW - 1.2) continue;
-      if (blocked(keepClear, px, lane, 2.0, 0.7)) continue;
-      place(acc, it.build(), px, 0, lane, 0, { collide: true, grind: true });
-      acc.wear.push({ x: px, z: lane - Math.sign(lane) * 1.5, width: 3.0, depth: 2.2, strength: 0.4 });
-      acc.paperSeeds.push({ x: px + rand(-1.2, 1.2), z: lane - Math.sign(lane) * 1.3, radius: 1.0 });
-    }
+    const bx = sx * 6.1;
+    if (blocked(keepClear, bx, 0, 0.7, 1.7)) continue;
+    place(acc, makeQuarterPipe({ variant: 1, width: 3.2, depth: 1.2, height: 0.62, seed: 3900 + sx }), bx, 0, 0,
+      sx * Math.PI / 2, { collide: true, grind: true });
+    acc.wear.push({ x: bx - sx * 1.5, z: 0, width: 2.4, depth: 3.4, strength: 0.45 });
   }
 
-  // ================================================== TRANSITION AGAINST THE WALL ====
-  // THIS IS THE FIX FOR "THE DEAD CENTRE IS A WAREHOUSE FLOOR".
+  // ============================================================== THE ARMS ===
+  // The cross corridor is 9.2 m wide and carries the level data's floor rail down one side
+  // of each arm (z = -2.6 east, z = +2.6 west, both at 0.80 m). The other side gets a ledge
+  // run, so each arm is two parallel lines you can transfer between, and both of them empty
+  // straight through the loop wall's mouth onto the loop.
   //
-  // Every skateable object on this plate was a straight line at one of two heights: cap rails
-  // at 1.40 m and ledges at 0.4-0.6 m. A park built only out of straight lines is a park you
-  // can only travel ALONG — you enter an arm at one end, you leave it at the other, and the
-  // nine metres of carpet between the two lines has no reason to exist. That is precisely what
-  // an "architectural walkthrough" looks like from a wide camera: circulation, not a park.
-  //
-  // A transition is the primitive that fixes it, because it sends the player UP and turns them
-  // AROUND, which is what makes an open floor a place you circulate IN. So each arm of the
-  // cross corridor gets a run of quarter pipes backed hard onto the corridor wall.
-  //
-  // THE COPING IS DELIBERATELY FLUSH WITH THE CORRIDOR CAP RAIL. The wall top sits at
-  // AISLE_H + 0.08 = 1.40 and the QP lip is authored to land there, so carving up the
-  // transition puts the player's wheels exactly on the continuous 17 m grind line running
-  // along the top of the wall behind it. Pump the ramp, pop the lip, hold the rail: that is a
-  // designed line rather than a field of props, and it costs 1.5 m off the corridor width,
-  // which tightens the space at the same time.
-  const CAP_TOP = AISLE_H + 0.08;
-  const QP_DEPTH = 1.55;
+  // SPACING CHECK. Arm ledge ends at |x| = 15.4; the loop's ledge on that side is crossed at
+  // |x| = 18.0. That is 2.6 m, well inside the 0.8 s re-grind cooldown, which is deliberate:
+  // you do NOT catch the loop on the way out of the arm, you catch it after the corner. The
+  // arm is a way IN to the loop, not a link in it.
   for (const sx of [-1, 1]) {
-    // The rail the level data owns runs down ONE side of each arm; the transitions take the
-    // other, so the two lines are parallel and transferable instead of fighting.
+    const lane = sx > 0 ? 2.6 : -2.6;
+    if (blocked(keepClear, sx * 11.5, lane, 4.2, 0.7)) continue;
+    runLedge(sx * 7.6, lane, sx * 15.4, lane, {
+      height: 0.42, depth: 1.1, stripe: sx > 0 ? ACCENT_TEAL : ACCENT_ORANGE, seed: 3500 + sx * 13,
+    });
+    acc.paperSeeds.push({ x: sx * 11.5, z: lane - Math.sign(lane) * 1.3, radius: 1.2 });
+  }
+
+  // Banks against the arm walls, opposite the arm ledge, with their coping FLUSH with the
+  // corridor cap rail at 1.40: pump the ramp, pop the lip, hold the cap for 11 m. That is a
+  // designed line rather than a field of props.
+  const QP_ARM_D = 1.5;
+  for (const sx of [-1, 1]) {
     const wallZ = sx > 0 ? -CROSS_HALF : CROSS_HALF;
-    const cz = wallZ - Math.sign(wallZ) * (QP_DEPTH / 2 + 0.06);
-    for (const bx of [8.6, 14.2, 19.6]) {
+    const cz = wallZ - Math.sign(wallZ) * (QP_ARM_D / 2 + 0.06);
+    for (const bx of [9.0, 14.6]) {
       const px = sx * bx;
-      if (Math.abs(px) + 2.4 > crossEndX) continue;
-      if (blocked(keepClear, px, cz, 2.4, QP_DEPTH / 2)) continue;
-      const qp = makeQuarterPipe({
-        width: 4.4,
-        depth: QP_DEPTH,
-        height: CAP_TOP - 0.06,
-        seed: 3800 + Math.round(bx * 3) + sx,
-      });
-      // rotY = 0 puts the tall end at +Z. The wall is at -Z on the +X arm, so flip there.
-      place(acc, qp, px, 0, cz, wallZ < 0 ? Math.PI : 0, { collide: true, grind: true });
+      if (blocked(keepClear, px, cz, 2.4, QP_ARM_D / 2)) continue;
+      place(acc, makeQuarterPipe({
+        width: 4.4, depth: QP_ARM_D, height: CAP_TOP - 0.06, seed: 3700 + Math.round(bx * 3) + sx,
+      }), px, 0, cz, wallZ < 0 ? Math.PI : 0, { collide: true, grind: true });
       acc.wear.push({ x: px, z: cz - Math.sign(wallZ) * 1.7, width: 4.6, depth: 2.6, strength: 0.5 });
       acc.paperSeeds.push({ x: px + rand(-1.6, 1.6), z: cz - Math.sign(wallZ) * 1.5, radius: 1.3 });
     }
   }
 
-  // --- spawn banks ------------------------------------------------------------
-  // Two low banks flanking the spawn, one at the mouth of each arm of the cross corridor,
-  // facing outward. The player spawns between them, so the opening frame says "there is
-  // transition here" rather than "there is a corridor here" — and it says it sideways, which
-  // is the direction the level otherwise gives the player no reason to look in.
-  //
-  // x = ±6.1 is the one lane in the arm that nothing else claims: the hero ledges stop at
-  // x = 3.9, the corridor walls start at 5.2 and turn the corner there, and the arm plaza's
-  // first item is at 7.3.
-  for (const sx of [-1, 1]) {
-    const bx = sx * 6.1;
-    if (blocked(keepClear, bx, 0, 0.7, 1.7)) continue;
-    // rotY = +PI/2 maps the ramp's local +Z (its tall end) onto +X.
-    place(acc, makeQuarterPipe({ variant: 1, width: 3.2, depth: 1.2, height: 0.66, seed: 3900 + sx }), bx, 0, 0,
-      sx * Math.PI / 2, { collide: true, grind: true });
-    acc.wear.push({ x: bx - sx * 1.5, z: 0, width: 2.4, depth: 3.4, strength: 0.45 });
-  }
-
-  // --- spine islands ----------------------------------------------------------
-  // The spine's centre lane was the widest unbroken strip of carpet on the plate: the level
-  // data's kickers sit at x = ±2.4 and its floor rails at x = ±4.0, so the two metres either
-  // side of the centre line carried nothing at all. A funbox — kicker, flat, kicker — turns
-  // that dead lane into the connector between the two rail lines, and because it is composed
-  // out of props that already exist it enters the same merge buckets and costs zero draw calls.
-  //
-  // GEOMETRY, NOT TASTE, PICKS THE POSITION. The only gap on the spine that a full funbox fits
-  // in is between the intersection and the level's first kicker: that ramp occupies
-  // z = 7.6…9.4 and the second one 12.1…13.9, so the usable band is z = 4.0…7.5 and a funbox
-  // of flat length L needs L + 1.84 m. L = 1.6 lands the assembly in 4.03…7.47 with 5 cm to
-  // spare at each end. The stretch beyond it is covered by the 8 m hubba below, which is why
-  // there is only one island per half and not two.
-  const ISLAND_W = 2.0;
-  const ISLAND_LEN = 1.6;
-  for (const sz of [-1, 1]) {
-    const cz = sz * 5.75;
-    if (blocked(keepClear, 0, cz, ISLAND_W / 2 + 0.2, ISLAND_LEN / 2 + 1.4)) continue;
-    place(acc, makeLedgeBlock({
-      width: ISLAND_W,
-      depth: ISLAND_LEN,
-      height: 0.42,
-      seed: 4000 + sz,
-      stripe: sz > 0 ? ACCENT_ORANGE : ACCENT_TEAL,
-    }), 0, 0, cz, 0, { collide: true, grind: true });
-    // A kick at each end so the island is rideable from both directions.
-    for (const end of [-1, 1]) {
-      place(acc, makeKickerRamp({
-        variant: 1,
-        width: ISLAND_W,
-        depth: 0.92,
-        height: 0.42,
-        seed: 4050 + end * 3 + sz,
-      }), 0, 0, cz + sz * end * (ISLAND_LEN / 2 + 0.46), sz * end > 0 ? Math.PI : 0, {
-        collide: true,
-        grind: false,
-      });
-    }
-    acc.wear.push({ x: 0, z: cz, width: 3.0, depth: ISLAND_LEN + 3.4, strength: 0.4 });
-    acc.paperSeeds.push({ x: rand(-1.4, 1.4), z: cz + sz * rand(1.6, 2.6), radius: 1.2 });
-  }
-
-  // --- spine hubbas -----------------------------------------------------------
-  // The level data's kickers alternate sides down the spine — both +Z kickers sit at x = -2.4,
+  // ------------------------------------------------------- spine transfers ---
+  // The level data's kickers alternate sides down the spine — both +Z kickers at x = -2.4,
   // both -Z kickers at x = +2.4 — so each half of the corridor has one side carrying every
-  // obstacle and the other side carrying eight metres of bare carpet. That asymmetry is very
-  // visible from the follow camera, because the empty side is exactly where the camera lags.
-  //
-  // An 8 m ledge in the empty lane balances it and, more usefully, gives each half of the spine
-  // a THIRD parallel line: kicker lane, ledge, floor rail. Three lines a metre and a half
-  // apart is a corridor you can slalom; one line is a corridor you drive down.
+  // obstacle. A ledge in the empty lane balances it and gives each half of the spine a THIRD
+  // parallel line: kicker lane, Long Bench, floor rail. Landing off a kicker puts you on it.
   for (const sz of [-1, 1]) {
-    const lx = sz > 0 ? 2.72 : -2.72;   // opposite the kickers in that half
-    const cz = sz * 10.4;
-    if (blocked(keepClear, lx, cz, 0.6, 4.2)) continue;
-    place(acc, makeLedgeBlock({
-      width: 8.0,
-      depth: 0.92,
-      height: 0.52,
-      seed: 4200 + sz,
-      stripe: sz > 0 ? ACCENT_TEAL : ACCENT_ORANGE,
-    }), lx, 0, cz, Math.PI / 2, { collide: true, grind: true });
-    acc.wear.push({ x: lx - Math.sign(lx) * 1.3, z: cz, width: 2.4, depth: 8.4, strength: 0.35 });
+    const lx = sz > 0 ? 2.7 : -2.7;
+    const cz = sz * 10.6;
+    if (blocked(keepClear, lx, cz, 0.6, 4.05)) continue;
+    runLedge(lx, cz - 4.0, lx, cz + 4.0, {
+      height: 0.42, depth: 0.95, stripe: sz > 0 ? ACCENT_TEAL : ACCENT_ORANGE, seed: 4200 + sz * 9,
+    });
     for (let k = -1; k <= 1; k++) {
       acc.paperSeeds.push({ x: lx - Math.sign(lx) * rand(0.9, 1.8), z: cz + k * 3.0, radius: 1.1 });
     }
@@ -1068,8 +1232,8 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       // This arm's transitions live on the wall opposite the level's floor rail; on that side
       // the clutter loop has to step around them.
       const transitionSide = (sx > 0 ? -1 : 1) === sz;
-      for (let x = sx * (SPINE_HALF + 1.6); Math.abs(x) < crossEndX - 1.0; x += sx * rand(1.8, 4.2)) {
-        if (transitionSide && [8.6, 14.2, 19.6].some((b) => Math.abs(Math.abs(x) - b) < 2.9)) continue;
+      for (let x = sx * (SPINE_HALF + 1.6); Math.abs(x) < RING_IN - 1.0; x += sx * rand(1.8, 4.2)) {
+        if (transitionSide && [9.0, 14.6].some((b) => Math.abs(Math.abs(x) - b) < 2.8)) continue;
         if (blocked(keepClear, x, wz, 0.6, 0.6)) continue;
         const roll = rng();
         const accent = chance(0.2);
@@ -1098,7 +1262,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // 0.5 m service strip the skate line never touches.
   const aisleEdge = SPINE_HALF - 0.5;
   for (const sx of [-1, 1]) {
-    for (let z = -halfD + 4; z < halfD - 4; z += rand(1.7, 3.4)) {
+    for (let z = -RING_IN + 1.4; z < RING_IN - 1.4; z += rand(1.7, 3.4)) {
       if (Math.abs(z) < CROSS_HALF + 1.2) continue;
       const x = sx * aisleEdge;
       if (blocked(keepClear, x, z, 0.6, 0.6)) continue;
@@ -1124,18 +1288,26 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
 
   // ------------------------------------------------------- perimeter dress ---
-  // Filing cabinet runs backed onto the walls, printers and coolers in the gaps.
-  const wallRuns: { nx: number; nz: number; along: 'x' | 'z'; base: number }[] = [
-    { nx: 0, nz: 1, along: 'x', base: -halfD + 0.34 },
-    { nx: 0, nz: -1, along: 'x', base: halfD - 0.34 },
-    { nx: 1, nz: 0, along: 'z', base: -halfW + 0.34 },
-    { nx: -1, nz: 0, along: 'z', base: halfW - 0.34 },
+  // The building wall is now the OUTER edge of the racetrack, so nothing floor-standing may
+  // go against it — a bin sticking 0.6 m into the outer lane is a wall the player meets at
+  // 15 m/s with no warning, and there is no room to route around it. The floor dressing
+  // therefore backs onto the loop's INNER wall instead, in the service strip beside the
+  // cubicle panelling, stepping around the banks and the four corridor mouths. Wall-mounted
+  // furniture (no colliders) stays on the building wall where it belongs.
+  const DRESS = RING_IN + 0.62;
+  const wallRuns: { nx: number; nz: number; along: 'x' | 'z'; base: number; wall: number }[] = [
+    { nx: 0, nz: -1, along: 'x', base: -DRESS, wall: -halfD + 0.34 },
+    { nx: 0, nz: 1, along: 'x', base: DRESS, wall: halfD - 0.34 },
+    { nx: -1, nz: 0, along: 'z', base: -DRESS, wall: -halfW + 0.34 },
+    { nx: 1, nz: 0, along: 'z', base: DRESS, wall: halfW - 0.34 },
   ];
 
   for (const run of wallRuns) {
-    const yaw = Math.atan2(run.nx, run.nz); // face into the room
+    const yaw = Math.atan2(run.nx, run.nz); // face out into the loop
     const span = run.along === 'x' ? W : D;
-    for (let t = -span / 2 + 2.2; t < span / 2 - 2.2; t += rand(0.8, 2.3)) {
+    for (let t = -RING_IN + 1.2; t < RING_IN - 1.2; t += rand(0.9, 2.4)) {
+      if (Math.abs(t) < CROSS_HALF + 1.6) continue;                       // corridor mouth
+      if ([-10.4, 10.4].some((b2) => Math.abs(t - b2) < 2.9)) continue;   // bank window
       const x = run.along === 'x' ? t : run.base;
       const z = run.along === 'x' ? run.base : t;
       if (blocked(keepClear, x, z, 0.7, 0.7)) continue;
@@ -1171,21 +1343,12 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       }
     }
 
-    // A pile of packing boxes in each corner of the plate: the "this floor is being
-    // decommissioned" story the refs tell with their loose cardboard.
-    const corner = makeBoxStack({ seed: Math.round(run.base * 31) + 3 });
-    const cx = run.along === 'x' ? -run.nz * (halfW - 2.6) : run.base + run.nx * 1.9;
-    const cz = run.along === 'x' ? run.base + run.nz * 1.9 : run.nx * (halfD - 2.6);
-    if (!blocked(keepClear, cx, cz, 1.2, 1.2)) {
-      place(acc, corner, cx, 0, cz, rand(0, Math.PI), { collide: true });
-      acc.wear.push({ x: cx, z: cz, width: 3.2, depth: 3.2, rotation: rand(0, 3), strength: 0.6 });
-    }
-
-    // Wall furniture: cork boards, whiteboards, clocks, exit signs.
+    // Wall furniture: cork boards, whiteboards, clocks, exit signs. These stay on the actual
+    // building wall behind the loop, where they read as the room the racetrack is cut through.
     const wallY = 1.75;
-    for (let t = -span / 2 + 6; t < span / 2 - 6; t += rand(6, 11)) {
-      const x = run.along === 'x' ? t : run.base - run.nx * 0.28;
-      const z = run.along === 'x' ? run.base - run.nz * 0.28 : t;
+    for (let t = -span / 2 + 6; t < span / 2 - 6; t += rand(5, 9)) {
+      const x = run.along === 'x' ? t : run.wall + run.nx * 0.28;
+      const z = run.along === 'x' ? run.wall + run.nz * 0.28 : t;
       const roll = rng();
       if (roll < 0.4) {
         place(acc, makeCorkBoard({ seed: Math.round(t * 11) + 3 }), x, wallY, z, yaw, { collide: false });

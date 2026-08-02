@@ -8,7 +8,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from '../input/InputManager';
 import { THPSControls, type ControlIntent } from '../input/THPSControls';
-import { PhysicsWorld } from '../physics/PhysicsWorld';
+import { PhysicsWorld, CHAIR_FOOT_OFFSET } from '../physics/PhysicsWorld';
 import { GrindSystem } from '../physics/GrindSystem';
 import { CameraController } from '../rendering/CameraController';
 import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
@@ -93,7 +93,7 @@ export class Game {
   // Constants
   private readonly PHYSICS_TIMESTEP = 1 / 60;
   private readonly MAX_FRAME_SKIP = 5;
-  private readonly COYOTE_TIME_MS = 80; // Allow jumping 80ms after leaving ground
+  private readonly COYOTE_TIME_MS = 130; // Allow jumping 130ms after leaving ground
   
   // Three.js
   private scene!: THREE.Scene;
@@ -208,9 +208,41 @@ export class Game {
   // THPS-style surface tracking
   private surfaceNormal = new THREE.Vector3(0, 1, 0);  // Current surface we're on
   private surfaceAngle = 0;  // Angle of surface in degrees (0 = flat)
-  private readonly GROUND_SNAP_DISTANCE = 1.5;  // Max distance to snap to ground
+  /** Furthest gap under the wheels that still counts as touching down. */
+  private readonly GROUND_CONTACT_GAP = 0.18;
+  /** Once grounded, how far the floor may drop away before the wheels are considered off it. */
+  private readonly GROUND_STICK_GAP = 0.6;
+  /** Gap under the wheels beyond which we stop looking for a surface at all. */
+  private readonly GROUND_SNAP_DISTANCE = 0.9;
   private readonly LAUNCH_ANGLE = 45;  // Surface angle that triggers launch
-  
+
+  // ---- THPS ground feel -------------------------------------------------------------
+  /** Monotonic simulated seconds. The only clock gameplay is allowed to read. */
+  private simTime = 0;
+  /** Comfortable cruise the push alone will carry you to. */
+  private readonly CRUISE_SPEED = 13.5;
+  /** Hard ceiling; only ramps, grind pops and downhills get you here. */
+  private readonly MAX_SPEED = 20;
+  /** Push acceleration at a standstill, m/s^2. Eases off toward CRUISE_SPEED. */
+  private readonly PUSH_ACCEL = 16;
+  /** Rolling resistance while coasting, m/s^2. Deliberately tiny — coasting is the game. */
+  private readonly ROLL_DRAG = 0.55;
+  /** Extra drag proportional to speed, 1/s. Sets where a free coast settles. */
+  private readonly ROLL_DRAG_K = 0.045;
+  /** How fast velocity is redirected to the way the chair points, 1/s. Carving keeps speed. */
+  private readonly GRIP_RATE = 9.0;
+  /** Tallest obstacle the casters will roll up instead of stopping dead. */
+  private readonly STEP_HEIGHT = 0.42;
+  /** Seconds of being stopped-while-pushing before the chair is treated as pinned. */
+  private readonly PIN_SECONDS = 0.25;
+  private pinnedFor = 0;
+  /** Speed the player has earned and is entitled to keep across a contact. */
+  private carriedSpeed = 0;
+  /** Sim time at which a landing banks its position, unless the player saves it first. */
+  private pendingBankAt = 0;
+  /** How long after touchdown a manual or revert may still rescue the combo, seconds. */
+  private readonly LANDING_GRACE = 0.4;
+
   // Debug: animation cycling
   private debugAnimIndex = 0;
   private debugAnimLockUntil = 0;  // Timestamp when debug lock expires
@@ -625,6 +657,7 @@ export class Game {
     this.hud?.setScore(this.score.balance);
 
     this.balance.end();
+    this.pendingBankAt = 0;
     this.playerState.isManualing = false;
     this.heldGrabId = null;
     this.activeTrick = null;
@@ -1833,6 +1866,9 @@ export class Game {
     this.bailRecovery = 0;
     this.lastBailTime = -Infinity;
     this.prevSpeed = 0;
+    this.carriedSpeed = 0;
+    this.pinnedFor = 0;
+    this.pendingBankAt = 0;
     this.playerState = {
       isGrounded: true,
       isAirborne: false,
@@ -3307,6 +3343,10 @@ export class Game {
   }
   
   private fixedUpdate(dt: number): void {
+    // Simulated seconds. Coyote time, pin recovery and anything else that has to be
+    // reproducible run-to-run reads this, never performance.now().
+    this.simTime += dt;
+
     // ---- 1. INTENT --------------------------------------------------------------------
     // THPSControls is the single source of player intent. InputManager is still ticked so
     // the debug animation cycler keeps working, but nothing gameplay-facing reads it.
@@ -3342,6 +3382,21 @@ export class Game {
 
     // ---- 5. MANUAL / REVERT / BALANCE -------------------------------------------------
     this.updateBalance(dt, intent, speedNow);
+
+    // A landing banks the position only if the player did not save it. Anything that keeps
+    // the line alive — a manual, a revert, a grind, going straight back into the air —
+    // cancels the pending bank and the combo rolls on.
+    if (this.pendingBankAt > 0) {
+      if (!this.score.isOpen) {
+        this.pendingBankAt = 0;
+      } else if (this.balance.isManualing || this.balance.revertTimeRemaining > 0
+                 || this.grindSystem.isGrinding() || this.playerState.isAirborne) {
+        this.pendingBankAt = 0;
+      } else if (this.simTime >= this.pendingBankAt) {
+        this.pendingBankAt = 0;
+        this.land();
+      }
+    }
 
     // ---- 6. MOVEMENT ------------------------------------------------------------------
     if (!this.grindSystem.isGrinding()) {
@@ -3555,9 +3610,15 @@ export class Game {
    */
   private updateBalance(dt: number, intent: ControlIntent, speed: number): void {
     // --- manual entry (edge only, so no repeat) ---
+    // A manual is the glue between two features, so it gets the same landing grace as the
+    // ollie. Requiring the exact frame of contact made it unusable on any surface with a
+    // seam in it, and a manual you cannot start is a line you cannot link.
+    const contactForTrick = this.playerState.isGrounded
+      || (this.simTime - this.lastGroundedTime) * 1000 < this.COYOTE_TIME_MS * 2;
+
     if (intent.manualEdge !== 'none' && this.bailRecovery <= 0) {
       const nose = intent.manualEdge === 'noseManual';
-      if (this.balance.tryStartManual(nose, this.playerState.isGrounded, speed)) {
+      if (this.balance.tryStartManual(nose, contactForTrick, speed)) {
         this.score.startManual(nose);
         this.playerState.isManualing = true;
         const def = TrickRegistry.get(nose ? 'nose_manual' : 'manual');
@@ -3864,18 +3925,28 @@ export class Game {
     // THPS-style ground detection using raycasts
     const wasGrounded = this.playerState.isGrounded;
     
-    // Cast rays downward to find the surface
-    const groundCheck = this.physics.raycastGroundMulti(pos, 0.3, this.GROUND_SNAP_DISTANCE);
-    
+    // Cast rays downward to find the surface. The chair's own body is excluded — a solid
+    // ray starting inside the capsule reports toi 0, which used to make the player
+    // "grounded" at any altitude, so airborne never happened and no ramp normal was ever
+    // seen. `distance` is now the GAP UNDER THE WHEELS, not the distance from body centre.
+    const groundCheck = this.physics.raycastGroundMulti(
+      pos, 0.3, this.GROUND_SNAP_DISTANCE, this.chairBody, CHAIR_FOOT_OFFSET,
+    );
+
     if (groundCheck && groundCheck.distance < this.GROUND_SNAP_DISTANCE) {
       // We're near a surface
       this.surfaceNormal.copy(groundCheck.normal);
       this.surfaceAngle = groundCheck.surfaceAngle;
-      
-      // Grounded if close enough and not moving too fast upward
-      const closeEnough = groundCheck.distance < 0.9; // Capsule radius + small buffer
-      const notLaunching = vel.y < 5; // Not actively jumping up
-      
+
+      // Grounded if the wheels are within a hair of the floor and we are not launching.
+      // Rolling off a curb, a stair edge or a desk lip must NOT read as air: a chair that
+      // goes weightless every time the floor steps down by 20 cm spends a fifth of the run
+      // airborne, scores no manuals (they need contact) and never links anything. So once
+      // you are on the ground the contact window opens up, and only a real pop closes it.
+      const stickGap = wasGrounded && vel.y <= 0.5 ? this.GROUND_STICK_GAP : this.GROUND_CONTACT_GAP;
+      const closeEnough = groundCheck.distance < stickGap;
+      const notLaunching = vel.y < 4; // Not actively jumping up
+
       // On steep surfaces (ramps), check if we're moving up or down
       if (this.surfaceAngle > this.LAUNCH_ANGLE) {
         // On a steep ramp - check if we should launch
@@ -3889,14 +3960,14 @@ export class Game {
       } else {
         this.playerState.isGrounded = closeEnough && notLaunching;
       }
-      
-      // THPS-style: snap to surface when grounded (follow ramps smoothly)
-      if (this.playerState.isGrounded && groundCheck.distance > 0.5 && groundCheck.distance < 0.85) {
-        // Gently push player toward surface
-        const snapForce = (0.8 - groundCheck.distance) * 15;
-        const newVel = vel.clone();
-        newVel.y -= snapForce;
-        this.physics.setVelocity(this.chairBody, newVel);
+
+      // THPS-style: stick to the surface across the crest of a ramp or a stair edge, so a
+      // roll-off does not read as a launch. Only while descending — never fight a pop.
+      if (this.playerState.isGrounded && groundCheck.distance > 0.06 && vel.y <= 0.5) {
+        const snapSpeed = Math.min(9, groundCheck.distance / Math.max(dt, 1e-4));
+        if (vel.y > -snapSpeed) {
+          this.physics.setVelocity(this.chairBody, new THREE.Vector3(vel.x, -snapSpeed, vel.z));
+        }
       }
     } else {
       // No ground detected - airborne
@@ -3904,14 +3975,15 @@ export class Game {
       this.surfaceNormal.set(0, 1, 0);
       this.surfaceAngle = 0;
     }
-    
+
     this.playerState.isAirborne = !this.playerState.isGrounded;
-    
-    // Track last grounded time for coyote time
+
+    // Track last grounded time for coyote time. Sim seconds, not wall clock: the fixed step
+    // is the only clock the gameplay may depend on if runs are to be reproducible.
     if (this.playerState.isGrounded) {
-      this.lastGroundedTime = performance.now();
+      this.lastGroundedTime = this.simTime;
     }
-    
+
     // Track air time and spin
     if (this.playerState.isAirborne) {
       this.playerState.airTime += dt * 1000;
@@ -3978,8 +4050,14 @@ export class Game {
       } else if (this.score.isOpen) {
         // Landing badly out of level (steep surface, huge sideways velocity) also bails.
         const sideways = Math.abs(vel.y) > 22;
-        if (sideways) this.bail('landing');
-        else this.land();
+        if (sideways) {
+          this.bail('landing');
+        } else {
+          // Do NOT bank yet. THPS lets you land into a manual or a revert and keep the
+          // position open — that is the entire mechanism by which two features become one
+          // line. Banking on the touchdown frame made every combo exactly one trick long.
+          this.pendingBankAt = this.simTime + this.LANDING_GRACE;
+        }
       }
 
       if (impactShake > 0.05) {
@@ -4004,6 +4082,112 @@ export class Game {
   }
   
   /**
+   * Curbs, ramp lips, stair edges and walls.
+   *
+   * Rapier will happily let a 0.3 m slab stop a 50 kg capsule dead and hold it there for
+   * the rest of the run — a level-design millimetre becomes ninety percent dead time. So
+   * the movement model looks ahead itself: anything shorter than a caster's reach is
+   * rolled over, and anything taller is glanced off, with the chair banking along the
+   * face instead of burying itself in it. A line survives contact with the level.
+   */
+  private resolveObstacles(dt: number, dir: THREE.Vector3, speed: number, pushing: boolean): boolean {
+    const pos = this.physics.getPosition(this.chairBody);
+    const wheelY = pos.y - CHAIR_FOOT_OFFSET;
+
+    // Feeler starts a few centimetres above the floor so the floor itself is never a wall,
+    // and reaches well past the capsule so contact is seen before the solver reaches it.
+    const feelerOrigin = new THREE.Vector3(pos.x, wheelY + 0.06, pos.z);
+    const reach = 0.45 + Math.max(0.25, speed * dt * 3);
+    const ahead = this.physics.probeDirection(feelerOrigin, dir, reach, this.chairBody);
+
+    let blocked = false;
+    let wallNormal: THREE.Vector3 | null = null;
+
+    if (ahead) {
+      // How tall is it? Look straight down onto the obstacle just past the contact point.
+      const probeAt = new THREE.Vector3(
+        ahead.point.x + dir.x * 0.12,
+        wheelY + this.STEP_HEIGHT + 0.9,
+        ahead.point.z + dir.z * 0.12,
+      );
+      const down = this.physics.probeDirection(
+        probeAt, new THREE.Vector3(0, -1, 0), this.STEP_HEIGHT + 1.4, this.chairBody,
+      );
+      const topY = down ? probeAt.y - down.distance : Infinity;
+      const rise = topY - wheelY;
+
+      if (rise <= this.STEP_HEIGHT) {
+        // Roll up it. A caster climbing a kicker lip should cost nothing but a bump.
+        if (rise > 0.02) {
+          this.physics.setPosition(this.chairBody, new THREE.Vector3(pos.x, pos.y + rise + 0.05, pos.z));
+        }
+      } else {
+        blocked = true;
+        wallNormal = new THREE.Vector3(ahead.normal.x, 0, ahead.normal.z);
+        if (wallNormal.lengthSq() < 1e-6) wallNormal = null; else wallNormal.normalize();
+      }
+    }
+
+    // A wall that is simply eating the push, with no ray to explain it (a corner, a prop
+    // the feeler slipped past). Track it so the recovery below still fires.
+    if (pushing && speed < 1.2) this.pinnedFor += dt;
+    else if (!blocked) this.pinnedFor = Math.max(0, this.pinnedFor - dt * 2);
+
+    const pinned = this.pinnedFor >= this.PIN_SECONDS;
+    if (!blocked && !pinned) return false;
+
+    // Choose the way out: along the wall if we have a normal, otherwise toward whichever
+    // side has more open floor.
+    const right = new THREE.Vector3(-dir.z, 0, dir.x);
+    let slide: THREE.Vector3;
+    if (wallNormal && Math.abs(wallNormal.dot(dir)) < 0.985) {
+      slide = dir.clone().sub(wallNormal.clone().multiplyScalar(dir.dot(wallNormal)));
+      if (slide.lengthSq() < 1e-6) slide = right.clone();
+      else slide.normalize();
+    } else {
+      const probeSide = (s: number) => {
+        const o = new THREE.Vector3(pos.x, wheelY + 0.06, pos.z);
+        const d = right.clone().multiplyScalar(s);
+        const h = this.physics.probeDirection(o, d, 8, this.chairBody);
+        return h ? h.distance : 8;
+      };
+      const openRight = probeSide(1);
+      const openLeft = probeSide(-1);
+      slide = right.clone().multiplyScalar(openRight >= openLeft ? 1 : -1);
+      // Lean the escape slightly away from the wall we are actually touching, so a
+      // head-on hit peels off rather than scraping along the face forever.
+      if (wallNormal) slide.add(wallNormal.clone().multiplyScalar(0.35)).normalize();
+    }
+
+    // Redirect the line immediately — the velocity has to leave the wall this frame or the
+    // solver eats it — but bank the chair's yaw across a few frames so it reads as a
+    // carve off the obstacle rather than a teleporting handbrake turn.
+    dir.copy(slide);
+
+    const targetYaw = Math.atan2(slide.x, slide.z);
+    const rot = this.physics.getRotation(this.chairBody);
+    const f = new THREE.Vector3(0, 0, 1).applyQuaternion(rot);
+    const yaw = Math.atan2(f.x, f.z);
+    let delta = targetYaw - yaw;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    const maxTurn = (pinned ? 9 : 6) * dt;
+    this.physics.setRotationY(this.chairBody, yaw + Math.max(-maxTurn, Math.min(maxTurn, delta)));
+
+    if (pinned) {
+      // Nothing else has worked for a quarter of a second: shove the chair off the wall so
+      // the run continues. A stall is the only outcome a THPS level may never produce.
+      const v = this.physics.getVelocity(this.chairBody);
+      const kick = Math.max(4.5, this.carriedSpeed * 0.7);
+      this.physics.setVelocity(this.chairBody, new THREE.Vector3(slide.x * kick, v.y, slide.z * kick));
+      this.carriedSpeed = kick;
+      this.pinnedFor = 0;
+    }
+
+    return true;
+  }
+
+  /**
    * Drive the chair from ControlIntent. Analog turn, hold-charge ollie, and spin from the
    * shoulder buttons instead of the old raw-key booleans.
    */
@@ -4015,52 +4199,96 @@ export class Game {
     }
 
     // THPS-style physics - snappy and responsive. Upgrade multipliers from story mode.
-    const accelSpeed = 0.4 * this.speedMultiplier;
-    const jumpImpulse = 10 * this.jumpMultiplier;
+    const jumpImpulse = 12.5 * this.jumpMultiplier;
     const spinTorque = 6 * this.spinMultiplier;
-    const maxSpeed = 18 * this.speedMultiplier;
+    const cruiseSpeed = this.CRUISE_SPEED * this.speedMultiplier;
+    const maxSpeed = this.MAX_SPEED * this.speedMultiplier;
 
     // +Z is forward (away from camera), matching CameraController expectations
     const chairRotation = this.physics.getRotation(this.chairBody);
     const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(chairRotation);
+    const fwdFlat = new THREE.Vector3(forward.x, 0, forward.z);
+    if (fwdFlat.lengthSq() < 1e-8) fwdFlat.set(0, 0, 1); else fwdFlat.normalize();
+
     const velocity = this.physics.getVelocity(this.chairBody);
-    const currentSpeed = new THREE.Vector3(velocity.x, 0, velocity.z).length();
+    const planar = new THREE.Vector3(velocity.x, 0, velocity.z);
+    const currentSpeed = planar.length();
 
-    // Movement direction along the surface (for ramps)
-    const surfaceForward = this.physics.getSurfaceMovementDirection(forward, this.surfaceNormal);
+    if (this.playerState.isGrounded) {
+      // ---- GROUND MOVEMENT MODEL --------------------------------------------------
+      // Everything about how a THPS line feels lives in these twenty lines: velocity is
+      // steered toward where the chair points WITHOUT losing magnitude (so carving keeps
+      // speed), the push eases you up to a cruise rather than to the hard ceiling, and
+      // coasting bleeds off slowly enough that the gaps between features stay alive.
+      let speed = currentSpeed;
+      const rolling = currentSpeed > 0.05 ? planar.clone().divideScalar(currentSpeed) : fwdFlat.clone();
+      const goingBackwards = rolling.dot(fwdFlat) < -0.2;
+      const heading = goingBackwards ? fwdFlat.clone().negate() : fwdFlat.clone();
 
-    // PUSH — kick off the floor. The rider's push animation is driven off the same flag.
-    if (intent.push && this.playerState.isGrounded && currentSpeed < maxSpeed) {
-      const boost = surfaceForward.clone().multiplyScalar(accelSpeed);
-      const newVel = velocity.clone();
-      newVel.x += boost.x;
-      newVel.y += boost.y;   // vertical component matters on ramps
-      newVel.z += boost.z;
-      this.physics.setVelocity(this.chairBody, newVel);
+      // Grip: rotate the velocity vector toward the heading, magnitude untouched.
+      const grip = 1 - Math.exp(-this.GRIP_RATE * dt);
+      const dir = rolling.lerp(heading, grip);
+      if (dir.lengthSq() < 1e-8) dir.copy(heading); else dir.normalize();
 
-      const now = performance.now();
-      if (now - this.lastPushSoundTime > 400) {
-        proceduralSounds.playPush();
-        this.lastPushSoundTime = now;
+      // Curbs, ramp lips, stair edges and walls, resolved BEFORE the velocity is written
+      // so a contact steers the line instead of ending it. `dir` comes back pointing
+      // somewhere the chair can actually go.
+      const contact = this.resolveObstacles(dt, dir, speed, intent.push);
+
+      // Speed the solver ate on the previous step. A glancing hit should cost you a
+      // fraction of your speed and a change of line, not the whole run — this is the
+      // difference between a level that punishes exploration and one that rewards it.
+      if (this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.6) {
+        speed = this.carriedSpeed * (contact ? 0.78 : 0.85);
       }
-    }
 
-    // BRAKE / roll back
-    if (intent.brake && this.playerState.isGrounded && currentSpeed < maxSpeed) {
-      const boost = surfaceForward.clone().multiplyScalar(-accelSpeed * 0.6);
-      const newVel = velocity.clone();
-      newVel.x += boost.x;
-      newVel.y += boost.y;
-      newVel.z += boost.z;
-      this.physics.setVelocity(this.chairBody, newVel);
-    }
+      if (intent.push) {
+        // Ease-off accel: full kick from a standstill, nothing left once you are cruising.
+        const headroom = Math.max(0, 1 - speed / Math.max(1, cruiseSpeed));
+        speed += this.PUSH_ACCEL * (0.25 + 0.75 * headroom) * this.speedMultiplier * dt;
 
-    // On steep ramps going up, preserve momentum
-    if (this.playerState.isGrounded && this.surfaceAngle > 20) {
-      const gravityReduction = Math.min(0.8, this.surfaceAngle / 60);
-      const newVel = this.physics.getVelocity(this.chairBody);
-      newVel.y += gravityReduction * 0.3;
+        const now = performance.now();
+        if (now - this.lastPushSoundTime > 400) {
+          proceduralSounds.playPush();
+          this.lastPushSoundTime = now;
+        }
+      } else if (intent.brake) {
+        speed -= 14 * dt;
+        if (speed < 0) speed = 0;
+      } else {
+        // Coast. Tiny constant term so you eventually stop, tiny linear term so the top
+        // end settles; between them a 13 m/s coast still reads 10 m/s four seconds later.
+        speed -= (this.ROLL_DRAG + this.ROLL_DRAG_K * speed) * dt;
+        if (speed < 0) speed = 0;
+      }
+
+      // Gravity along the surface: ramps give speed back on the way down and cost on the
+      // way up, which is what makes a transfer feel earned.
+      if (this.surfaceAngle > 3) {
+        const slopeDot = -dir.dot(new THREE.Vector3(this.surfaceNormal.x, 0, this.surfaceNormal.z));
+        speed += slopeDot * 16 * dt;
+        if (speed < 0) speed = 0;
+      }
+
+      if (speed > maxSpeed) speed = maxSpeed;
+
+      // Ride the surface plane rather than skimming over it, so ramps convert speed to air.
+      const alongSurface = this.physics.getSurfaceMovementDirection(dir, this.surfaceNormal);
+      const newVel = new THREE.Vector3(
+        alongSurface.x * speed,
+        this.surfaceAngle > 3 ? alongSurface.y * speed : velocity.y,
+        alongSurface.z * speed,
+      );
       this.physics.setVelocity(this.chairBody, newVel);
+
+      // Remember the speed we are entitled to, so the next contact cannot simply delete it.
+      this.carriedSpeed = Math.min(maxSpeed, Math.max(speed, this.carriedSpeed - 9 * dt));
+    } else if (intent.brake && currentSpeed > 0.1) {
+      // Air brake is deliberately feeble — you commit when you leave the floor.
+      const k = Math.max(0, 1 - 1.2 * dt);
+      this.physics.setVelocity(
+        this.chairBody, new THREE.Vector3(velocity.x * k, velocity.y, velocity.z * k),
+      );
     }
 
     // TURNING — analog, with weight at both ends so the camera has something continuous
@@ -4086,12 +4314,12 @@ export class Game {
 
     // OLLIE — charged while the button is held, fired on release, scaled by the charge.
     // Coyote time still applies so leaving a ledge does not eat the pop.
-    const withinCoyoteTime = performance.now() - this.lastGroundedTime < this.COYOTE_TIME_MS;
+    const withinCoyoteTime = (this.simTime - this.lastGroundedTime) * 1000 < this.COYOTE_TIME_MS;
     const canJump = this.playerState.isGrounded || withinCoyoteTime;
 
     if (intent.olliePopped && canJump) {
       proceduralSounds.playJump();
-      this.lastGroundedTime = 0;
+      this.lastGroundedTime = -Infinity;
       this.ollieCharge = Math.max(0.3, intent.ollieCharge || 1);
 
       // A manual you pop out of ends cleanly; the combo survives.
@@ -4100,9 +4328,21 @@ export class Game {
       const v = this.physics.getVelocity(this.chairBody);
       const newVel = v.clone();
       newVel.y = jumpImpulse * this.ollieCharge;
-      newVel.x += forward.x * 2;
-      newVel.z += forward.z * 2;
+      newVel.x += fwdFlat.x * 1.5;
+      newVel.z += fwdFlat.z * 1.5;
       this.physics.setVelocity(this.chairBody, newVel);
+    }
+
+    // HANG TIME — bleed a third of gravity off around the apex. Without it a 30 m/s^2
+    // world gives a pop that is over before a trick animation can read, and air tricks
+    // are the second half of every line.
+    if (this.playerState.isAirborne) {
+      const v = this.physics.getVelocity(this.chairBody);
+      if (Math.abs(v.y) < 4.5) {
+        this.physics.setVelocity(
+          this.chairBody, new THREE.Vector3(v.x, v.y + 11 * dt, v.z),
+        );
+      }
     }
 
     // SPIN — shoulder buttons, air only.

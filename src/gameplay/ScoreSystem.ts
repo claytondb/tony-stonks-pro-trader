@@ -82,6 +82,16 @@ export interface ComboState {
   formattedMultiplier: string;
   /** 0..1 fraction of the combo clock left, for a timer bar. */
   timeFraction: number;
+  /**
+   * What bailing RIGHT NOW would cost: the forfeited unrealised position plus the margin call
+   * against the bank. This is the number that makes "bank it or push for one more feature" a
+   * real decision instead of a shrug — the HUD should show it the moment it gets scary.
+   */
+  atRisk: number;
+  /** Stonks a bail would take out of the BANKED balance right now (the margin call alone). */
+  bankAtRisk: number;
+  /** "-$14,900" */
+  formattedAtRisk: string;
 }
 
 export type BailReason = 'grind' | 'landing' | 'collision' | 'police';
@@ -107,7 +117,7 @@ interface ScoreEventBase {
   type: 'trick' | 'land' | 'bail' | 'tierReached' | 'balanceChanged';
   /** Banked stonks AFTER this event was applied. */
   balance: number;
-  /** performance.now() at emit time. */
+  /** Simulated ms since the ScoreSystem was created (see ScoreSystem.clockMs). */
   time: number;
 }
 
@@ -239,7 +249,18 @@ export interface ScoreTuning {
   stonksPerPoint: number;
   /** Stonks the player starts with. */
   startingBalance: number;
-  /** ms the combo clock runs for once nothing is holding it open. */
+  /**
+   * ms the combo clock runs for once nothing is holding it open.
+   *
+   * TUNED FROM MEASUREMENT, not taste. ch1_office is a 41x43 m floorplate whose 211 rails form
+   * ONE connected feature graph (every rail end is within 3 m of another rail; median hop 0.40 m,
+   * p90 1.54 m), and the feel pass measured a 12-14 m/s cruise. The widest real gap a line has to
+   * cross is the spine corridor itself — 10.4 m wall to wall, ~0.8 s at cruise — or a run from the
+   * conference table at z=-18 to the stairs at z=+20, 38 m. A 1.8 s window buys 22-25 m at cruise:
+   * comfortably more than any single hop between features, comfortably less than a free lap of the
+   * level. The old 2500 ms bought 34 m, which is the whole floorplate — there was no pressure in it
+   * at all, and a combo that can never lapse is not a combo.
+   */
   comboWindowMs: number;
   /** Repeating a trick id multiplies its points by this ^ repeatCount (THPS halves). */
   repeatFalloff: number;
@@ -269,6 +290,11 @@ export interface ScoreTuning {
   transferBonus: number;
   /** ms after a grind ends during which a new grind counts as a transfer. */
   transferWindowMs: number;
+  /**
+   * Minimum ms off the rail before a new grind counts as a transfer rather than the same ledge
+   * continuing. Below this you never actually left, so there is nothing to reward.
+   */
+  transferMinGapMs: number;
 
   /** Points for a 180. Scales quadratically: points = spin180Points * steps^2. */
   spin180Points: number;
@@ -298,6 +324,17 @@ export interface ScoreTuning {
   /** If false the balance clamps at 0 instead of going negative. */
   allowNegativeBalance: boolean;
 
+  /**
+   * Whether addStonks() (pickups, goal rewards, level payouts) counts toward `sessionScore`.
+   *
+   * It used to, and that quietly destroyed the score tiers: a 60 s run of holding W in a straight
+   * line, landing nothing, banked 9,750 session "score" in ch1_office — 9,150 of it pickups and
+   * goal rewards — and cleared HIGH SCORE (8,000) without a single trick. HIGH/PRO/SICK have to
+   * measure skating. Awards still hit the WALLET (`balance`, `sessionEarned`); they just no longer
+   * buy you a tier.
+   */
+  awardsCountTowardSessionScore: boolean;
+
   /** ms a ticker entry stays on screen. */
   tickerLifetimeMs: number;
   /** Max ticker entries retained. */
@@ -307,33 +344,50 @@ export interface ScoreTuning {
 export const DEFAULT_SCORE_TUNING: ScoreTuning = {
   stonksPerPoint: 1,
   startingBalance: 0,
-  comboWindowMs: 2500,
+  comboWindowMs: 1800,
   repeatFalloff: 0.5,
   minRepeatFactor: 0.05,
 
   multiplierPerDistinctTrick: 1.0,
-  multiplierPerRepeatTrick: 0.25,
+  // THPS counts EVERY trick in the line toward the multiplier; only the points fall off on a
+  // repeat. At 0.25 an eight-rail chain down the cubicle wall — the signature line of a level made
+  // of 211 near-identical desk rails — was worth x2.75, so the correct play was to stop chaining
+  // and start a fresh combo. At 0.5 it is worth x4.5 and chaining is always the better play, while
+  // the 0.5^n falloff on the points still makes VARIETY worth more than spam.
+  multiplierPerRepeatTrick: 0.5,
   multiplierPerSpecial: 1.0,
-  multiplierPerGrindSecond: 0.4,
-  multiplierPerManualSecond: 0.3,
+  multiplierPerGrindSecond: 0.45,
+  multiplierPerManualSecond: 0.35,
   maxTimeMultiplier: 12,
   maxMultiplier: 99,
 
   grindPointsPerSecond: 120,
   manualPointsPerSecond: 60,
-  transferBonus: 250,
-  transferWindowMs: 1500,
+  transferBonus: 300,
+  transferWindowMs: 1200,
+  transferMinGapMs: 150,
 
   spin180Points: 100,
 
   revertPoints: 100,
 
-  bigAirThreshold: 1.0,
-  bigAirPointsPerSecond: 400,
+  // A tap ollie now clears ~0.6 s of hangtime, a kicker rather more. At the old 1.0 s threshold
+  // Big Air only ever paid off a ramp launch; at 0.8 s an ollie'd gap over the aisle pays too,
+  // which is what makes players jump instead of hugging the floor.
+  bigAirThreshold: 0.8,
+  bigAirPointsPerSecond: 500,
 
-  minBailLossFraction: 0.02,
-  bailRiskAversion: 0.25,
-  maxBailLossFraction: 0.30,
+  // THE RISK CURVE.
+  // Bailing always forfeits 100% of the unrealised position — that is the real sting, and it is
+  // self-scaling: the bigger the line you were riding, the more evaporates. The margin call on the
+  // BANK on top of it exists to stop "just bail, I'll rebuild" being free, and is deliberately
+  // proportional: it is a fraction of what you own, scaled by how big the position was RELATIVE to
+  // your net worth, so an early bail costs pocket change and a bail with a 40k position on a 20k
+  // bank hurts. Capped at 22% so no single mistake ever ends a session — a punished player stops
+  // taking risks, and a player who stops taking risks stops playing this game.
+  minBailLossFraction: 0.03,
+  bailRiskAversion: 0.20,
+  maxBailLossFraction: 0.22,
   bailReasonMultiplier: {
     grind: 0.9,
     landing: 0.8,
@@ -346,9 +400,13 @@ export const DEFAULT_SCORE_TUNING: ScoreTuning = {
     collision: 0,
     police: 250,
   },
-  marginCallThreshold: 5000,
-  dipThreshold: 1000,
+  // Headline bands, set against measured combo sizes in ch1_office: a competent line banks
+  // 3-9k, a good one 15-40k. So CORRECTION starts where a real line starts and MARGIN CALL is
+  // reserved for losing something you will actually remember losing.
+  marginCallThreshold: 12000,
+  dipThreshold: 2000,
   allowNegativeBalance: false,
+  awardsCountTowardSessionScore: false,
 
   tickerLifetimeMs: 4000,
   tickerMaxEntries: 6,
@@ -448,6 +506,19 @@ const TIER_ORDER: ScoreTier[] = ['high', 'pro', 'sick'];
 export class ScoreSystem {
   private readonly tuning: ScoreTuning;
 
+  /**
+   * SIMULATED milliseconds, advanced only by update(dt). Everything time-shaped in here — combo
+   * duration, the rail-transfer window, ticker ageing — reads this and never performance.now().
+   *
+   * Wall clock was wrong twice over. In game it kept running through a pause, so a paused combo
+   * aged and the ticker emptied behind the menu. And under tools/play.mjs, which steps fixedUpdate()
+   * as fast as the CPU allows, 20 s of simulated skating passes in ~0.4 s of wall clock: the 1500 ms
+   * transfer window covered the ENTIRE run, so every grind paid a transfer bonus and the harness
+   * measured a game nobody was playing. Sim time makes the economy deterministic and reproducible,
+   * which is the only way any of the numbers below can be trusted.
+   */
+  private clockMs = 0;
+
   // --- banked economy ---
   private _balance: number;
 
@@ -466,7 +537,7 @@ export class ScoreSystem {
   private entries: InternalEntry[] = [];
   private basePoints = 0;
   private timer = 0;              // ms left on the combo clock
-  private comboStart = 0;         // performance.now() when the combo opened
+  private comboStart = 0;         // sim ms when the combo opened
   private idCounts = new Map<string, number>();
   private distinctCount = 0;
   private repeatEntryCount = 0;
@@ -593,7 +664,7 @@ export class ScoreSystem {
       comboString: this.comboString,
       formattedPoints: formatStonksDelta(points * this.tuning.stonksPerPoint),
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
   }
@@ -643,14 +714,31 @@ export class ScoreSystem {
     this.currentGrindTime = 0;
 
     // Rail-to-rail transfer bonus.
-    if (now() - this.lastGrindEndTime <= this.tuning.transferWindowMs) {
-      const bonus = this.tuning.transferBonus;
+    //
+    // Two guards, both measured. The gap has to be a real hop: ch1_office's 211 rails are one
+    // connected graph (median 0.40 m between rail ends), so without a floor the grind system
+    // re-captures the next collinear segment on the following frame and pays a full transfer for
+    // riding a straight ledge. And the bonus takes the same repeat falloff as everything else —
+    // flat 300s made a "hold the grind button" run 34 % transfer money, i.e. the most profitable
+    // play in the game was pressing one key. The first hop in a line is the exciting one; after
+    // that the MULTIPLIER is what should be paying you to keep chaining.
+    const sinceLastGrind = this.clockMs - this.lastGrindEndTime;
+    if (sinceLastGrind >= this.tuning.transferMinGapMs && sinceLastGrind <= this.tuning.transferWindowMs) {
+      const transfers = this.idCounts.get('transfer') ?? 0;
+      this.idCounts.set('transfer', transfers + 1);
+      const bonus = Math.max(
+        1,
+        Math.floor(
+          this.tuning.transferBonus *
+            Math.max(this.tuning.minRepeatFactor, Math.pow(this.tuning.repeatFalloff, transfers))
+        )
+      );
       this.entries.push({
         id: 'transfer',
         name: 'Transfer',
         kind: 'gap',
         points: bonus,
-        repeatCount: 0,
+        repeatCount: transfers,
         live: false,
       });
       this.basePoints += bonus;
@@ -668,7 +756,7 @@ export class ScoreSystem {
       comboString: this.comboString,
       formattedPoints: formatStonksDelta(entryPoints * this.tuning.stonksPerPoint),
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
   }
@@ -708,7 +796,7 @@ export class ScoreSystem {
     this.grindEntry.live = false;
     this.grindEntry = null;
     this.currentGrindTime = 0;
-    this.lastGrindEndTime = now();
+    this.lastGrindEndTime = this.clockMs;
     this.refreshTimer();
   }
 
@@ -761,7 +849,7 @@ export class ScoreSystem {
       comboString: this.comboString,
       formattedPoints: formatStonksDelta(entryPoints * this.tuning.stonksPerPoint),
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
   }
@@ -871,7 +959,7 @@ export class ScoreSystem {
       comboString: this.comboString,
       formattedPoints: formatStonksDelta(delta * this.tuning.stonksPerPoint),
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
   }
@@ -922,7 +1010,7 @@ export class ScoreSystem {
       comboString: this.comboString,
       formattedPoints: formatStonksDelta(points * this.tuning.stonksPerPoint),
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
   }
@@ -958,6 +1046,9 @@ export class ScoreSystem {
    */
   update(dt: number): void {
     const step = sanitizeDt(dt);
+    // The sim clock is the ONLY thing that advances time in here, so a paused game freezes the
+    // combo, the transfer window and the ticker exactly as a player would expect.
+    this.clockMs += step * 1000;
     this.pruneTicker();
     if (step <= 0) return;
 
@@ -1026,7 +1117,7 @@ export class ScoreSystem {
     const gained = Math.max(0, Math.floor(points * this.tuning.stonksPerPoint));
     const tricks = this.snapshotEntries();
     const comboString = formatComboString(tricks);
-    const duration = now() - this.comboStart;
+    const duration = this.clockMs - this.comboStart;
 
     this._sessionScore += points;
     this._sessionEarned += gained;
@@ -1048,7 +1139,7 @@ export class ScoreSystem {
       viaTimeout,
       formattedGain: formatStonksDelta(gained),
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
 
@@ -1058,6 +1149,34 @@ export class ScoreSystem {
 
     this.checkTiers();
     return gained;
+  }
+
+  /**
+   * The margin call a bail would take out of the BANK, given the position it would forfeit.
+   *
+   * Shared by bail() and by `state.bankAtRisk`, so the number the HUD threatens you with and the
+   * number you actually pay are the same number. They used to be computed in two places, which is
+   * how a risk mechanic quietly becomes a lie.
+   */
+  private bankLossFor(reason: BailReason, forfeited: number): number {
+    const reasonMul = this.tuning.bailReasonMultiplier[reason] ?? 1;
+
+    let lossFraction = 0;
+    if (forfeited > 0) {
+      const netWorth = Math.max(1, this._balance);
+      const risk = forfeited / netWorth; // position size relative to what you own
+      lossFraction = (this.tuning.minBailLossFraction + risk * this.tuning.bailRiskAversion) * reasonMul;
+      lossFraction = clamp(lossFraction, 0, this.tuning.maxBailLossFraction);
+    }
+
+    let loss = Math.floor(Math.max(0, this._balance) * lossFraction);
+    // Flat fine even with nothing at stake (the cops don't care about your combo).
+    loss += Math.floor((this.tuning.bailFlatPenalty[reason] ?? 0) * reasonMul);
+
+    if (!this.tuning.allowNegativeBalance) {
+      loss = Math.min(loss, Math.max(0, this._balance));
+    }
+    return loss;
   }
 
   /**
@@ -1078,24 +1197,7 @@ export class ScoreSystem {
     const tricks = this.snapshotEntries();
     const comboString = formatComboString(tricks);
 
-    const reasonMul = this.tuning.bailReasonMultiplier[reason] ?? 1;
-
-    let lossFraction = 0;
-    if (forfeited > 0) {
-      const netWorth = Math.max(1, this._balance);
-      const risk = forfeited / netWorth; // combo size relative to what you own
-      lossFraction = (this.tuning.minBailLossFraction + risk * this.tuning.bailRiskAversion) * reasonMul;
-      lossFraction = clamp(lossFraction, 0, this.tuning.maxBailLossFraction);
-    }
-
-    let loss = Math.floor(Math.max(0, this._balance) * lossFraction);
-    // Flat fine even with nothing at stake (the cops don't care about your combo).
-    const flat = Math.floor((this.tuning.bailFlatPenalty[reason] ?? 0) * reasonMul);
-    loss += flat;
-
-    if (!this.tuning.allowNegativeBalance) {
-      loss = Math.min(loss, Math.max(0, this._balance));
-    }
+    let loss = this.bankLossFor(reason, forfeited);
 
     this._bails++;
     if (forfeited > 0 || loss > 0) this._sessionLost += loss;
@@ -1125,7 +1227,7 @@ export class ScoreSystem {
       formattedLoss: formatStonksDelta(-loss),
       formattedForfeit: `${formatStonks(forfeited)} unrealised`,
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
 
@@ -1146,7 +1248,10 @@ export class ScoreSystem {
     if (!Number.isFinite(value) || value === 0) return;
     if (value > 0) {
       this._sessionEarned += value;
-      this._sessionScore += Math.floor(value / Math.max(1e-6, this.tuning.stonksPerPoint));
+      // Awards are money, not skating. They only move the tier bar when a level explicitly opts in.
+      if (this.tuning.awardsCountTowardSessionScore) {
+        this._sessionScore += Math.floor(value / Math.max(1e-6, this.tuning.stonksPerPoint));
+      }
     }
     this.applyBalance(value, 'award', label);
     this.pushTicker(label, value, value >= 0 ? 'gain' : 'loss');
@@ -1183,7 +1288,7 @@ export class ScoreSystem {
       label,
       formattedDelta: formatStonksDelta(delta),
       balance: this._balance,
-      time: now(),
+      time: this.clockMs,
     };
     this.emit(ev);
   }
@@ -1228,7 +1333,7 @@ export class ScoreSystem {
         sessionScore: this._sessionScore,
         label: TIER_LABEL[tier],
         balance: this._balance,
-        time: now(),
+        time: this.clockMs,
       };
       this.emit(ev);
     }
@@ -1243,6 +1348,8 @@ export class ScoreSystem {
     const multiplier = this.multiplier;
     const unrealisedPoints = Math.floor(this.basePoints * multiplier);
     const unrealised = Math.max(0, Math.floor(unrealisedPoints * this.tuning.stonksPerPoint));
+    // Worst realistic case, so the warning never under-promises: a collision bail (x1.0).
+    const bankAtRisk = this.open ? this.bankLossFor('collision', unrealised) : 0;
     return {
       open: this.open,
       tricks,
@@ -1252,7 +1359,7 @@ export class ScoreSystem {
       timeRemaining: this.timer,
       inGrind: this.grindEntry !== null,
       inManual: this.manualEntry !== null,
-      duration: this.open ? now() - this.comboStart : 0,
+      duration: this.open ? this.clockMs - this.comboStart : 0,
       grindTime: this.grindTime,
       manualTime: this.manualTime,
       airTime: this.airTime,
@@ -1261,6 +1368,9 @@ export class ScoreSystem {
       formattedUnrealised: formatStonks(unrealised),
       formattedMultiplier: formatMultiplier(multiplier),
       timeFraction: clamp(this.timer / this.tuning.comboWindowMs, 0, 1),
+      atRisk: unrealised + bankAtRisk,
+      bankAtRisk,
+      formattedAtRisk: formatStonksDelta(-(unrealised + bankAtRisk)),
     };
   }
 
@@ -1313,7 +1423,7 @@ export class ScoreSystem {
 
   /** Recent gains/losses for the stock-ticker strip, newest last. */
   getTicker(): TickerEntry[] {
-    const t = now();
+    const t = this.clockMs;
     return this.ticker.map((e) => {
       const age = t - e.born;
       return {
@@ -1413,7 +1523,7 @@ export class ScoreSystem {
   private ensureOpen(): void {
     if (this.open) return;
     this.open = true;
-    this.comboStart = now();
+    this.comboStart = this.clockMs;
     this.timer = this.tuning.comboWindowMs;
     this.airTime = 0;
   }
@@ -1428,13 +1538,13 @@ export class ScoreSystem {
   }
 
   private pushTicker(text: string, amount: number, kind: 'gain' | 'loss'): void {
-    this.ticker.push({ text, amount, kind, born: now() });
+    this.ticker.push({ text, amount, kind, born: this.clockMs });
     while (this.ticker.length > this.tuning.tickerMaxEntries) this.ticker.shift();
   }
 
   private pruneTicker(): void {
     if (this.ticker.length === 0) return;
-    const t = now();
+    const t = this.clockMs;
     this.ticker = this.ticker.filter((e) => t - e.born < this.tuning.tickerLifetimeMs);
   }
 }
@@ -1442,10 +1552,6 @@ export class ScoreSystem {
 // ---------------------------------------------------------------------------
 // module-local utilities
 // ---------------------------------------------------------------------------
-
-function now(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now();
-}
 
 function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;

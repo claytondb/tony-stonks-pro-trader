@@ -488,17 +488,23 @@ export class GoalTracker {
     if (!id) return;
     for (const s of this.states) {
       if (s.complete) continue;
+      if (s.def.kind !== 'collectLetters' && s.def.kind !== 'hiddenItem') continue;
 
-      if (kind === 'hiddenItem') {
-        if (s.def.kind !== 'hiddenItem') continue;
-        if (!this.acceptsPickupId(s, id)) continue;
-        s.revealed = true;
-      } else {
-        if (s.def.kind !== 'collectLetters') continue;
-        const goalKind = s.def.collectKind ?? 'letter';
+      // THE ID WINS OVER THE LABEL.
+      //
+      // A goal that explicitly lists this pickup id owns it, whatever `kind` the integrator
+      // decided to pass. Game.spawnCollectibles() spawns every entry of `pickupPlacements` —
+      // which includes the cash-collect goals' pickups — as kind 'hiddenItem', so under the old
+      // strict kind match the five shredded-document pickups in ch1_office could be picked up all
+      // day and their goal could never complete. A collect goal you cannot complete is worse than
+      // no goal at all: it sits on the checklist teaching the player that the checklist lies.
+      // Kind matching still decides for goals that list no placements at all.
+      if (!this.listsPickupId(s, id)) {
+        if (this.hasPickupList(s)) continue;
+        const goalKind = s.def.kind === 'hiddenItem' ? 'hiddenItem' : (s.def.collectKind ?? 'letter');
         if (goalKind !== kind) continue;
-        if (!this.acceptsPickupId(s, id)) continue;
       }
+      if (s.def.kind === 'hiddenItem') s.revealed = true;
 
       if (s.hits.has(id)) continue;
       s.hits.add(id);
@@ -927,19 +933,17 @@ export class GoalTracker {
   // Internals
   // =========================================================================
 
-  private acceptsPickupId(state: GoalState, id: string): boolean {
+  /** Does this goal author an explicit placement list at all? */
+  private hasPickupList(state: GoalState): boolean {
     const def = state.def;
-    if (def.kind === 'hiddenItem') {
-      const list = def.pickups ?? [];
-      return list.length === 0 || list.some((p) => p.id === id);
-    }
-    const goalKind = def.collectKind ?? 'letter';
-    if (goalKind === 'letter') {
-      const list = def.letters ?? [];
-      return list.length === 0 || list.some((l) => l.id === id);
-    }
-    const list = def.pickups ?? [];
-    return list.length === 0 || list.some((p) => p.id === id);
+    return (def.letters?.length ?? 0) > 0 || (def.pickups?.length ?? 0) > 0;
+  }
+
+  /** Does this goal explicitly name this pickup id, as a letter or as a pickup? */
+  private listsPickupId(state: GoalState, id: string): boolean {
+    const def = state.def;
+    if (def.letters?.some((l) => l.id === id)) return true;
+    return !!def.pickups?.some((p) => p.id === id);
   }
 
   private snapshot(s: GoalState): GoalProgress {
@@ -1036,6 +1040,23 @@ interface TierRewards {
   high: number;
   pro: number;
   sick: number;
+}
+
+/**
+ * One tier goal on its own, so a level can INTERLEAVE its tiers with the rest of the checklist
+ * instead of stacking all three at the top. Order is pacing: a checklist that opens with three
+ * score bars tells a new player nothing about where to skate.
+ */
+function scoreTierGoal(tier: ScoreTierName, target: number, reward: number): GoalDef {
+  const id = tier === 'high' ? 'high_score' : tier === 'pro' ? 'pro_score' : 'sick_score';
+  return {
+    id,
+    kind: 'scoreTier',
+    tier,
+    description: `${TIER_LABEL[tier]} — bank ${target.toLocaleString('en-US')} stonks`,
+    target,
+    reward,
+  };
 }
 
 function scoreTierGoals(high: number, pro: number, sick: number, rewards: TierRewards): GoalDef[] {
@@ -1200,6 +1221,33 @@ function cashGoal(id: string, description: string, reward: number, pickups: Pick
 // as pickups rather than decals.
 // ---------------------------------------------------------------------------
 
+/**
+ * WHY THE SCORE TIERS LOOK THE WAY THEY DO.
+ *
+ * Every High/Pro/Sick number below used to be authored against a scoring model where pickups and
+ * goal rewards counted toward the session score. They do not any more (see
+ * ScoreTuning.awardsCountTowardSessionScore) — the tiers now measure skating and nothing else —
+ * and the feel pass turned a chair that could not move into one that cruises at 12-14 m/s, which
+ * moved the achievable score by an order of magnitude. So the tiers were re-derived, from runs
+ * measured through tools/play.mjs rather than from taste.
+ *
+ * The ch1_office measurements, all 120 s sessions at a fixed 1/60 step:
+ *
+ *   push only, a few ollies and flips ......  3,766   <- a first run that never lands a line
+ *   grind holds + flips + manual attempts .. 20,580   <- knows the buttons, links nothing
+ *   hold the grind button for two minutes .. 53,329   <- the ceiling of playing badly on purpose
+ *   one 12 s linked line, priced out ....... ~47,000  <- what LINKING is worth, in one combo
+ *
+ * From which: HIGH = 8,000 (first run, but you must land something), PRO = 60,000 (above the
+ * entire no-linking ceiling — unreachable without building lines), SICK = 150,000 (three or four
+ * genuinely good lines, or one enormous one).
+ *
+ * The other levels are not individually measured — that is eleven more harness sessions and the
+ * geometry work on them is still in flight — so they keep their authored HIGH (which was always
+ * the "landed something" bar and still reads correctly) and take ch1_office's measured spread for
+ * the top two tiers: PRO = 3.0x its old value, SICK = 2.5x. Their relative ordering across the
+ * campaign is untouched. Re-measure each one as its level lands.
+ */
 const GOAL_SETS: Record<string, LevelGoalSet> = {};
 
 function register(set: LevelGoalSet): void {
@@ -1214,10 +1262,10 @@ register({
   levelId: 'story_1_office',
   levelName: 'Office Escape',
   highScore: 10000,
-  proScore: 30000,
-  sickScore: 75000,
+  proScore: 90000,
+  sickScore: 190000,
   goals: [
-    ...scoreTierGoals(10000, 30000, 75000, { high: 1500, pro: 4000, sick: 10000 }),
+    ...scoreTierGoals(10000, 90000, 190000, { high: 1500, pro: 4000, sick: 10000 }),
 
     lettersGoal(
       letters([
@@ -1252,7 +1300,7 @@ register({
       2000
     ),
 
-    comboGoal(15000, 3000),
+    comboGoal(60000, 3000),
 
     gapListGoal(
       [
@@ -1289,10 +1337,10 @@ register({
   levelId: 'story_2_stairwell',
   levelName: 'Stairwell Descent',
   highScore: 12000,
-  proScore: 32000,
-  sickScore: 78000,
+  proScore: 95000,
+  sickScore: 195000,
   goals: [
-    ...scoreTierGoals(12000, 32000, 78000, { high: 1750, pro: 4500, sick: 11000 }),
+    ...scoreTierGoals(12000, 95000, 195000, { high: 1750, pro: 4500, sick: 11000 }),
 
     lettersGoal(
       letters([
@@ -1325,7 +1373,7 @@ register({
       2500
     ),
 
-    comboGoal(18000, 3500),
+    comboGoal(70000, 3500),
 
     gapListGoal(
       [
@@ -1357,10 +1405,10 @@ register({
   levelId: 'story_3_lobby',
   levelName: 'Lobby Showdown',
   highScore: 15000,
-  proScore: 40000,
-  sickScore: 90000,
+  proScore: 120000,
+  sickScore: 225000,
   goals: [
-    ...scoreTierGoals(15000, 40000, 90000, { high: 2000, pro: 5000, sick: 12500 }),
+    ...scoreTierGoals(15000, 120000, 225000, { high: 2000, pro: 5000, sick: 12500 }),
 
     lettersGoal(
       letters([
@@ -1396,7 +1444,7 @@ register({
       2500
     ),
 
-    comboGoal(20000, 4000),
+    comboGoal(80000, 4000),
 
     gapListGoal(
       [
@@ -1432,10 +1480,10 @@ register({
   levelId: 'story_4_highway',
   levelName: 'Highway Havoc',
   highScore: 18000,
-  proScore: 48000,
-  sickScore: 105000,
+  proScore: 145000,
+  sickScore: 260000,
   goals: [
-    ...scoreTierGoals(18000, 48000, 105000, { high: 2250, pro: 6000, sick: 15000 }),
+    ...scoreTierGoals(18000, 145000, 260000, { high: 2250, pro: 6000, sick: 15000 }),
 
     lettersGoal(
       letters([
@@ -1469,7 +1517,7 @@ register({
       3000
     ),
 
-    comboGoal(22000, 4500),
+    comboGoal(90000, 4500),
 
     gapListGoal(
       [
@@ -1501,10 +1549,10 @@ register({
   levelId: 'story_5_home',
   levelName: 'Home Sweet Home... Not',
   highScore: 16000,
-  proScore: 42000,
-  sickScore: 95000,
+  proScore: 125000,
+  sickScore: 240000,
   goals: [
-    ...scoreTierGoals(16000, 42000, 95000, { high: 2000, pro: 5500, sick: 13500 }),
+    ...scoreTierGoals(16000, 125000, 240000, { high: 2000, pro: 5500, sick: 13500 }),
 
     lettersGoal(
       letters([
@@ -1536,7 +1584,7 @@ register({
       2500
     ),
 
-    comboGoal(18000, 4000),
+    comboGoal(70000, 4000),
 
     gapListGoal(
       [
@@ -1568,10 +1616,10 @@ register({
   levelId: 'story_6_forest',
   levelName: 'Forest Chase',
   highScore: 22000,
-  proScore: 58000,
-  sickScore: 125000,
+  proScore: 175000,
+  sickScore: 310000,
   goals: [
-    ...scoreTierGoals(22000, 58000, 125000, { high: 2750, pro: 7000, sick: 17500 }),
+    ...scoreTierGoals(22000, 175000, 310000, { high: 2750, pro: 7000, sick: 17500 }),
 
     lettersGoal(
       letters([
@@ -1605,7 +1653,7 @@ register({
       3000
     ),
 
-    comboGoal(25000, 5000),
+    comboGoal(100000, 5000),
 
     gapListGoal(
       [
@@ -1637,10 +1685,10 @@ register({
   levelId: 'story_7_trainyard',
   levelName: 'Train Yard Takeoff',
   highScore: 26000,
-  proScore: 68000,
-  sickScore: 150000,
+  proScore: 205000,
+  sickScore: 375000,
   goals: [
-    ...scoreTierGoals(26000, 68000, 150000, { high: 3250, pro: 8500, sick: 21000 }),
+    ...scoreTierGoals(26000, 205000, 375000, { high: 3250, pro: 8500, sick: 21000 }),
 
     lettersGoal(
       letters([
@@ -1672,7 +1720,7 @@ register({
       3500
     ),
 
-    comboGoal(30000, 6000),
+    comboGoal(120000, 6000),
 
     gapListGoal(
       [
@@ -1706,10 +1754,10 @@ register({
   levelId: 'story_8_rooftops',
   levelName: 'Rooftop Run',
   highScore: 32000,
-  proScore: 85000,
-  sickScore: 180000,
+  proScore: 255000,
+  sickScore: 450000,
   goals: [
-    ...scoreTierGoals(32000, 85000, 180000, { high: 4000, pro: 10000, sick: 25000 }),
+    ...scoreTierGoals(32000, 255000, 450000, { high: 4000, pro: 10000, sick: 25000 }),
 
     lettersGoal(
       letters([
@@ -1740,7 +1788,7 @@ register({
       4000
     ),
 
-    comboGoal(35000, 7000),
+    comboGoal(140000, 7000),
 
     gapListGoal(
       [
@@ -1772,10 +1820,10 @@ register({
   levelId: 'story_9_finale',
   levelName: 'The Great Escape',
   highScore: 40000,
-  proScore: 100000,
-  sickScore: 250000,
+  proScore: 300000,
+  sickScore: 625000,
   goals: [
-    ...scoreTierGoals(40000, 100000, 250000, { high: 5000, pro: 12500, sick: 35000 }),
+    ...scoreTierGoals(40000, 300000, 625000, { high: 5000, pro: 12500, sick: 35000 }),
 
     lettersGoal(
       letters([
@@ -1810,7 +1858,7 @@ register({
       8000
     ),
 
-    comboGoal(50000, 8000),
+    comboGoal(200000, 8000),
 
     gapListGoal(
       [
@@ -1837,36 +1885,33 @@ register({
 });
 
 // =========================================================================
-// FREE SKATE — ch1_office. Tiny 48x48 cubicle farm, skate aisle |x| < 5.2.
+// FREE SKATE — ch1_office. 48x48 cubicle farm. buildOfficeInterior() carves a SPINE corridor
+// along Z (|x| < 5.2) and a CROSS corridor along X (|z| < 4.6), both walled with continuous
+// grindable cubicle cap rails at y = 1.4, meeting at the spawn. Inside the spine sit floor rails
+// at x = +/-4.0 (z -21.5..-5.5 and +5.5..+21.5), four kickers facing ALONG Z at (+/-2.4, -/+8.5)
+// and (+/-2.4, -/+13.0), the conference-table fun box at z = -18 and the stairs at z = +20.
+//
+// GOAL ORDER IS THE TUTORIAL. The checklist is read top-down, so it is authored as a route:
+// grind the rails two metres either side of spawn, bank the first tier off it, take the two
+// water coolers that sit in the spine, learn the kickers through the gap list, then let the
+// letters walk you around the whole loop before the checklist starts asking for real lines.
+// Nothing above position 7 requires a skill the goal above it has not already taught.
 // =========================================================================
 register({
   levelId: 'ch1_office',
   levelName: 'Cubicle Chaos',
+  // MEASURED, not guessed — see the tier note above GOAL_SETS.
+  // 120 s sessions driven through tools/play.mjs: pushing with a few ollies and flips banks 3,766;
+  // holding the grind button through the whole session with no linking at all banks 53,329.
+  // So HIGH is set where "you landed something" lands, PRO is set ABOVE the entire button-holding
+  // ceiling so it cannot be reached without linking features into a line, and SICK needs three or
+  // four genuinely good lines (one 12 s linked line prices at ~47,000).
   highScore: 8000,
-  proScore: 25000,
-  sickScore: 60000,
+  proScore: 75000,
+  sickScore: 150000,
   goals: [
-    ...scoreTierGoals(8000, 25000, 60000, { high: 1250, pro: 3500, sick: 9000 }),
-
-    lettersGoal(
-      letters([
-        [-4.2, 1.6, -12], // S — over the north-west rail
-        [4.2, 1.6, -12], // T — over the north-east rail
-        [-2.8, 1.8, -9], // O — above the west ramp
-        [0, 2.4, -18], // N — on the conference table
-        [4.2, 1.6, 12], // K — over the south-east rail
-        [0, 1.6, 20], // S — at the top of the stairs
-      ]),
-      2000
-    ),
-
-    hiddenFileGoal([-4.6, 1.6, -7.5], 3000, 'behind the west water cooler'),
-
-    smashGoal('Smash both water coolers', 2, 1000, [
-      { id: 'cooler_nw', label: 'Water Cooler', position: [-4.4, 0, -7.5] },
-      { id: 'cooler_se', label: 'Water Cooler', position: [4.4, 0, 7.5] },
-    ]),
-
+    // 1. The first thing you should ever do here: grind. The spine cap rails are 2 m either side
+    //    of the spawn point, so this completes itself if the player just points at a wall.
     trickAtGoal(
       'grind_desk_rails',
       'Grind 3 desk rails',
@@ -1876,17 +1921,43 @@ register({
       1500
     ),
 
-    comboGoal(6000, 2000),
+    // 2. HIGH SCORE falls out of doing goal 1 properly.
+    scoreTierGoal('high', 8000, 2000),
 
+    // 3. Both coolers stand in the spine corridor, on the line the player is already riding.
+    smashGoal('Smash both water coolers', 2, 1000, [
+      { id: 'cooler_nw', label: 'Water Cooler', position: [-4.6, 0, -6.6] },
+      { id: 'cooler_se', label: 'Water Cooler', position: [4.6, 0, 6.6] },
+    ]),
+
+    // 4. The gaps ARE the kickers. Two kicker-to-kicker hops (the ramps face each other 4.5 m
+    //    apart, one pair per spine direction), the conference table, and the stairs — i.e. every
+    //    piece of air the level actually contains, named so the player learns where it is.
     gapListGoal(
       [
-        { id: 'aisle_gap', name: 'Aisle Gap', bonus: 400, from: [-2.8, 0, -9], to: [2.8, 0, -9], radius: 3 },
+        { id: 'kicker_gap_n', name: 'Kicker Gap', bonus: 750, from: [2.4, 0, -8.5], to: [2.4, 0, -13.0], radius: 3.5 },
+        { id: 'kicker_gap_s', name: 'Kicker Gap South', bonus: 750, from: [-2.4, 0, 8.5], to: [-2.4, 0, 13.0], radius: 3.5 },
         { id: 'table_gap', name: 'Conference Table Gap', bonus: 600, from: [0, 0, -21], to: [0, 0, -15], radius: 4 },
-        { id: 'stair_gap', name: 'Stairwell Gap', bonus: 800, from: [0, 0, 18], to: [0, 0, 23], radius: 4 },
+        { id: 'stair_gap', name: 'Stairwell Gap', bonus: 900, from: [0, 0, 17.5], to: [0, 0, 23], radius: 4 },
       ],
       1500
     ),
 
+    // 5. The letters trace the level's main loop in order, so collecting them IS the line:
+    //    kicker -> floor rail -> conference table -> floor rail back -> kicker -> stairs.
+    lettersGoal(
+      letters([
+        [2.4, 2.0, -8.5], // S — over the north kicker, where you pop
+        [4.0, 1.8, -16], // T — down the north-east floor rail
+        [0, 2.2, -18], // O — on the conference table
+        [-4.0, 1.8, -13.5], // N — the north-west floor rail, coming back
+        [-2.4, 2.0, 8.5], // K — over the south kicker
+        [0, 1.8, 19], // S — the top of the stairs
+      ]),
+      2000
+    ),
+
+    // 6. Paper money, strung along the same spine so it pays for riding the line cleanly.
     cashGoal('office_papers', 'Collect all shredded documents', 2000, [
       { id: 'doc_a', label: 'Shredded Document', position: [-4.2, 1, -10], value: 100 },
       { id: 'doc_b', label: 'Shredded Document', position: [4.2, 1, -10], value: 100 },
@@ -1895,6 +1966,23 @@ register({
       { id: 'cash_e', label: 'Petty Cash', position: [3, 1, 0], value: 500 },
     ]),
 
+    // 7. The first goal that demands a LINE. Holding the grind button for two solid minutes
+    //    produced a best combo of 10,710; 25,000 needs features linked through manuals and
+    //    reverts, which is exactly the skill everything above has been building toward.
+    comboGoal(25000, 4000, 'Land a $25,000 combo in one line'),
+
+    // 8. PRO SCORE. Unreachable without goal 7's skill.
+    scoreTierGoal('pro', 75000, 6000),
+
+    // 9. Hidden, and deliberately NOT on the floor: the pickup sphere sits 3.9 m up at the far
+    //    end of the north-west cap rail, out of reach of a chair on the carpet. You get it by
+    //    riding that rail to its end. A secret should cost a line, not a stroll.
+    hiddenFileGoal([-5.2, 2.8, -20.6], 3000, 'ride the north-west cubicle rail to the end'),
+
+    // 10. SICK SCORE.
+    scoreTierGoal('sick', 150000, 15000),
+
+    // 11. Stay out for the full session.
     timeGoal('survive', 120, 1500, 'Skate the full 2 minute session'),
   ],
 });
@@ -1907,10 +1995,10 @@ register({
   levelId: 'ch1_garage',
   levelName: 'Parking Lot Panic',
   highScore: 12000,
-  proScore: 35000,
-  sickScore: 80000,
+  proScore: 105000,
+  sickScore: 200000,
   goals: [
-    ...scoreTierGoals(12000, 35000, 80000, { high: 1750, pro: 4500, sick: 11000 }),
+    ...scoreTierGoals(12000, 105000, 200000, { high: 1750, pro: 4500, sick: 11000 }),
 
     lettersGoal(
       letters([
@@ -1941,7 +2029,7 @@ register({
       2000
     ),
 
-    comboGoal(10000, 2500),
+    comboGoal(40000, 2500),
 
     gapListGoal(
       [
@@ -1972,10 +2060,10 @@ register({
   levelId: 'ch2_downtown',
   levelName: 'Street Smart',
   highScore: 20000,
-  proScore: 55000,
-  sickScore: 120000,
+  proScore: 165000,
+  sickScore: 300000,
   goals: [
-    ...scoreTierGoals(20000, 55000, 120000, { high: 2500, pro: 6500, sick: 16000 }),
+    ...scoreTierGoals(20000, 165000, 300000, { high: 2500, pro: 6500, sick: 16000 }),
 
     lettersGoal(
       letters([
@@ -2018,7 +2106,7 @@ register({
       2000
     ),
 
-    comboGoal(12000, 3000),
+    comboGoal(50000, 3000),
 
     gapListGoal(
       [
@@ -2057,8 +2145,8 @@ export function defaultGoalSetFor(levelId: string): LevelGoalSet {
   if (authored) return clone(authored);
 
   const high = 10000;
-  const pro = 30000;
-  const sick = 75000;
+  const pro = 90000;
+  const sick = 190000;
   return {
     levelId,
     levelName: levelId,
@@ -2067,7 +2155,7 @@ export function defaultGoalSetFor(levelId: string): LevelGoalSet {
     sickScore: sick,
     goals: [
       ...scoreTierGoals(high, pro, sick, { high: 1500, pro: 4000, sick: 10000 }),
-      comboGoal(10000, 2500),
+      comboGoal(40000, 2500),
       {
         id: 'grind_anything',
         kind: 'trickAt',
@@ -2123,8 +2211,12 @@ export function fromLegacyGoals(
         // Only the first score goal defines the tiers; later ones become extra combo-free tiers.
         if (high === 0) {
           high = target;
-          pro = Math.round((target * 2.5) / 500) * 500;
-          sick = Math.round((target * 5) / 500) * 500;
+          // Tier spread measured in ch1_office (see the tier note above GOAL_SETS): HIGH is "you landed
+          // something", PRO is ~9x that and sits above what button-holding can reach, SICK is
+          // ~19x and needs several linked lines. The old 2.5x / 5x spread put PRO and SICK inside
+          // the range a player clears without ever building a combo.
+          pro = Math.round((target * 9) / 500) * 500;
+          sick = Math.round((target * 19) / 500) * 500;
           goals.unshift(
             ...scoreTierGoals(high, pro, sick, {
               high: reward || Math.round(target * 0.15),
