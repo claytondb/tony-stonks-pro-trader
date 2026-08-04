@@ -193,9 +193,18 @@ export const LEVELS: LevelData[] = [
       { type: 'ramp', position: [2.4, 0, -8.5], rotation: [0, 180, 0] },
       { type: 'ramp', position: [2.4, 0, -13.0], rotation: [0, 0, 0] },
 
-      // Water cooler (obstacle)
-      { type: 'water_cooler', position: [-4.6, 0, -6.6] },
-      { type: 'water_cooler', position: [4.6, 0, 6.6] },
+      // Water coolers: DELIBERATELY NOT HERE ANY MORE.
+      //
+      // They were spawned twice. GoalSystem's "Smash both water coolers" publishes smash targets
+      // at exactly these two positions, and Game.spawnDestructibles builds a knockable coolers
+      // there — so these entries only ever added a SECOND, immovable one inside it, because
+      // createLevelObject('water_cooler') makes a static physics box.
+      //
+      // They sit 0.6 m from the spine floor rails at |x| = 4.0, and the chair is a 0.4 m capsule:
+      // a run holding that rail overlaps the box every time. Measured in tools/play.mjs: 13.9 m/s
+      // to 0.0 m/s in one frame at (-4.5, -6.0), and the 13-trick line it was carrying cashed out.
+      // The knockable versions still stand here, still complete the goal, and now they do what a
+      // water cooler in a Tony Hawk level is supposed to do — go flying.
 
       // Conference table (fun box for tricks)
       { type: 'fun_box', position: [0, 0, -18], params: { width: 7, depth: 4, height: 0.8 } },

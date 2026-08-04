@@ -238,10 +238,23 @@ export class Game {
   private pinnedFor = 0;
   /** Speed the player has earned and is entitled to keep across a contact. */
   private carriedSpeed = 0;
+  /** Speed a possible crash was entered at, and how many frames are left to confirm it. */
+  private collisionSuspectSpeed = 0;
+  private collisionSuspectFrames = 0;
   /** Sim time at which a landing banks its position, unless the player saves it first. */
   private pendingBankAt = 0;
-  /** How long after touchdown a manual or revert may still rescue the combo, seconds. */
-  private readonly LANDING_GRACE = 0.4;
+  /**
+   * How long after touchdown a manual, revert or the next feature may still rescue the combo.
+   *
+   * This is NOT an independent number: it is the combo window itself. A fixed 0.4 s here was a
+   * second, shorter combo clock racing the real one, and it always won — harness instrumentation
+   * showed every combo in a 24 s run closing on an explicit land() 0.6-0.7 s after the rail ended,
+   * never on a lapsed combo clock, while the measured gap between features runs to 1.35 s. One
+   * clock, owned by ScoreSystem, tuned against measured feature spacing.
+   */
+  private get LANDING_GRACE(): number {
+    return this.score.comboWindowSeconds;
+  }
 
   // Debug: animation cycling
   private debugAnimIndex = 0;
@@ -3448,10 +3461,27 @@ export class Game {
     const currentVel = this.physics.getVelocity(this.chairBody);
     const currentSpeed = new THREE.Vector3(currentVel.x, 0, currentVel.z).length();
 
-    // High-speed collision: a big instantaneous loss of speed with a combo open is a crash.
-    if (this.prevSpeed > 9 && currentSpeed < this.prevSpeed * 0.45 && this.playerState.isGrounded
-        && this.score.isOpen && this.bailRecovery <= 0) {
-      this.bail('collision');
+    // High-speed collision: a big loss of speed with a combo open is a crash — but only when the
+    // speed STAYS gone. Judged on a single frame this fired on transients that were not crashes
+    // at all: a caster clipping a step, and any frame on which the rigid body's velocity is not
+    // the authority (GrindSystem drives the chair along the rail and skips physics.step, so the
+    // body reads ~0). Harness instrumentation of a 24 s run caught four of these, each one
+    // forfeiting the entire line — three were phantoms (one sampled 14.9 -> 5.6 -> 13.0 m/s in
+    // 100 ms, one fired mid-grind at a rock-steady 15 m/s). Require the loss to persist for
+    // ~100 ms and never judge it while grinding.
+    const grindingNow = this.grindSystem.isGrinding() || this.playerState.isGrinding;
+    if (this.collisionSuspectFrames > 0) {
+      if (grindingNow || currentSpeed >= this.collisionSuspectSpeed * 0.55) {
+        this.collisionSuspectFrames = 0;          // it came back: not a crash
+      } else if (--this.collisionSuspectFrames === 0) {
+        if (this.playerState.isGrounded && this.score.isOpen && this.bailRecovery <= 0) {
+          this.bail('collision');
+        }
+      }
+    } else if (!grindingNow && this.prevSpeed > 9 && currentSpeed < this.prevSpeed * 0.45
+               && this.playerState.isGrounded && this.score.isOpen && this.bailRecovery <= 0) {
+      this.collisionSuspectSpeed = this.prevSpeed;
+      this.collisionSuspectFrames = 6;
     }
     this.prevSpeed = currentSpeed;
 
@@ -3641,7 +3671,10 @@ export class Game {
     // length of the line, so a long combo is progressively hairier to hold.
     const axis = this.balance.axis;
     const stick = axis === 'vertical' ? intent.dir.y : axis === 'horizontal' ? intent.dir.x : 0;
-    const difficulty = 1 + Math.min(1.5, this.score.state.distinctTricks * 0.08);
+    // Difficulty is owned by ScoreSystem: it is a property of the open position, not of the
+    // chair. `distinctTricks` was the wrong signal — a line of sixteen grinds glued by manuals
+    // uses three distinct ids and so never got harder, however long it ran.
+    const difficulty = 1 + this.score.comboPressure;
     this.balanceState = this.balance.update(dt, stick, speed, difficulty);
 
     if (this.balance.isManualing) {

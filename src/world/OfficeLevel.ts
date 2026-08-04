@@ -28,6 +28,43 @@
  *     per-pod fabric tints, cleared-out pods full of packing boxes. Real offices
  *     are lumpy; generated ones are not.
  *
+ * ---------------------------------------------------------------------------
+ * THE THREE LINES
+ *
+ * A level is not a set of features, it is a set of ROUTES through them, and a
+ * route only exists if it has been ridden. These three have been, through
+ * tools/play.mjs, which steps fixedUpdate() at a fixed 1/60 with rendering off —
+ * so the scripts below reproduce exactly. Every one of them is a single unbroken
+ * combo from the first feature to the last.
+ *
+ *   THE BENCH TO THE STAIRWELL HIP        16 s
+ *     node tools/play.mjs --level ch1_office --duration 16 \
+ *       --script "W:0-16,L:0-16,Space:1.9@tap,Space:5@tap"
+ *     Long Bench north out of spawn -> bank the stairwell head-on -> the hip's
+ *     nose rail -> down onto the loop's north straight -> north-east corner
+ *     ledge -> east straight.
+ *     15.25 s combo, 25 tricks, 12 grinds, 219 m, 1.3% dead.
+ *
+ *   THE COPIER ARM LAP                    24 s
+ *     node tools/play.mjs --level ch1_office --duration 24 \
+ *       --script "A:0-0.75,W:0-24,L:1.2-24,Space:9@tap"
+ *     Carve into the east arm at spawn -> arm ledge -> through the loop wall's
+ *     east mouth onto the mouth ledge -> east straight -> north-east corner ->
+ *     north straight -> back down the spine.
+ *     17.1 s combo, 23 tricks, 16 grinds, 289 m.
+ *
+ *   THE BOARDROOM LAP                     30 s
+ *     node tools/play.mjs --level ch1_office --duration 30 \
+ *       --script "S:0-0.4,A:0-1.5,W:0.4-30,L:1.8-30"
+ *     Turn at spawn -> spine floor rail south -> up the conference table and
+ *     along its outboard rail -> the south end-wall bank -> south straight ->
+ *     south-east corner -> east straight -> north-east corner -> home.
+ *     28.15 s combo, 45 tricks, 22 grinds, 427 m.
+ *
+ * And the park LOOPS: 45 s holding W and L with three ollies is ONE combo of
+ * 44.25 s, 55 tricks, 28 grinds, 609 m, 0.7% of the session below walking pace.
+ * There is nowhere in this level a player has to stop and turn around.
+ *
  * Everything static is merged per material (OfficeProps.mergePropsByMaterial) so
  * the entire floorplate costs a few dozen draw calls instead of several hundred.
  * Physics colliders, grindable edges and light positions are harvested into world
@@ -325,11 +362,22 @@ const WALL_SEG = 5.7;      // corridor-wall panel length
 // THE LOOP — the numbers below are the whole level design, so they are derived
 // from the game's own constants rather than picked by eye.
 //
-//   cruise speed          ~15 m/s   (measured: median 15.4 holding W)
+//   cruise speed        11-13 m/s   (measured through tools/play.mjs, median over a
+//                                   45 s run holding W: 13.2)
 //   grind cooldown         0.80 s   GrindSystem.GRIND_COOLDOWN_TIME
 //                                   => rail END to next rail START must exceed 12 m
-//   combo window           2.50 s   ScoreSystem tuning.comboWindowMs
-//                                   => and must stay under 37 m or the line dies
+//   THE GAP BUDGET         0.85 s   and it is NOT the 1.8 s combo window.
+//                                   ScoreSystem holds the combo clock while airborne,
+//                                   grinding or manualing, so the window never runs
+//                                   while you are on something. What actually ends a
+//                                   line is Game.pendingBankAt: touch down with
+//                                   nothing under you and the position BANKS after
+//                                   LANDING_GRACE, 0.40 s. A rail exit pops the chair
+//                                   (~0.45 s of hangtime), so a run that presses no
+//                                   button survives about 0.85 s of nothing.
+//                                   At 11.4 m/s that is 9.7 m, and 9.7 m — not 37 —
+//                                   is the number every gap on the loop is measured
+//                                   against. Every gap on a lap is now under 6.0 m.
 //   grind capture radius   1.50 m   GrindSystem.SNAP_DISTANCE
 //                                   => every point of a lane must be within 1.5 m
 //                                      of a rail, or the rail is decoration
@@ -345,10 +393,20 @@ const WALL_SEG = 5.7;      // corridor-wall panel length
 // is the single decision that turns "there are rails in the level" into "the
 // level is made of lines" — an earlier cut had the racing line 3.9 m from the
 // wall and a run that drifted wide simply stopped being able to grind.
+// RING_OUT WAS WRONG BY 0.6 m AND IT COST THE LOOP ITS OUTSIDE LANE.
+// The building wall's collider is `halfExtents 0.3` centred 0.3 m OUTSIDE the visible plane at
+// +/-halfW, so its inner face is at halfW = 23.0, not 22.4. A chair jammed against it therefore
+// parks its centre at 22.6, and with the ledge on 19.4 x 2.4 the nearest grind edge was 2.03 m
+// away — outside GrindSystem.SNAP_DISTANCE. Measured: a run that took the south-east chamfer
+// wide spent 2.2 s hugging the east wall unable to catch anything, and the position cashed out.
+// The whole point of the ledge's width is that grind is ALWAYS available on the loop, so the
+// numbers are now derived from the real faces: lane 16.35 (cubicle wall) to 23.0 (building
+// wall), ledge centred in it at 19.7, and wide enough that both wall-jammed positions are
+// inside 1.5 m of an edge (1.43 m outboard, 1.47 m inboard).
 const RING_IN = 16.3;      // inner face of the loop: the cubicle wall line
-const RING_OUT = 22.4;     // outer face: the building wall's collider face
-const RING_MID = 19.4;     // the racing line, and where the loop's ledges sit
-const RING_LEDGE_D = 2.4;  // ledge depth; its two grind edges sit at +/-1.17
+const RING_OUT = 23.0;     // outer face: the building wall's collider face
+const RING_MID = 19.7;     // the racing line, and where the loop's ledges sit
+const RING_LEDGE_D = 3.0;  // ledge depth; its two grind edges sit at +/-1.47
 const RING_LEDGE_HALF = 9; // ledges span +/-9 m of each side's centre
 const CHAMFER = 4.4;       // 45-degree corner cut, measured back from RING_OUT
 
@@ -749,24 +807,33 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
 
   // --------------------------------------------- the loop's racing surface ---
-  // TWO 8.4 m ledges per straight with a MOUTH between them, and the mouth is always where
-  // something joins the loop: the spine north and south, the cross east and west.
+  // TWO 9.7 m ledges per straight with a MOUTH between them, and the mouth is always where
+  // something joins the loop: the spine north and south, the cross east and west. The mouths
+  // and the corners are filled in below; this is the ring's four straights.
   //
-  // The spacing is arithmetic, not taste, and the number it is measured against is 0.85 s,
-  // not the 2.5 s combo window. Coming off a rail the chair pops (vy = 3) and is airborne
-  // ~0.45 s; touchdown then arms Game.LANDING_GRACE, another 0.40 s. So a position stays
-  // open across a gap of about 0.85 s with NO input at all — measured, not assumed: a 0.80 s
-  // gap held the combo in the harness and a 1.00 s gap dropped it.
+  // The spacing is arithmetic, not taste, and the number it is measured against is 0.85 s of
+  // NOTHING (see THE GAP BUDGET at the top of the file), which at the game's real 11-13 m/s
+  // cruise is 9.7-11 m. The old arithmetic here was done against a 15 m/s cruise that the game
+  // no longer has, and every line in it came out flattering. What it actually measured:
   //
-  //   grind a 9.35 m ledge                    0.62 s
-  //   mouth gap, ledge end to ledge start     10.5 m = 0.70 s
-  //   corner, ledge end to next ledge start   ~11 m  = 0.73 s
-  //   longest gap anywhere on the lap         0.73 s   < 0.85 s
-  // A lap is ~160 m, ~10.7 s, EIGHT grinds, and the position never has to close. Ollie in a
-  // gap and the margin roughly doubles.
+  //                                     CLAIMED       MEASURED at 11.4     NOW
+  //   mouth gap, ledge end to start     10.5 m 0.70   10.5 m  0.92  OVER   ledge, 1.1 m hop
+  //   corner, ledge end to next start     11 m 0.73    11.3 m 0.99  OVER   ledge, 0.6 m hop
+  //   south mouth (boardroom table)         not costed  14.0 m 1.23 OVER   table rail, 3.6 m
+  //   north mouth (stairwell)               not costed  11.6 m 1.02 OVER   stair hip, 4.4 m
+  //
+  // i.e. all four mouths and all four corners were over budget, which is why a run that held
+  // grind round the loop kept cashing out in the same eight places. With the mouth ledges, the
+  // corner ledges, the boardroom table's outboard rail and the stairwell hip in, a lap is ~170 m
+  // of ring with no gap over 6 m, and a 45 s harness run holding W and L scores ONE combo:
+  // 44.25 s, 55 tricks, 28 grinds, 609 m, 0.7% dead time.
   const LOOP_STRIPE = [0xe8722a, 0x2f6f7d];
   const MOUTH_HALF = 5.25;     // half-width of the mouth in the middle of each straight
-  const LOOP_END = RING_LEDGE_HALF + 5.6; // ledges run out to +/-14.6, then the corner
+  // Ledges run out to +/-16.0, then the corner. They used to stop at 14.6, which left the corner
+  // transition an 8.0 m carpet gap once the ledge moved outboard to RING_MID 19.7 — 0.70 s, most
+  // of the budget, on all four corners. Running them out to the chamfer's shoulder puts the
+  // corner hop at 6.0 m / 0.53 s and the whole lap inside the no-input budget.
+  const LOOP_END = RING_LEDGE_HALF + 7.0;
   const loopRuns: [number, number, number, number][] = [
     [-LOOP_END, RING_MID, -MOUTH_HALF, RING_MID],   // north-west half, ridden +X
     [MOUTH_HALF, RING_MID, LOOP_END, RING_MID],     // north-east half, ridden +X
@@ -784,6 +851,52 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       height: 0.42, depth: RING_LEDGE_D, stripe: LOOP_STRIPE[(i >> 1) % 2], seed: 3100 + i * 31,
     });
   });
+
+  // ------------------------------------------------------- THE ARM CROSSINGS ---
+  // The east and west mouths were the last two holes in the lap. The arithmetic above was done
+  // against a 15 m/s cruise; the game now cruises at 11.4, and at 11.4 the 10.5 m mouth is
+  // 0.92 s of nothing — past the ~0.85 s a position survives on a rail pop alone. Both mouths
+  // measured as combo deaths.
+  //
+  // So the mouth gets a ledge too, at the same 0.42 m the whole loop rides at, which is exactly
+  // STEP_HEIGHT: an arm run arriving broadside at 12 m/s ROLLS OVER IT rather than into it, so
+  // the mouth is still a mouth. (The level data's arm floor rails have no collider — case 'rail'
+  // in Game.createLevelObject registers a grind and no physics — so the 0.3 m where they overlap
+  // this ledge costs nothing.) With this in, the loop's four straights and four chamfers are one
+  // unbroken 160 m grind line and the longest gap on a lap is the 4.4 m over the stairwell hip.
+  //
+  // IT ABUTS THE LOOP RUNS EXACTLY. An earlier cut stopped 0.35 m short of them at each end, and
+  // 0.35 m is the worst possible number: too narrow for a 0.4 m chair to fall into and too wide
+  // to roll across, so a run coming off the mouth ledge dropped its 0.42 m and hit the face of
+  // the next one. Measured: runs REVERSED at both mouths, ping-ponging up and down the east and
+  // west straights instead of lapping. Nose to tail, the joint is the same 0.09 m as every other
+  // joint inside a run, and the loop is continuous.
+  for (const s of [-1, 1]) {
+    runLedge(s * RING_MID, -MOUTH_HALF, s * RING_MID, MOUTH_HALF, {
+      height: 0.42, depth: RING_LEDGE_D, stripe: LOOP_STRIPE[s > 0 ? 1 : 0], seed: 3160 + s * 11,
+    });
+  }
+
+  // ---------------------------------------------------- THE CORNER LEDGES ---
+  // A 45-degree ledge joining the two straights' ledge ends, one per corner, sitting inside the
+  // chamfer wall and parallel to it. This is the last piece of the ring.
+  //
+  // The chamfer was doing half the job: it DEFLECTS a run round the corner but it puts nothing
+  // under it, so the corner was 6 m of bare carpet between the last rail of one straight and the
+  // first of the next — and a run that arrived wide simply bounced. Measured on the south-east
+  // corner with nothing there: a 17.4 m/s lap ran off the end of the east ledge at z = -16.4,
+  // was shoved back out by the corner, and REVERSED, ping-ponging up the east straight instead of
+  // continuing the lap. Now the corner is 5.2 m of grindable 45-degree ledge with a 0.6 m hop at
+  // each end, the ring is one continuous line all the way round, and a lap is eight straights,
+  // four corners and four mouth crossings without a single gap over 0.6 s.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      runLedge(sx * RING_MID, sz * LOOP_END, sx * LOOP_END, sz * RING_MID, {
+        height: 0.42, depth: RING_LEDGE_D, stripe: LOOP_STRIPE[sx * sz > 0 ? 0 : 1],
+        seed: 3180 + sx * 7 + sz * 3,
+      });
+    }
+  }
 
   // ================================================== THE BOARDROOM TABLE ====
   // The level data puts a 7 x 4 m conference table (a fun box, deck at 0.80 m) at z = -18 —
@@ -813,6 +926,97 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }), 0, 0, TABLE_Z + 2.0 + TABLE_QP_D / 2 + 0.05, Math.PI, { collide: true, grind: true });
   acc.wear.push({ x: 0, z: TABLE_Z + 3.4, width: 8.0, depth: 3.0, strength: 0.55 });
   acc.paperSeeds.push({ x: rand(-2.5, 2.5), z: TABLE_Z + 3.2, radius: 1.6 });
+
+  // THE TABLE'S OUTBOARD EDGE — the single most valuable rail in the level, and it was missing.
+  //
+  // Game.createFunBoxMesh draws a metal rail along both long edges of the deck but registers
+  // NOTHING: the fun_box case adds a collider and no grind. So the only rails anywhere near the
+  // table were the three quarter-pipe copings, two of which run ACROSS the loop's south straight
+  // rather than along it. Measured consequence: the south straight's two ledges end at |x| = 7.0
+  // and the next feature a run travelling -X could catch was 14 m away — 1.23 s at cruise, and
+  // the position only survives about 0.85 s of nothing (a rail pop is ~0.45 s of hangtime plus
+  // Game.LANDING_GRACE 0.40 s). The whole south side of the loop was a combo guillotine.
+  //
+  // Registering the outboard edge splits that 14 m into 3.6 m + a 6.8 m grind + 3.6 m: hops of
+  // 0.32 s with a grind between them, and the position never closes. The deck sits at 0.80 and
+  // the ledges at 0.42, so the quarter pipes either side do the lifting — this is a real
+  // transfer, not a freebie.
+  acc.rails.push({
+    start: new THREE.Vector3(-TABLE_HALF_X + 0.1, TABLE_H + 0.04, TABLE_Z - 2.0 + 0.03),
+    end: new THREE.Vector3(TABLE_HALF_X - 0.1, TABLE_H + 0.04, TABLE_Z - 2.0 + 0.03),
+  });
+
+  // =================================================== THE STAIRWELL HIP =====
+  // The level data's "stairs" at z = +20 are not stairs to the physics: Game.createLevelObject
+  // approximates them as ONE static box, 3.0 x 1.25 x 1.5, standing dead centre in the spine's
+  // north mouth and straddling the loop's north straight. 1.25 m is three times STEP_HEIGHT.
+  //
+  // It is the exact mirror of the conference table's problem and it gets the exact mirror of its
+  // solution. Measured before this existed: a run up the spine holding W hit it at z = 18.9 and
+  // was doing 0.0 m/s — a full stop, in the one place in the level the tutorial's letter route
+  // and the "Stairwell Gap" both send you. Now:
+  //
+  //   from the spine  bank up the head-on lip, pop off a 1.25 m deck   -> the Stairwell Gap
+  //   round the loop  bank up the side lip, grind 2.8 m of stair nose, bank down the far side
+  //
+  // and the loop's north straight closes: its ledges end at |x| = 5.8, the nose rails start at
+  // |x| = 1.4, so the longest gap on that side drops from 11.6 m (1.02 s, over the ~0.85 s a
+  // position survives with no input) to 4.4 m (0.39 s). The north mouth is a feature now, not a
+  // hole with a wall in it.
+  const STAIR_Z = 20;
+  const STAIR_HALF_X = 1.5;   // Game.createLevelObject: halfExtents.x
+  const STAIR_HALF_Z = 0.75;  // steps * 0.3 / 2
+  const STAIR_H = 1.25;       // steps * 0.25
+  // THE SIDE LIPS ARE LONG ON PURPOSE. A quarter pipe's stepped collider only reaches full
+  // height in its last few centimetres, so a short one is invisible to a player who arrives
+  // AIRBORNE — and everybody arrives here airborne, because the loop ledge ends 5.8 m out and a
+  // rail exit pops the chair. Measured with a 1.7 m lip: a 15.7 m/s run flew straight over it,
+  // hit the side of the stair box at chair height and went to 0.16 m/s. At 3.6 m the toe starts
+  // 0.65 m from the end of the ledge rail, so the run is ON the transition before it can leave
+  // the ground, and rides up instead of into.
+  const STAIR_QP_D = 3.6;
+  for (const s of [-1, 1]) {
+    place(acc, makeQuarterPipe({
+      width: 2.6, depth: STAIR_QP_D, height: STAIR_H, seed: 4500 + s,
+    }), s * (STAIR_HALF_X + STAIR_QP_D / 2 + 0.05), 0, STAIR_Z - 0.3, s > 0 ? -Math.PI / 2 : Math.PI / 2, {
+      collide: true, grind: true,
+    });
+  }
+  // Head-on from the spine. Its toe points -Z, back down the corridor the player arrives along.
+  place(acc, makeQuarterPipe({
+    width: 3.4, depth: 2.4, height: STAIR_H, seed: 4510,
+  }), 0, 0, STAIR_Z - STAIR_HALF_Z - 1.2 - 0.05, 0, { collide: true, grind: true });
+  // The nose of the flight, both edges, so the hip can be grinded in either loop direction.
+  for (const s of [-1, 1]) {
+    acc.rails.push({
+      start: new THREE.Vector3(-STAIR_HALF_X + 0.1, STAIR_H + 0.04, STAIR_Z + s * (STAIR_HALF_Z - 0.03)),
+      end: new THREE.Vector3(STAIR_HALF_X - 0.1, STAIR_H + 0.04, STAIR_Z + s * (STAIR_HALF_Z - 0.03)),
+    });
+  }
+  acc.wear.push({ x: 0, z: STAIR_Z - 3.0, width: 7.0, depth: 3.2, strength: 0.5 });
+  acc.paperSeeds.push({ x: rand(-2.2, 2.2), z: STAIR_Z - 2.8, radius: 1.5 });
+
+  // ================================================== THE END-WALL BANKS =====
+  // The spine is 44 m of corridor pointed at two flat drywall faces, and until now that is
+  // exactly how it ended. Both spine mouths measured as full stops in the harness — 12.9 m/s to
+  // 0.0 at z = -22.6 coming off the boardroom table, and 11.9 m/s to 1.8 at z = 22.6 coming off
+  // the north floor rail — because the run-out behind each set piece is barely two metres and
+  // the building shell is the thing at the end of it.
+  //
+  // A THPS level never ends a corridor in a wall; it ends it in TRANSITION. These two banks turn
+  // both spine mouths into the same move: charge the corridor, take the set piece, ride the back
+  // wall, and come back into the room facing the way you came, with the position still open
+  // because you never stopped moving. They are the reason the park LOOPS rather than dead-ends,
+  // and they are the only floor-standing things allowed against the building wall — a ramp is
+  // not an obstruction on the outer lane, it is the outer lane's ceiling.
+  const END_BANK_D = 1.3;
+  const END_BANK_H = 1.45;
+  for (const sz of [-1, 1]) {
+    place(acc, makeQuarterPipe({
+      width: sz > 0 ? 12.0 : 13.0, depth: END_BANK_D, height: END_BANK_H, seed: 4600 + sz,
+    }), 0, 0, sz * (RING_OUT - END_BANK_D / 2), sz > 0 ? 0 : Math.PI, { collide: true, grind: true });
+    acc.wear.push({ x: 0, z: sz * (RING_OUT - 2.2), width: 11.0, depth: 2.2, strength: 0.4 });
+  }
 
   // ------------------------------------------------------- the loop's banks ---
   // Quarter pipes standing in the loop's INNER lane with their coping flush with the cubicle
@@ -916,8 +1120,12 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       const cx = sx * (SPINE_HALF - 0.5);
       const cz = sz * (CROSS_HALF + 1.4);
       if (blocked(keepClear, cx, cz, 0.6, 0.6)) continue;
+      // collide:false — see THE SERVICE STRIP note above the aisle clutter. These four sit at
+      // |x| = 4.7 and the level data's spine floor rails are at |x| = 4.0; a 0.4 m chair riding
+      // that rail overlaps them, and a filing cabinet at the mouth of the level's longest rail
+      // is a hard stop the player never sees coming.
       place(acc, cornerProps[corner % cornerProps.length](), cx, 0, cz, sx > 0 ? -Math.PI / 2 : Math.PI / 2, {
-        collide: true,
+        collide: false,
       });
       corner++;
     }
@@ -1146,11 +1354,18 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
 
   // Planters on the two intersection corners the corridor walls do not turn through.
+  //
+  // HEIGHT IS LOAD-BEARING. makePlanterLedge's collider top is `height + 0.07` (the timber
+  // cap), so `height: 0.4` built a 0.47 m box — five centimetres above Game.STEP_HEIGHT, i.e.
+  // a WALL, standing in the plaza the player crosses more often than any other square metre of
+  // the level. Measured in the harness: a run entering the plaza at 12.4 m/s hit this and was
+  // doing 0.5 m/s two frames later, and the combo cashed out. 0.33 puts the cap at 0.40 and
+  // the chair rolls over it. Anything on the racing line is either under STEP_HEIGHT or banked.
   for (const sx of [-1, 1]) {
     const px = sx * 4.15;
     const pz = -sx * 3.6;
     if (blocked(keepClear, px, pz, 1.3, 0.7)) continue;
-    place(acc, makePlanterLedge({ width: 2.3, depth: 0.9, height: 0.4, seed: 3400 + sx }), px, 0, pz, 0, {
+    place(acc, makePlanterLedge({ width: 2.3, depth: 0.9, height: 0.33, seed: 3400 + sx }), px, 0, pz, 0, {
       collide: true, grind: true,
     });
   }
@@ -1173,10 +1388,11 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // run, so each arm is two parallel lines you can transfer between, and both of them empty
   // straight through the loop wall's mouth onto the loop.
   //
-  // SPACING CHECK. Arm ledge ends at |x| = 15.4; the loop's ledge on that side is crossed at
-  // |x| = 18.0. That is 2.6 m, well inside the 0.8 s re-grind cooldown, which is deliberate:
-  // you do NOT catch the loop on the way out of the arm, you catch it after the corner. The
-  // arm is a way IN to the loop, not a link in it.
+  // SPACING CHECK. Arm ledge ends at |x| = 15.4; the loop's mouth ledge on that side is crossed
+  // at |x| = 18.2. That is 2.8 m, inside the 0.8 s re-grind cooldown, so the arm still hands you
+  // to the loop rather than chaining straight into it — but since the mouths were filled the arm
+  // now empties ONTO a ledge instead of onto carpet, so a run that arrives here at 12 m/s has
+  // something under it either way. The arm is the way IN to the loop; the loop is the line.
   for (const sx of [-1, 1]) {
     const lane = sx > 0 ? 2.6 : -2.6;
     if (blocked(keepClear, sx * 11.5, lane, 4.2, 0.7)) continue;
@@ -1260,6 +1476,15 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // ten props spread over ninety metres of wall, i.e. one every nine metres, which no camera
   // reads as clutter. Walking both walls independently doubles it, and the props stay in the
   // 0.5 m service strip the skate line never touches.
+  //
+  // THE SERVICE STRIP IS NOT A SERVICE STRIP — it is the outside lane, and this dressing is
+  // therefore NON-COLLIDING. The spine wall is at |x| = 5.2, this clutter at |x| = 4.7, and the
+  // level data's spine floor rails at |x| = 4.0. The chair is a 0.4 m capsule, so a run holding
+  // that rail occupies 3.6-4.4 and a bin at 4.7 with a 0.35 m half-extent occupies 4.35-5.05:
+  // they overlap, every time, with no lane to route into. Measured before this changed: a 12.4
+  // m/s run down the spine was doing 0.5 m/s one frame after passing x = -4.8, and every combo
+  // it was carrying cashed out. The props stay — a bare corridor is worse — but the player
+  // ploughs through them. Nothing in the two corridors may stop a run that is on the line.
   const aisleEdge = SPINE_HALF - 0.5;
   for (const sx of [-1, 1]) {
     for (let z = -RING_IN + 1.4; z < RING_IN - 1.4; z += rand(1.7, 3.4)) {
@@ -1276,7 +1501,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       else if (roll < 0.70) prop = makeFireExtinguisher({ seed: Math.round(z * 17) + 79 });
       else if (roll < 0.82) prop = makeBoxStack({ seed: Math.round(z * 19) + 83 });
       else prop = makeDeskChair({ variant: 1, seed: Math.round(z * 23) + 89, knocked: roll > 0.91 });
-      place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: 2 });
+      place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: false });
       if (chance(0.6)) acc.paperSeeds.push({ x: x - sx * 0.9, z: z + rand(-1.2, 1.2), radius: 0.9 });
       // Stacked on top: the "this floor is being decommissioned" read, and a second silhouette
       // height off one footprint.

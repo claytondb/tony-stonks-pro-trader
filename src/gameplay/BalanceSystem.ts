@@ -13,9 +13,10 @@
  *   The balance value is an INVERTED PENDULUM. Its acceleration is proportional to its own
  *   displacement, so the further you are from centre the harder it runs away from you:
  *
- *       vel += (instability * value + disturbance + push * torque) * dt
- *       vel *= exp(-damping * dt)
- *       value += (vel + push * correctionRate) * dt
+ *       auth  = 1 - outwardFalloff * clamp01(push * value)     // see below
+ *       vel  += (instability * value + disturbance + push * torque * auth) * dt
+ *       vel  *= exp(-damping * dt)
+ *       value += clamp(vel + push * correctionRate * auth, -rateCap, +rateCap) * dt
  *
  *   `push` is the player's stick, `instability` scales with difficulty, with how long you have
  *   been holding the balance, and — exactly like THPS — with how SLOW you are going. A manual at
@@ -24,6 +25,28 @@
  *   every manual feels different without ever being frame-to-frame jitter.
  *
  *   |value| >= 1 is a bail. Everything else is recoverable.
+ *
+ *   TWO TERMS EXIST BECAUSE OF THE KEYBOARD, and they are the difference between a manual you
+ *   can hold and one you cannot. A key is not a stick: it produces -1, 0 or +1 and nothing in
+ *   between, so "feathering" has to be expressible as alternating taps.
+ *
+ *     `outwardFalloff` cuts the player's authority when they are pushing FURTHER from centre.
+ *       Without it a symmetric stick makes alternating taps a zero-mean input that the unstable
+ *       mode simply grows through, and holding the direction that saves you carries straight on
+ *       through centre into the opposite bail. Measured, before: a held direction bailed the
+ *       manual in 0.39 s, and alternating taps bailed it in ~1.2 s at every rate from 200 ms to
+ *       600 ms. After: an alternating input is net-restoring.
+ *
+ *     `maxRate` gives the meter one readable terminal speed in both directions. The exponential
+ *       runaway crossed the last third of the meter in a couple of frames, so reaction time and
+ *       not skill decided the outcome — a 150 ms player held a manual indefinitely and a 400 ms
+ *       player for 1.2 s. That is a cliff, not a difficulty curve.
+ *
+ *   Measured behaviour of a manual now, from the offline model (300 trials each, speed 11 m/s,
+ *   difficulty 1 unless stated): hands off the stick, 2.1 s to a bail. Direction held down,
+ *   1.0 s. A 250 ms-reaction player feathering, 14 s. A sloppy 400 ms player, 8 s. The same
+ *   250 ms player on a twenty-trick line (difficulty 2.5), 4.5 s. In-game, an open-loop 150 ms
+ *   alternating rhythm sustains individual manuals of 2.7-5.6 s.
  *
  * SELF-CONTAINED BY CONTRACT
  *   Imports nothing. No THREE, no Rapier, no Game.ts, no HUD. Everything it needs — dt, the
@@ -62,7 +85,11 @@ export type BalanceAxis = 'none' | 'vertical' | 'horizontal';
 export type BalanceEndReason =
   /** |value| hit 1. The rider is on the floor. */
   | 'bail'
-  /** The player tapped the manual input again, or switched manual type. */
+  /**
+   * Reserved. Nothing produces this any more: re-tapping the manual input used to drop you out,
+   * which on a keyboard meant every correction the player made cancelled the manual they were
+   * correcting. Kept in the union so existing switch statements still compile.
+   */
   | 'input'
   /** Rolled to a stop — you simply drop out of the manual, no crash. */
   | 'speed'
@@ -122,6 +149,31 @@ export interface BalanceModeTuning {
   correctionRate: number;
   /** Disturbance amplitude, value-units/s^2. */
   wobble: number;
+  /**
+   * How much of the player's authority is taken away when they are pushing FURTHER FROM CENTRE,
+   * 0..1. 0 = the stick is exactly as strong in both directions (a pure pendulum); 0.8 = pushing
+   * out is only 20% as effective as pushing back at full lean.
+   *
+   * WHY THIS EXISTS — measured, not taste. With a symmetric stick, a keyboard (which can only
+   * ever produce -1, 0 or +1) has no way to hold a manual: holding the direction that saves you
+   * blasts straight through centre and bails you on the far side in 0.39 s, and alternating taps
+   * are a zero-mean input, so the unstable mode just grows through them (measured: ~1.2 s to a
+   * bail at every tap frequency from 200 ms to 600 ms). Cutting outward authority makes an
+   * alternating input net-RESTORING, which is what turns feathering into a skill a digital
+   * controller can actually express, and it gives an over-correction a moment of resistance
+   * before it becomes a bail. It does nothing at all when the player is not pressing anything —
+   * hands off the stick still bails in about two seconds.
+   */
+  outwardFalloff: number;
+  /**
+   * Ceiling on |balance velocity|, value-units/s. 0 disables.
+   *
+   * The pendulum is exponential, so without this the last 30% of the meter is crossed in a
+   * couple of frames and reaction time, not skill, decides the outcome (a 150 ms player held a
+   * manual for 30 s, a 400 ms player for 1.2 s — a cliff, not a difficulty curve). Capping the
+   * rate keeps the runaway inevitable but gives the fall a readable, constant terminal speed.
+   */
+  maxRate: number;
   /** Speed at or above which the balance is at its easiest, m/s. 0 disables speed scaling. */
   comfortSpeed: number;
   /** Below this speed a manual drops out (reason 'speed'). Ignored when 0. */
@@ -184,12 +236,14 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     torque: 6.5,
     correctionRate: 1.35,
     wobble: 0.34,
+    outwardFalloff: 0.78,
+    maxRate: 0.95,
     comfortSpeed: 7,
     dropSpeed: 1.8,
     slowPenalty: 2.6,
     grace: 0.22,
-    creepPerSecond: 0.09,
-    creepCap: 2.2,
+    creepPerSecond: 0.14,
+    creepCap: 3.6,
     basePitchDegrees: 18,
     pitchPerValue: 9,
     baseRollDegrees: 0,
@@ -202,12 +256,14 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     torque: 6.8,
     correctionRate: 1.4,
     wobble: 0.42,
+    outwardFalloff: 0.76,
+    maxRate: 1.05,
     comfortSpeed: 7.5,
     dropSpeed: 2.2,
     slowPenalty: 2.8,
     grace: 0.2,
-    creepPerSecond: 0.12,
-    creepCap: 2.4,
+    creepPerSecond: 0.17,
+    creepCap: 3.4,
     basePitchDegrees: -16,
     pitchPerValue: 8,
     baseRollDegrees: 0,
@@ -216,17 +272,27 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
   // Grind: easiest of the three, because grinds are meant to last and to be strung together.
   // No dropSpeed — when a grind ends is GrindSystem's call, not ours.
   grind: {
-    instability: 3.0,
-    damping: 3.4,
+    // MEASURED, not guessed. A grind is corrected on the LEFT/RIGHT axis, which is also the steer
+    // axis — the player is reading the level and lining up the next feature, not staring at the
+    // balance meter. So an uncorrected grind has to survive a whole rail. ch1_office's rails are
+    // 6.85 m at the median and 26.9 m at the longest, i.e. 0.6 s and 2.2 s at a 12 m/s cruise;
+    // these numbers give an untouched grind 4.2 s at the start of a line and 2.6 s deep into a
+    // twenty-trick one. Every rail in the level is therefore free on its own, a long rail late in
+    // a line is not, and a chain of rails (which does NOT re-seed the balance — startGrind() is a
+    // no-op while already grinding) has to be actively held.
+    instability: 2.0,
+    damping: 4.0,
     torque: 5.6,
     correctionRate: 1.1,
-    wobble: 0.28,
+    wobble: 0.22,
+    outwardFalloff: 0.8,
+    maxRate: 0.9,
     comfortSpeed: 6,
     dropSpeed: 0,
     slowPenalty: 2.2,
-    grace: 0.3,
-    creepPerSecond: 0.07,
-    creepCap: 2.0,
+    grace: 0.45,
+    creepPerSecond: 0.12,
+    creepCap: 3.0,
     basePitchDegrees: 0,
     pitchPerValue: 0,
     baseRollDegrees: 0,
@@ -240,6 +306,8 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     torque: 7.6,
     correctionRate: 1.6,
     wobble: 0.5,
+    outwardFalloff: 0.7,
+    maxRate: 1.2,
     comfortSpeed: 0,
     dropSpeed: 0,
     slowPenalty: 1,
@@ -254,9 +322,9 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
   warnThreshold: 0.72,
   minManualStartSpeed: 2.4,
   bailLockout: 0.5,
-  revertWindowTransition: 1.0,
-  revertWindowFlat: 0.4,
-  revertHold: 1.0,
+  revertWindowTransition: 1.4,
+  revertWindowFlat: 0.9,
+  revertHold: 1.2,
   revertCooldown: 0.6,
   tiltRateActive: 12,
   tiltRateRelease: 7,
@@ -367,6 +435,14 @@ export class BalanceSystem {
   private value = 0;
   private vel = 0;
   private timeInMode = 0;
+  /**
+   * Seconds of CONTINUOUS balancing, carried across a manual <-> nose-manual switch and reset
+   * only when the balance actually ends. `timeInMode` restarts on every switch; if creep read
+   * that, shuffling manual/nose every half second would reset the difficulty ramp and buy an
+   * infinite manual for two keys. Creep reads this instead, so the shuffle costs you points'
+   * worth of variety but buys you nothing on the meter.
+   */
+  private heldTime = 0;
 
   // --- disturbance oscillators (deterministic between re-seeds, re-seeded per entry) ---
   private phaseA = 0;
@@ -432,8 +508,11 @@ export class BalanceSystem {
    * Rules, in THPS order:
    *   - airborne, too slow, or locked out after a bail -> false, nothing happens.
    *   - already grinding or in a lip trick -> false, nothing happens (you can't manual a rail).
-   *   - already in the SAME manual -> the manual ENDS (reason 'input') and returns false.
-   *     Tapping the sequence again is how you drop out on purpose.
+   *   - already in the SAME manual -> nothing happens, returns false. This USED to end the
+   *     manual, and it was the single biggest thing stopping lines from lasting: the only way to
+   *     correct a manual on a keyboard is to alternate Down and Up, and Down-then-Up IS the
+   *     manual input, so the player's correction cancelled the manual. You leave a manual by
+   *     ollieing, grinding, rolling to a stop, or eating it.
    *   - already in the OTHER manual -> switches manual <-> nose manual, keeping the balance
    *     value (which is now working against you), and returns true. This is the manual/nose
    *     manual shuffle that keeps a long line scoring.
@@ -443,10 +522,12 @@ export class BalanceSystem {
     const spd = Number.isFinite(speed) ? Math.abs(speed) : 0;
     this.lastSpeed = spd;
 
-    if (this.mode === target) {
-      this.finish('input');
-      return false;
-    }
+    // Re-tapping the SAME manual used to drop you out of it. On a keyboard that is fatal: the
+    // only way to correct a manual is to alternate Down and Up, and Down-then-Up IS the manual
+    // input, so every correction the player made cancelled the thing they were correcting.
+    // A repeat is now a no-op — you leave a manual by ollieing, grinding, rolling to a stop or
+    // eating it, exactly as in THPS.
+    if (this.mode === target) return false;
 
     if (this.mode === 'grind' || this.mode === 'lip') return false;
     if (!grounded) return false;
@@ -667,6 +748,7 @@ export class BalanceSystem {
     this.value = 0;
     this.vel = 0;
     this.timeInMode = 0;
+    this.heldTime = 0;
     this.visualPitch = 0;
     this.visualRoll = 0;
     this.clock = 0;
@@ -698,6 +780,10 @@ export class BalanceSystem {
   }
 
   private enter(mode: BalanceMode, startValue: number, startVel: number): void {
+    const shuffling =
+      (this.mode === 'manual' && mode === 'noseManual') ||
+      (this.mode === 'noseManual' && mode === 'manual');
+    const carriedHeldTime = this.heldTime;
     if (this.mode !== 'none' && this.mode !== mode) {
       // Replacing one balance with another is an exit, so score listeners can close the
       // old entry before the new one opens.
@@ -705,6 +791,7 @@ export class BalanceSystem {
     }
     this.mode = mode;
     this.timeInMode = 0;
+    this.heldTime = shuffling ? carriedHeldTime : 0;
 
     // Re-seed the disturbance so no two manuals drift the same way.
     this.phaseA = Math.random() * TAU;
@@ -768,7 +855,8 @@ export class BalanceSystem {
 
       // Creep: the longer you hold it, the harder it gets. This is what stops an infinite
       // manual and makes a 20 second grind an actual achievement.
-      const creep = Math.min(t.creepCap, 1 + this.timeInMode * t.creepPerSecond);
+      this.heldTime += h;
+      const creep = Math.min(t.creepCap, 1 + this.heldTime * t.creepPerSecond);
 
       const instability = t.instability * diffScale * speedScale * creep * graceMix;
 
@@ -782,12 +870,29 @@ export class BalanceSystem {
         speedScale *
         graceMix;
 
+      // Player authority is asymmetric: full strength pulling back towards centre, cut by
+      // `outwardFalloff` when pushing further out. `push * value` is positive exactly when the
+      // stick is driving the lean the way it is already falling.
+      const outward = clamp01(push * this.value);
+      const auth = authority * (1 - t.outwardFalloff * outward);
+
       // Inverted pendulum: acceleration grows with displacement. Genuinely unstable.
-      const accel = instability * this.value + wobble + push * t.torque * authority;
+      const accel = instability * this.value + wobble + push * t.torque * auth;
 
       this.vel += accel * h;
       this.vel *= Math.exp(-t.damping * h);
-      this.value += (this.vel + push * t.correctionRate * authority) * h;
+
+      // Terminal speed. The rate cap covers the pendulum AND the player's direct correction, so
+      // the meter has one readable top speed in both directions: you can always see the fall
+      // coming, and you can never snap back from the edge in a single frame. It scales with
+      // difficulty, creep and slow speed, so a twenty-trick line falls visibly faster than the
+      // first manual of the run.
+      let rate = this.vel + push * t.correctionRate * auth;
+      if (t.maxRate > 0) {
+        const cap = t.maxRate * Math.max(0.5, diffScale * creep * Math.min(speedScale, 1.6));
+        rate = clamp(rate, -cap, cap);
+      }
+      this.value += rate * h;
 
       if (this.timeInMode < t.grace) {
         // Can't bail during the ramp-in, but the value is still pinned so it doesn't get
@@ -836,6 +941,7 @@ export class BalanceSystem {
 
     this.mode = 'none';
     this.timeInMode = 0;
+    this.heldTime = 0;
     this.vel = 0;
     if (reason === 'bail') {
       this.bailLockoutUntil = this.clock + this.tuning.bailLockout;

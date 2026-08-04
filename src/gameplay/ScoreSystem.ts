@@ -252,14 +252,23 @@ export interface ScoreTuning {
   /**
    * ms the combo clock runs for once nothing is holding it open.
    *
-   * TUNED FROM MEASUREMENT, not taste. ch1_office is a 41x43 m floorplate whose 211 rails form
-   * ONE connected feature graph (every rail end is within 3 m of another rail; median hop 0.40 m,
-   * p90 1.54 m), and the feel pass measured a 12-14 m/s cruise. The widest real gap a line has to
-   * cross is the spine corridor itself — 10.4 m wall to wall, ~0.8 s at cruise — or a run from the
-   * conference table at z=-18 to the stairs at z=+20, 38 m. A 1.8 s window buys 22-25 m at cruise:
-   * comfortably more than any single hop between features, comfortably less than a free lap of the
-   * level. The old 2500 ms bought 34 m, which is the whole floorplate — there was no pressure in it
-   * at all, and a combo that can never lapse is not a combo.
+   * TUNED FROM MEASUREMENT, not taste, and re-measured with the play harness rather than from the
+   * level file. What matters is not the distance between rails but how long the combo clock is
+   * actually RUNNING between features — airtime, grinds and manuals all hold it. Instrumenting a
+   * 24 s ch1_office run (W + grind held, 12 grind episodes, 12 m/s median) gave the real
+   * distribution of clock-ticking gaps between features:
+   *
+   *     median 0.45 s   p90 1.30 s   worst 1.35 s
+   *
+   * and the rail graph itself has a median rail-to-rail hop of 1.14 m (p90 2.48 m, worst 4.70 m).
+   * 2200 ms therefore clears the worst gap that level design actually produces with ~60% headroom
+   * — enough that a missed rail or a wide turn does not end the line — while still being 26 m at
+   * cruise, well under a lap of the 41x43 m floorplate. Standing still ends the combo in 2.2 s,
+   * so the clock is still a real clock.
+   *
+   * NOTE: this window was NEVER the thing killing lines. Game.ts force-banked the position 0.4 s
+   * after every touchdown (LANDING_GRACE), which is below the MEDIAN gap between features — every
+   * measured combo closed with `viaTimeout: false`, i.e. an explicit land(), never a lapsed clock.
    */
   comboWindowMs: number;
   /** Repeating a trick id multiplies its points by this ^ repeatCount (THPS halves). */
@@ -301,6 +310,16 @@ export interface ScoreTuning {
 
   /** Points for a revert. Reverts hold the combo open but do not add multiplier. */
   revertPoints: number;
+  /**
+   * ms a revert HOLDS the combo clock open, on top of resetting it.
+   *
+   * Revert-into-manual is the classic THPS glue, and it only works if the revert buys you enough
+   * time to actually get the manual out. Resetting the clock is not enough on its own: the revert
+   * is pressed on the landing frame, when the player still has to read the ground, find the next
+   * feature and tap down-up. A hold means the clock is frozen for this long, so the revert is a
+   * commitment that pays, not a coin flip.
+   */
+  revertHoldMs: number;
 
   /** Airtime beyond this many seconds starts paying a Big Air bonus. */
   bigAirThreshold: number;
@@ -344,7 +363,7 @@ export interface ScoreTuning {
 export const DEFAULT_SCORE_TUNING: ScoreTuning = {
   stonksPerPoint: 1,
   startingBalance: 0,
-  comboWindowMs: 1800,
+  comboWindowMs: 2200,
   repeatFalloff: 0.5,
   minRepeatFactor: 0.05,
 
@@ -370,6 +389,7 @@ export const DEFAULT_SCORE_TUNING: ScoreTuning = {
   spin180Points: 100,
 
   revertPoints: 100,
+  revertHoldMs: 1200,
 
   // A tap ollie now clears ~0.6 s of hangtime, a kicker rather more. At the old 1.0 s threshold
   // Big Air only ever paid off a ramp launch; at 0.8 s an ollie'd gap over the aisle pays too,
@@ -564,6 +584,8 @@ export class ScoreSystem {
 
   // --- air ---
   private airborne = false;
+  /** Sim ms until which a revert is freezing the combo clock. See ScoreTuning.revertHoldMs. */
+  private revertHoldUntil = -Infinity;
   private airTime = 0;
 
   // --- targets ---
@@ -998,6 +1020,7 @@ export class ScoreSystem {
     });
     this.idCounts.set('revert', (this.idCounts.get('revert') ?? 0) + 1);
     this.basePoints += points;
+    this.revertHoldUntil = this.clockMs + this.tuning.revertHoldMs;
     this.refreshTimer();
 
     const ev: TrickScoreEvent = {
@@ -1058,7 +1081,11 @@ export class ScoreSystem {
 
     if (!this.open) return;
 
-    const held = this.airborne || this.grindEntry !== null || this.manualEntry !== null;
+    const held =
+      this.airborne ||
+      this.grindEntry !== null ||
+      this.manualEntry !== null ||
+      this.clockMs < this.revertHoldUntil;
     if (held) {
       this.timer = this.tuning.comboWindowMs;
       return;
@@ -1514,6 +1541,7 @@ export class ScoreSystem {
     this.spinPeak = 0;
     this.spinStepsAwarded = 0;
     this.airTime = 0;
+    this.revertHoldUntil = -Infinity;
   }
 
   // =========================================================================
@@ -1525,7 +1553,41 @@ export class ScoreSystem {
     this.open = true;
     this.comboStart = this.clockMs;
     this.timer = this.tuning.comboWindowMs;
+    this.revertHoldUntil = -Infinity;
     this.airTime = 0;
+  }
+
+  /**
+   * How much extra balance difficulty the CURRENT open position has earned, 0 .. 2.2.
+   *
+   * Feed this to BalanceSystem as `difficulty = 1 + comboPressure`. It is what stops a long line
+   * from being free: the balance model's own `creep` only ramps within a single manual or grind,
+   * and a line made of sixteen short grinds glued by manuals re-seeds that ramp sixteen times, so
+   * without this a 35-trick combo balanced exactly as easily as the first rail of the run (a
+   * measured 24 s / 35-trick unbroken line came out of the harness before this existed).
+   *
+   * Both halves matter. Trick COUNT is what the player is being paid for, so it should be what
+   * they are charged for; DURATION stops a slow, cautious, low-scoring line from being safe just
+   * because it is not stacking entries. The caps keep the top end at difficulty 3.2, which is
+   * hairy — a ~2 s uncorrected grind, a ~3 s manual for an average pair of hands — but still
+   * inside the model's controllable range, so a great player can hold it and a good one cannot.
+   */
+  get comboPressure(): number {
+    if (!this.open) return 0;
+    const seconds = (this.clockMs - this.comboStart) / 1000;
+    return Math.min(1.4, this.entries.length * 0.07) + Math.min(0.8, seconds * 0.045);
+  }
+
+  /**
+   * The combo clock's full length, in SECONDS.
+   *
+   * Exposed so the game does not have to keep a second, shorter combo timer of its own. It used
+   * to: Game.ts banked the position 0.4 s after every touchdown, which is shorter than the median
+   * measured gap between features (0.45 s), so the real combo window never got to run and every
+   * line died on the first landing. There must be exactly one clock.
+   */
+  get comboWindowSeconds(): number {
+    return this.tuning.comboWindowMs / 1000;
   }
 
   private refreshTimer(): void {
