@@ -332,20 +332,24 @@ export class LandingParticles {
       const i = this.motes.alloc();
       if (i < 0) break;
       // Spherical shell, so it reads as a pop from the rider rather than a ground effect.
+      // Small and FAST: at close camera range a fat additive mote just smears white over
+      // the rider's chest, which hides the animation the pop is meant to punctuate.
       const th = Math.random() * Math.PI * 2;
       const ph = Math.acos(2 * Math.random() - 1);
-      const s = (2.6 + Math.random() * 3.4) * (0.7 + t);
-      this.motes.px[i] = position.x; this.motes.py[i] = position.y; this.motes.pz[i] = position.z;
+      const s = (3.4 + Math.random() * 4.2) * (0.7 + t);
+      this.motes.px[i] = position.x;
+      this.motes.py[i] = position.y - 0.30;
+      this.motes.pz[i] = position.z;
       this.motes.vx[i] = Math.sin(ph) * Math.cos(th) * s;
-      this.motes.vy[i] = Math.cos(ph) * s * 0.8 + 0.6;
+      this.motes.vy[i] = Math.cos(ph) * s * 0.8 + 0.5;
       this.motes.vz[i] = Math.sin(ph) * Math.sin(th) * s;
-      this.motes.grav[i] = -6; this.motes.drag[i] = 5.5;
-      const ml = 0.16 + Math.random() * 0.14;
+      this.motes.grav[i] = -6; this.motes.drag[i] = 6.5;
+      const ml = 0.12 + Math.random() * 0.12;
       this.motes.life[i] = ml; this.motes.maxLife[i] = ml;
-      this.motes.scale[i] = 0.022 + Math.random() * 0.022;
+      this.motes.scale[i] = 0.010 + Math.random() * 0.012;
       this.motes.grow[i] = -0.5;
       // Cool white with a blue edge.
-      this.motes.cr[i] = 3.0; this.motes.cg[i] = 3.6; this.motes.cb[i] = 4.4;
+      this.motes.cr[i] = 2.1; this.motes.cg[i] = 2.6; this.motes.cb[i] = 3.4;
     }
   }
 
@@ -372,7 +376,7 @@ export class LandingParticles {
       this.motes.drag[i] = 1.1;
       const ml = 0.55 + Math.random() * 0.5;
       this.motes.life[i] = ml; this.motes.maxLife[i] = ml;
-      this.motes.scale[i] = 0.030 + Math.random() * 0.030;
+      this.motes.scale[i] = 0.022 + Math.random() * 0.024;
       this.motes.grow[i] = -0.25;
       if (Math.random() < 0.35) {
         this.motes.cr[i] = 3.6; this.motes.cg[i] = 2.7; this.motes.cb[i] = 0.6;   // gold

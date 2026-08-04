@@ -2021,8 +2021,10 @@ export class Game {
     if (!this.paperStorm) return;
     this.paperStorm.reset();
     this.paperStorm.setGroundLevel(0);
-    const radius = Math.min(30, Math.max(14, (level.groundSize ?? 60) * 0.25));
-    this.paperStorm.addFloorLitter(new THREE.Vector3(spawnPos.x, 0, spawnPos.z), radius, 110);
+    // 110 sheets over a 30 m disc is 0.04 sheets/m2 — the player crossed one every few
+    // seconds and the wake had nothing to pick up. Tighter disc, denser scatter.
+    const radius = Math.min(20, Math.max(12, (level.groundSize ?? 60) * 0.16));
+    this.paperStorm.addFloorLitter(new THREE.Vector3(spawnPos.x, 0, spawnPos.z), radius, 240);
   }
 
   /**

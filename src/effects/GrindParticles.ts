@@ -33,26 +33,43 @@
 
 import * as THREE from 'three';
 
-const MAX_SPARKS = 620;
+const MAX_SPARKS = 780;
 
 const KIND_FINE = 0;
 const KIND_EMBER = 1;
 
-// White-hot -> orange -> ember red. Sampled by remaining-life, so a spark cools as it flies.
-const RAMP: Array<[number, number, number]> = [
-  [1.00, 0.98, 0.92],
-  [1.00, 0.86, 0.46],
-  [1.00, 0.55, 0.13],
-  [0.86, 0.24, 0.04],
-  [0.36, 0.06, 0.01],
+/**
+ * A spark is either HOT (white-hot core, rare) or COOL (orange, common). The reference
+ * spray is overwhelmingly orange with a handful of clipped white cores in it; making every
+ * spark start white-hot produced a pale grey spray that read as dust, which is exactly the
+ * failure this split fixes.
+ */
+const HOT_FRACTION = 0.28;
+
+// Two blackbody-ish ramps, sampled by remaining-life so a spark cools as it flies.
+// HOT starts clipped white; COOL never leaves the orange band.
+const RAMP_HOT: Array<[number, number, number]> = [
+  [1.00, 0.98, 0.90],
+  [1.00, 0.80, 0.36],
+  [1.00, 0.48, 0.10],
+  [0.84, 0.22, 0.03],
+  [0.34, 0.05, 0.01],
+];
+const RAMP_COOL: Array<[number, number, number]> = [
+  [1.00, 0.66, 0.20],
+  [1.00, 0.52, 0.12],
+  [0.96, 0.35, 0.06],
+  [0.72, 0.17, 0.02],
+  [0.28, 0.04, 0.01],
 ];
 
-function sampleRamp(t: number, out: THREE.Vector3): void {
-  const x = THREE.MathUtils.clamp(1 - t, 0, 0.9999) * (RAMP.length - 1);
+function sampleRamp(t: number, hot: boolean, out: THREE.Vector3): void {
+  const ramp = hot ? RAMP_HOT : RAMP_COOL;
+  const x = THREE.MathUtils.clamp(1 - t, 0, 0.9999) * (ramp.length - 1);
   const i = Math.floor(x);
   const f = x - i;
-  const a = RAMP[i];
-  const b = RAMP[Math.min(i + 1, RAMP.length - 1)];
+  const a = ramp[i];
+  const b = ramp[Math.min(i + 1, ramp.length - 1)];
   out.set(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f);
 }
 
@@ -131,6 +148,7 @@ export class GrindParticles {
   private size = new Float32Array(MAX_SPARKS);
   private seed = new Float32Array(MAX_SPARKS);
   private kind = new Uint8Array(MAX_SPARKS);
+  private hot = new Uint8Array(MAX_SPARKS);
   private bounces = new Uint8Array(MAX_SPARKS);
   private count = 0;
 
@@ -235,7 +253,7 @@ export class GrindParticles {
     // --- contact light ------------------------------------------------------
     // Created up front (never added/removed at runtime) so the one-time material
     // recompile that a light-count change forces happens at level build, not mid-grind.
-    this.light = new THREE.PointLight(0xff7a1e, 0, 6.5, 2);
+    this.light = new THREE.PointLight(0xff7a1e, 0, 5.5, 2);
     this.light.name = 'grindLight';
     this.light.castShadow = false;
     this.group.add(this.light);
@@ -279,27 +297,35 @@ export class GrindParticles {
       const i = this.allocate();
       if (i < 0) return;
 
-      const ember = Math.random() < 0.26;
+      const ember = Math.random() < 0.24;
+      // A third of the fine sparks barely leave the contact patch. That near-field cluster
+      // is what gives the spray a dense, hot ROOT instead of a scattering of lonely dots.
+      const near = !ember && Math.random() < 0.38;
 
       // Backward ejection scales with grind speed — this is what turns a trickle into a
       // rooster tail as the player picks up pace.
-      const back = -(0.22 + Math.random() * 0.55) * sp;
-      const fan = (Math.random() - 0.5) * (ember ? 0.9 : 1.9) * (0.55 + sp * 0.075);
-      const rise = (ember ? 0.5 : 1.1) + Math.random() * (ember ? 1.4 : 2.9);
+      const back = -(near ? 0.05 + Math.random() * 0.18 : 0.22 + Math.random() * 0.62) * sp;
+      const fan = (Math.random() - 0.5) * (ember ? 0.9 : near ? 0.7 : 2.1) * (0.55 + sp * 0.075);
+      const rise = (ember ? 0.35 : near ? 0.4 : 0.7) + Math.random() * (ember ? 1.2 : near ? 1.3 : 2.4);
 
       this.px[i] = position.x + direction.x * (Math.random() - 0.5) * 0.10 + _side.x * (Math.random() - 0.5) * 0.06;
       this.py[i] = position.y + (Math.random() - 0.5) * 0.03;
       this.pz[i] = position.z + direction.z * (Math.random() - 0.5) * 0.10 + _side.z * (Math.random() - 0.5) * 0.06;
 
       this.vx[i] = direction.x * back + _side.x * fan + (Math.random() - 0.5) * 0.6;
-      this.vy[i] = rise + (Math.random() - 0.5) * 0.8;
+      this.vy[i] = rise + (Math.random() - 0.5) * 0.7;
       this.vz[i] = direction.z * back + _side.z * fan + (Math.random() - 0.5) * 0.6;
 
-      const ml = ember ? 0.60 + Math.random() * 0.85 : 0.13 + Math.random() * 0.24;
+      const ml = ember ? 0.60 + Math.random() * 0.85 : near ? 0.09 + Math.random() * 0.13 : 0.15 + Math.random() * 0.26;
       this.life[i] = ml;
       this.maxLife[i] = ml;
-      this.size[i] = ember ? 0.026 + Math.random() * 0.022 : 0.012 + Math.random() * 0.018;
+      this.size[i] = ember ? 0.028 + Math.random() * 0.024
+        : near ? 0.016 + Math.random() * 0.020
+        : 0.014 + Math.random() * 0.020;
       this.kind[i] = ember ? KIND_EMBER : KIND_FINE;
+      // The near-field cluster carries most of the white-hot cores; the long fliers have
+      // had time to cool, so they stay orange. That gradient is the whole look.
+      this.hot[i] = (near ? Math.random() < 0.55 : Math.random() < HOT_FRACTION) ? 1 : 0;
       this.bounces[i] = 0;
       this.seed[i] = Math.random() * 100;
     }
@@ -381,7 +407,7 @@ export class GrindParticles {
     if (on) {
       this.flare.position.copy(this.flarePos);
       this.core.position.copy(this.flarePos);
-      const s = 0.34 + e * 0.52;
+      const s = 0.26 + e * 0.40;
       this.flare.scale.set(s, s, s);
       this.core.scale.set(s * 0.30, s * 0.30, s * 0.30);
       (this.flare.material as THREE.SpriteMaterial).opacity = Math.min(1, e * 1.3);
@@ -439,6 +465,7 @@ export class GrindParticles {
     this.life[i] = this.life[last]; this.maxLife[i] = this.maxLife[last];
     this.size[i] = this.size[last]; this.seed[i] = this.seed[last];
     this.kind[i] = this.kind[last]; this.bounces[i] = this.bounces[last];
+    this.hot[i] = this.hot[last];
   }
 
   private writeBuffers(): void {
@@ -457,15 +484,18 @@ export class GrindParticles {
     const n = this.count;
     for (let i = 0; i < n; i++) {
       const t = this.life[i] / this.maxLife[i];
-      sampleRamp(t, _col);
+      const hot = this.hot[i] === 1;
+      sampleRamp(t, hot, _col);
 
       // Sparks twinkle: a per-particle phase makes the spray shimmer instead of dissolving
       // uniformly, which is most of what sells "hot metal" at 60 fps.
       const fine = this.kind[i] === KIND_FINE;
-      const twinkle = fine ? 0.55 + 0.45 * Math.sin(this.seed[i] + (1 - t) * 34) : 1;
-      // HDR: a fresh fine spark peaks around 7 linear, well past the 0.95 bloom gate and
-      // under the 12.0 input clamp, so it clips to a white core with a tight halo.
-      const bright = (fine ? 0.6 + t * t * 6.6 : 0.45 + t * 2.6) * twinkle;
+      const twinkle = fine ? 0.6 + 0.4 * Math.sin(this.seed[i] + (1 - t) * 34) : 1;
+      // HDR: a hot spark peaks around 7 linear, well past the 0.95 bloom gate and under the
+      // 12.0 input clamp, so it clips to a white core with a tight halo. A cool one peaks
+      // near 3 — over the gate, so it still halates, but it stays unmistakably ORANGE.
+      const peak = hot ? 6.8 : 2.9;
+      const bright = (fine ? 0.55 + t * t * peak : 0.4 + t * peak * 0.42) * twinkle;
 
       hpa[i * 3] = this.px[i];
       hpa[i * 3 + 1] = this.py[i];
@@ -478,7 +508,9 @@ export class GrindParticles {
       // Streak: back along the velocity, length proportional to speed. Long trails are the
       // difference between "sparks" and "orange dust".
       const vlen = Math.sqrt(this.vx[i] * this.vx[i] + this.vy[i] * this.vy[i] + this.vz[i] * this.vz[i]);
-      const k = Math.min(0.055, 0.014 + vlen * 0.0055);
+      // k is "seconds of travel drawn": ~2.5 frames at 60 fps, which is the length a real
+      // motion-blurred spark covers. At 8 m/s that is a 35 cm streak, not a 5 cm dash.
+      const k = Math.min(0.048, 0.018 + vlen * 0.0042);
       const b = i * 6;
       spa[b] = this.px[i];
       spa[b + 1] = this.py[i];
@@ -487,7 +519,7 @@ export class GrindParticles {
       spa[b + 4] = this.py[i] - this.vy[i] * k;
       spa[b + 5] = this.pz[i] - this.vz[i] * k;
 
-      const hb = bright * 0.8;
+      const hb = bright * 0.85;
       sca[b] = _col.x * hb;
       sca[b + 1] = _col.y * hb;
       sca[b + 2] = _col.z * hb;
