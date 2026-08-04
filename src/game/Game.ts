@@ -23,6 +23,7 @@ import { PaperStorm } from '../vfx/PaperStorm';
 import { HUD } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
+import { soundManager } from '../audio/SoundManager';
 import { GrindParticles } from '../effects/GrindParticles';
 import { LandingParticles } from '../effects/LandingParticles';
 import { SpeedLines } from '../effects/SpeedLines';
@@ -327,6 +328,7 @@ export class Game {
       report(95, 'Initializing audio...');
       // Initialize procedural audio
       proceduralSounds.init();
+      soundManager.init();
       
       // Handle window resize
       window.addEventListener('resize', this.onResize.bind(this));
@@ -731,7 +733,8 @@ export class Game {
       this.paperStorm.burst(e.position.clone().setY(e.position.y + 0.4), count, energy, e.direction);
     }
 
-    proceduralSounds.playTrick(e.scoreValue);
+    // Material-specific impact. The score event already fires the trick sting.
+    proceduralSounds.playSmash(e.debrisKind, e.impulse);
     this.cameraController.shake(Math.min(0.35, 0.06 + e.impulse * 0.002), 0.18);
   }
 
@@ -739,10 +742,11 @@ export class Game {
     switch (e.type) {
       case 'spotted':
         this.goals?.setPursuit(true);
-        proceduralSounds.playBail();
+        proceduralSounds.playPoliceWhistle();
         break;
       case 'lost':
         if (this.police && !this.police.inPursuit) this.goals?.setPursuit(false);
+        proceduralSounds.playPoliceLost();
         break;
       case 'caught':
         this.onOfficerCaught?.();
@@ -787,7 +791,7 @@ export class Game {
     this.destructibles.onSmash((e) => this.onSmash(e));
 
     // ---- flying paper ---------------------------------------------------------------------
-    this.paperStorm = new PaperStorm(this.scene, { maxSheets: 320, groundY: 0 });
+    this.paperStorm = new PaperStorm(this.scene, { maxSheets: 520, groundY: 0 });
 
     // ---- police ---------------------------------------------------------------------------
     this.police = new PoliceSquad(this.scene, this.physics);
@@ -1761,6 +1765,7 @@ export class Game {
     this.levelTime = 0;
     // Start wheel roll sound (will be silent until moving)
     proceduralSounds.startWheelRoll();
+    soundManager.startMusic();
     requestAnimationFrame(this.loop.bind(this));
   }
   
@@ -1768,11 +1773,13 @@ export class Game {
     this.isPaused = true;
     // Silence wheel roll when paused
     proceduralSounds.updateWheelRoll(0, false);
+    soundManager.stopMusic();
   }
   
   resume(): void {
     this.isPaused = false;
     this.lastTime = performance.now(); // Reset to avoid time jump
+    soundManager.startMusic();
   }
   
   /**
@@ -2023,8 +2030,8 @@ export class Game {
     this.paperStorm.setGroundLevel(0);
     // 110 sheets over a 30 m disc is 0.04 sheets/m2 — the player crossed one every few
     // seconds and the wake had nothing to pick up. Tighter disc, denser scatter.
-    const radius = Math.min(20, Math.max(12, (level.groundSize ?? 60) * 0.16));
-    this.paperStorm.addFloorLitter(new THREE.Vector3(spawnPos.x, 0, spawnPos.z), radius, 240);
+    const radius = Math.min(26, Math.max(14, (level.groundSize ?? 60) * 0.22));
+    this.paperStorm.addFloorLitter(new THREE.Vector3(spawnPos.x, 0, spawnPos.z), radius, 420);
   }
 
   /**
@@ -3317,6 +3324,7 @@ export class Game {
     this.isRunning = false;
     // Stop wheel roll sound
     proceduralSounds.stopWheelRoll();
+    soundManager.shutdown();
   }
   
   private loop(currentTime: number): void {
@@ -3498,7 +3506,22 @@ export class Game {
     }
     this.prevSpeed = currentSpeed;
 
-    proceduralSounds.updateWheelRoll(currentSpeed, this.playerState.isGrounded && !this.playerState.isGrinding);
+    // One audio sample point per frame. The director drives the roll bed, the
+    // grind bed, the combo riser, the chase tension and the music arrangement.
+    // Surface hardness: the office floor is carpet; desks, ledges and any real
+    // transition are hard laminate/concrete. One scalar, crossfaded in the mix.
+    const surfaceHardness = Math.min(1,
+      Math.max(0, (this.chair.position.y - 0.85) / 0.6) + (this.surfaceAngle > 14 ? 0.55 : 0));
+    soundManager.update(dt, {
+      speed: currentSpeed,
+      rolling: this.playerState.isGrounded && !this.playerState.isGrinding,
+      hardness: surfaceHardness,
+      grinding: this.playerState.isGrinding,
+      balance: this.balance.balance01,
+      comboOpen: this.score.isOpen,
+      multiplier: this.score.multiplier,
+      heat: this.police?.heatLevel ?? 0,
+    });
 
     if (this.chairParts) {
       spinCasters(this.chairParts, currentSpeed, dt);
@@ -3608,7 +3631,7 @@ export class Game {
       const popping = intent.olliePopped;
       this.endGrind();
       if (popping) {
-        proceduralSounds.playJump();
+        proceduralSounds.playOllie(intent.ollieCharge || 1);
         const v = this.physics.getVelocity(this.chairBody);
         this.physics.setVelocity(this.chairBody, new THREE.Vector3(v.x, 10 * this.jumpMultiplier * intent.ollieCharge, v.z));
       }
@@ -4061,9 +4084,8 @@ export class Game {
 
     // Landing detection
     if (!wasGrounded && this.playerState.isGrounded) {
-      proceduralSounds.playLand();
-
       const landingIntensity = Math.min(1, this.playerState.airTime / 1500);
+      proceduralSounds.playLand(landingIntensity);
       if (landingIntensity > 0.1) {
         this.landingParticles.spawn(pos.clone(), landingIntensity);
       }
@@ -4364,7 +4386,7 @@ export class Game {
     const canJump = this.playerState.isGrounded || withinCoyoteTime;
 
     if (intent.olliePopped && canJump) {
-      proceduralSounds.playJump();
+      proceduralSounds.playOllie(intent.ollieCharge || 1);
       this.lastGroundedTime = -Infinity;
       this.ollieCharge = Math.max(0.3, intent.ollieCharge || 1);
 

@@ -297,7 +297,7 @@ export class GrindParticles {
       const i = this.allocate();
       if (i < 0) return;
 
-      const ember = Math.random() < 0.24;
+      const ember = Math.random() < 0.30;
       // A third of the fine sparks barely leave the contact patch. That near-field cluster
       // is what gives the spray a dense, hot ROOT instead of a scattering of lonely dots.
       const near = !ember && Math.random() < 0.38;
@@ -305,8 +305,8 @@ export class GrindParticles {
       // Backward ejection scales with grind speed — this is what turns a trickle into a
       // rooster tail as the player picks up pace.
       const back = -(near ? 0.05 + Math.random() * 0.18 : 0.22 + Math.random() * 0.62) * sp;
-      const fan = (Math.random() - 0.5) * (ember ? 0.9 : near ? 0.7 : 2.1) * (0.55 + sp * 0.075);
-      const rise = (ember ? 0.35 : near ? 0.4 : 0.7) + Math.random() * (ember ? 1.2 : near ? 1.3 : 2.4);
+      const fan = (Math.random() - 0.5) * (ember ? 1.3 : near ? 0.8 : 3.1) * (0.55 + sp * 0.075);
+      const rise = (ember ? 0.4 : near ? 0.4 : 1.0) + Math.random() * (ember ? 1.6 : near ? 1.3 : 3.4);
 
       this.px[i] = position.x + direction.x * (Math.random() - 0.5) * 0.10 + _side.x * (Math.random() - 0.5) * 0.06;
       this.py[i] = position.y + (Math.random() - 0.5) * 0.03;
@@ -316,12 +316,16 @@ export class GrindParticles {
       this.vy[i] = rise + (Math.random() - 0.5) * 0.7;
       this.vz[i] = direction.z * back + _side.z * fan + (Math.random() - 0.5) * 0.6;
 
-      const ml = ember ? 0.60 + Math.random() * 0.85 : near ? 0.09 + Math.random() * 0.13 : 0.15 + Math.random() * 0.26;
+      const ml = ember ? 0.70 + Math.random() * 0.95 : near ? 0.09 + Math.random() * 0.13 : 0.26 + Math.random() * 0.38;
       this.life[i] = ml;
       this.maxLife[i] = ml;
-      this.size[i] = ember ? 0.028 + Math.random() * 0.024
-        : near ? 0.016 + Math.random() * 0.020
-        : 0.014 + Math.random() * 0.020;
+      // Sizes are world-space radii fed through `aSize * 340 / depth`. At the ~7 m the
+      // follow camera actually sits at, the old 0.014-0.03 range came out at ONE pixel and
+      // clamped — which is why the spray read as a thin trickle in the gameplay frame
+      // while looking fine in a close-up. These are the sizes that survive the follow shot.
+      this.size[i] = ember ? 0.11 + Math.random() * 0.09
+        : near ? 0.075 + Math.random() * 0.075
+        : 0.060 + Math.random() * 0.080;
       this.kind[i] = ember ? KIND_EMBER : KIND_FINE;
       // The near-field cluster carries most of the white-hot cores; the long fliers have
       // had time to cool, so they stay orange. That gradient is the whole look.
@@ -350,9 +354,9 @@ export class GrindParticles {
       this.resolveEmitters(grindPosition, _dir);
 
       // Density rides speed: ~150/s at a crawl, ~560/s flat out.
-      const rate = 130 + Math.min(1, speed / 15) * 430;
+      const rate = 180 + Math.min(1, speed / 15) * 620;
       this.spawnAccumulator += dt * rate;
-      let budget = 24; // cap per frame so a long stall cannot dump the whole pool at once
+      let budget = 34; // cap per frame so a long stall cannot dump the whole pool at once
       while (this.spawnAccumulator >= 1 && budget-- > 0) {
         this.spawnAccumulator -= 1;
         // The trailing caster does most of the cutting; the leading one throws a smaller
@@ -425,7 +429,7 @@ export class GrindParticles {
     for (let i = this.count - 1; i >= 0; i--) {
       this.vy[i] += g;
       // Air drag: fine sparks decelerate hard, which is what gives the spray its cone.
-      const drag = this.kind[i] === KIND_EMBER ? 1.15 : 4.0;
+      const drag = this.kind[i] === KIND_EMBER ? 1.0 : 2.6;
       const damp = Math.max(0, 1 - drag * dt);
       this.vx[i] *= damp; this.vy[i] *= damp; this.vz[i] *= damp;
 

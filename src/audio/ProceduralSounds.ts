@@ -93,8 +93,8 @@ export class ProceduralSounds {
   private limiter: DynamicsCompressorNode | null = null;
 
   private masterVolume = 0.85;
-  private musicVolume = 0.55;
-  private sfxVolume = 0.9;
+  private musicVolume = 0.34;
+  private sfxVolume = 1.0;
   private muted = false;
 
   private isInitialized = false;
@@ -738,7 +738,7 @@ export class ProceduralSounds {
 
   private static readonly GRIND_MODE_RATIOS = [1, 2.14, 3.42];
   private static readonly GRIND_MODE_Q = [9, 14, 18];
-  private static readonly GRIND_MODE_GAIN = [1, 0.55, 0.3];
+  private static readonly GRIND_MODE_GAIN = [7, 4, 2.2];
 
   startGrindLoop(): void {
     if (!this.ctx || !this.sfxBus || this.grindActive) return;
@@ -773,7 +773,7 @@ export class ProceduralSounds {
     this.grindBodyLP.frequency.value = 260;
     this.grindBodyLP.Q.value = 0.8;
     const bodyGain = ctx.createGain();
-    bodyGain.gain.value = 0.55;
+    bodyGain.gain.value = 3.2;
     src.connect(this.grindBodyLP);
     this.grindBodyLP.connect(bodyGain);
     bodyGain.connect(this.grindOut);
@@ -792,10 +792,13 @@ export class ProceduralSounds {
     this.grindSrc = src;
     this.grindActive = true;
 
-    // 25 ms fade-in: the transient is supplied by playGrindStart(), so the bed
-    // itself must not add a second click.
+    // ~25 ms fade-in: the transient is supplied by playGrindStart(), so the bed
+    // itself must not add a second click. This uses setTargetAtTime rather than
+    // a ramp on purpose — updateGrind() writes setTargetAtTime to the same param
+    // every frame, and a scheduled ramp ending later than those writes would
+    // override them and pin the level at the fade-in value.
     this.grindOut.gain.setValueAtTime(0.0001, ctx.currentTime);
-    this.grindOut.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.025);
+    this.grindOut.gain.setTargetAtTime(0.12, ctx.currentTime, 0.008);
   }
 
   /**
@@ -865,7 +868,7 @@ export class ProceduralSounds {
     bp.frequency.exponentialRampToValueAtTime(1500, t + 0.16);
     bp.Q.value = 4;
     const g = ctx.createGain();
-    this.perc(g, t, 0.34, 0.004, 0.2);
+    this.perc(g, t, 1.8, 0.004, 0.2);
     src.connect(bp); bp.connect(g); g.connect(this.sfxBus);
     this.sendReverb(g, 0.2);
     src.start(t);
@@ -877,7 +880,7 @@ export class ProceduralSounds {
     ring.frequency.setValueAtTime(880, t);
     ring.frequency.exponentialRampToValueAtTime(620, t + 0.12);
     const rg = ctx.createGain();
-    this.perc(rg, t, 0.1, 0.003, 0.13);
+    this.perc(rg, t, 0.16, 0.003, 0.13);
     ring.connect(rg); rg.connect(this.sfxBus);
     ring.start(t); ring.stop(t + 0.16);
   }
@@ -1008,7 +1011,7 @@ export class ProceduralSounds {
     body.frequency.setValueAtTime(f0, t);
     body.frequency.exponentialRampToValueAtTime(90, t + 0.07);
     const bg = ctx.createGain();
-    this.perc(bg, t, 0.30 + 0.12 * c, 0.002, 0.1);
+    this.perc(bg, t, 0.42 + 0.16 * c, 0.002, 0.1);
     body.connect(bg); bg.connect(this.sfxBus);
     body.start(t); body.stop(t + 0.14);
 
@@ -1019,7 +1022,7 @@ export class ProceduralSounds {
       bp.frequency.value = 2200;
       bp.Q.value = 2;
       const cg = ctx.createGain();
-      this.perc(cg, t, 0.26, 0.001, 0.028);
+      this.perc(cg, t, 0.36, 0.001, 0.028);
       click.connect(bp); bp.connect(cg); cg.connect(this.sfxBus);
       click.start(t); click.stop(t + 0.04);
     }
@@ -1065,7 +1068,7 @@ export class ProceduralSounds {
     thud.frequency.setValueAtTime(150 + 40 * i, t);
     thud.frequency.exponentialRampToValueAtTime(42, t + 0.07 + 0.06 * i);
     const tg = ctx.createGain();
-    this.perc(tg, t, 0.18 + 0.34 * i, 0.002, 0.12 + 0.12 * i);
+    this.perc(tg, t, 0.26 + 0.44 * i, 0.002, 0.12 + 0.12 * i);
     thud.connect(tg); tg.connect(this.sfxBus);
     thud.start(t); thud.stop(t + 0.3);
 
@@ -1077,7 +1080,7 @@ export class ProceduralSounds {
       lp.frequency.exponentialRampToValueAtTime(220, t + 0.09);
       lp.Q.value = 0.9;
       const sg = ctx.createGain();
-      this.perc(sg, t, 0.12 + 0.28 * i, 0.001, 0.06 + 0.05 * i);
+      this.perc(sg, t, 0.16 + 0.34 * i, 0.001, 0.06 + 0.05 * i);
       slap.connect(lp); lp.connect(sg); sg.connect(this.sfxBus);
       this.sendReverb(sg, 0.1 + 0.2 * i);
       slap.start(t); slap.stop(t + 0.16);
@@ -1242,7 +1245,7 @@ export class ProceduralSounds {
     o.frequency.setValueAtTime(96, t);
     o.frequency.exponentialRampToValueAtTime(44, t + 0.1);
     const g = ctx.createGain();
-    this.perc(g, t, 0.2, 0.004, 0.12);
+    this.perc(g, t, 0.28, 0.004, 0.12);
     o.connect(g); g.connect(this.sfxBus);
     o.start(t); o.stop(t + 0.18);
 
@@ -1317,7 +1320,7 @@ export class ProceduralSounds {
     modGain.connect(carrier.frequency);
 
     const g = ctx.createGain();
-    this.perc(g, t, 0.18 + 0.16 * v, 0.003, decay);
+    this.perc(g, t, 0.26 + 0.24 * v, 0.003, decay);
     carrier.connect(g); g.connect(this.sfxBus);
     this.sendReverb(g, 0.22);
 
@@ -1342,7 +1345,7 @@ export class ProceduralSounds {
       hp.type = 'highpass';
       hp.frequency.value = 3500;
       const cg = ctx.createGain();
-      this.perc(cg, t, 0.07 + 0.06 * v, 0.001, 0.02);
+      this.perc(cg, t, 0.10 + 0.08 * v, 0.001, 0.02);
       click.connect(hp); hp.connect(cg); cg.connect(this.sfxBus);
       click.start(t); click.stop(t + 0.035);
     }
@@ -1690,12 +1693,12 @@ export class ProceduralSounds {
           lp.type = 'lowpass';
           lp.frequency.value = 1600;
           const g = ctx.createGain();
-          this.perc(g, t, amp * 0.8, 0.002, 0.13);
+          this.perc(g, t, amp * 1.8, 0.002, 0.13);
           n.connect(lp); lp.connect(g); g.connect(this.sfxBus);
           n.start(t); n.stop(t + 0.2);
         }
         // The box itself: a low woody mode with a quick decay.
-        for (const [f, gv] of [[180, 0.7], [297, 0.3]] as const) {
+        for (const [f, gv] of [[180, 1.6], [297, 0.7]] as const) {
           const o = ctx.createOscillator();
           o.type = 'triangle';
           o.frequency.setValueAtTime(f, t);
@@ -1717,12 +1720,12 @@ export class ProceduralSounds {
           bp.frequency.exponentialRampToValueAtTime(1500, t + 0.06);
           bp.Q.value = 2.2;
           const g = ctx.createGain();
-          this.perc(g, t, amp, 0.001, 0.055);
+          this.perc(g, t, amp * 2.6, 0.001, 0.055);
           n.connect(bp); bp.connect(g); g.connect(this.sfxBus);
           n.start(t); n.stop(t + 0.09);
         }
         // Hollow ring: two close partials, short. Plastic rings, but not for long.
-        for (const [ratio, gv] of [[1, 0.5], [2.7, 0.22]] as const) {
+        for (const [ratio, gv] of [[1, 1.3], [2.7, 0.6]] as const) {
           const o = ctx.createOscillator();
           o.type = 'triangle';
           o.frequency.value = 640 * ratio * (0.9 + 0.25 * e);
@@ -1775,7 +1778,7 @@ export class ProceduralSounds {
         o.frequency.setValueAtTime(110, t);
         o.frequency.exponentialRampToValueAtTime(46, t + 0.09);
         const og = ctx.createGain();
-        this.perc(og, t, amp * 0.9, 0.003, 0.1);
+        this.perc(og, t, amp * 1.7, 0.003, 0.1);
         o.connect(og); og.connect(this.sfxBus);
         o.start(t); o.stop(t + 0.18);
 
@@ -1786,7 +1789,7 @@ export class ProceduralSounds {
           lp.frequency.setValueAtTime(1100, t);
           lp.frequency.exponentialRampToValueAtTime(380, t + 0.2);
           const g = ctx.createGain();
-          this.perc(g, t, amp * 0.6, 0.004, 0.22);
+          this.perc(g, t, amp * 1.2, 0.004, 0.22);
           n.connect(lp); lp.connect(g); g.connect(this.sfxBus);
           n.start(t); n.stop(t + 0.3);
         }
@@ -1800,7 +1803,7 @@ export class ProceduralSounds {
           hp.type = 'highpass';
           hp.frequency.value = 2600;
           const g = ctx.createGain();
-          this.perc(g, t, amp * 0.85, 0.001, 0.09);
+          this.perc(g, t, amp * 1.2, 0.001, 0.09);
           n.connect(hp); hp.connect(g); g.connect(this.sfxBus);
           this.sendReverb(g, 0.3);
           n.start(t); n.stop(t + 0.14);
@@ -1814,7 +1817,7 @@ export class ProceduralSounds {
           o.type = 'sine';
           o.frequency.value = 2200 + Math.random() * 4200;
           const g = ctx.createGain();
-          this.perc(g, at, amp * 0.16, 0.001, 0.05 + Math.random() * 0.08);
+          this.perc(g, at, amp * 0.26, 0.001, 0.05 + Math.random() * 0.08);
           o.connect(g); g.connect(this.sfxBus);
           this.sendReverb(g, 0.35);
           o.start(at); o.stop(at + 0.16);
