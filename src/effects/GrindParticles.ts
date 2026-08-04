@@ -1,47 +1,50 @@
 /**
  * GrindParticles — the sparks.
  *
- * refs/scene-office3.png sells the whole grind on one thing: a dense orange spray of sparks
- * painting a hot streak along the cubicle cap, with a bright core at the contact point and
- * embers skittering away across the carpet. The previous implementation was 100 flat
- * `PointsMaterial` dots at a fixed 0.15 screen size with a two-stop colour ramp, which at
- * gameplay distance read as a handful of pale specks.
+ * The grind spark is the signature effect of a Tony Hawk game: it is the entire reward for
+ * the riskiest thing the player does, and it has to read at a glance, in motion, from behind
+ * the chair. refs/scene-office3.png is the target — a DENSE spray with white-hot cores, long
+ * motion streaks trailing metres behind the contact patch, and embers skittering off across
+ * the carpet, all anchored by a hot flare bright enough to light the ledge it is cutting.
  *
- * This version is built as three layers, three draw calls total:
- *   1. STREAKS  — a LineSegments pass drawing each spark from its position back along its own
- *                 velocity. Motion streaks are what make sparks read as sparks rather than as
- *                 dust, and they are essentially free.
- *   2. HEADS    — an additive Points pass with a procedural radial-glow sprite and per-particle
- *                 size, so a spark has a hot core and a soft bloom skirt for PostFX to catch.
- *   3. FLARE    — a single camera-facing quad pinned to the contact point, which is the bright
- *                 anchor the eye actually locks onto.
+ * WHAT THIS VERSION FIXES
+ * -----------------------
+ *  1. TWO REAL CONTACT POINTS. An office chair grinds on its caster ring, not on a point.
+ *     `setChairSource()` takes the chair root plus ChairModel's `wheelContactPoints` and each
+ *     frame projects the front-most and rear-most caster onto the rail line, so the spray
+ *     comes from two separated sources under the base (as in the reference) and follows the
+ *     chair's actual yaw. Falls back to a symmetric +/-0.24 m pair if no chair is bound.
+ *  2. SPEED SCALING. Emission rate, ejection speed, streak length, cone spread and flare
+ *     energy all ride the grind speed. A crawl trickles; flat out throws a rooster tail.
+ *  3. REAL PHYSICS WITH FLOOR BOUNCE. Sparks integrate under gravity with anisotropic drag
+ *     and BOUNCE off the floor plane, losing energy and skittering — the ember trail across
+ *     the carpet in the reference is the single strongest cue that these are hot metal
+ *     fragments and not a billboard effect.
+ *  4. HDR CORES. Head brightness peaks around 6-8 linear against a bloom threshold of 0.95
+ *     and clamp of 12, so the cores genuinely clip and halate instead of sitting under the
+ *     gate as pale dots.
+ *  5. A LIGHT. Bloom cannot illuminate geometry. One pooled, flickering PointLight sits on
+ *     the contact patch so the ledge, the floor and the chair's own base actually catch the
+ *     orange, which is what makes the sparks feel like they are being MADE by the friction.
  *
- * Colour runs a real blackbody-ish ramp: white-hot 0xfff4d2 -> 0xffa020 -> deep 0x8c2408, so the
- * spray has internal value range instead of being one flat orange.
+ * BUDGET: three draw calls plus two sprites and one light. All particle state lives in flat
+ * typed arrays with swap-remove; zero allocation per frame after construction.
  */
 
 import * as THREE from 'three';
 
-interface Spark {
-  position: THREE.Vector3;
-  velocity: THREE.Vector3;
-  life: number;
-  maxLife: number;
-  size: number;
-  /** Chunky embers bounce off the floor; fine sparks burn out in the air. */
-  ember: boolean;
-  seed: number;
-}
+const MAX_SPARKS = 620;
 
-const MAX_SPARKS = 260;
+const KIND_FINE = 0;
+const KIND_EMBER = 1;
 
 // White-hot -> orange -> ember red. Sampled by remaining-life, so a spark cools as it flies.
 const RAMP: Array<[number, number, number]> = [
-  [1.00, 0.96, 0.86],
-  [1.00, 0.80, 0.36],
-  [1.00, 0.53, 0.12],
-  [0.78, 0.21, 0.05],
-  [0.35, 0.06, 0.02],
+  [1.00, 0.98, 0.92],
+  [1.00, 0.86, 0.46],
+  [1.00, 0.55, 0.13],
+  [0.86, 0.24, 0.04],
+  [0.36, 0.06, 0.01],
 ];
 
 function sampleRamp(t: number, out: THREE.Vector3): void {
@@ -91,7 +94,7 @@ void main() {
   vec4 mv = modelViewMatrix * vec4( position, 1.0 );
   gl_Position = projectionMatrix * mv;
   // Perspective-correct sizing, clamped so a spark right on the lens does not fill the screen.
-  gl_PointSize = clamp( aSize * 320.0 / max( -mv.z, 0.15 ), 1.0, 46.0 );
+  gl_PointSize = clamp( aSize * 340.0 / max( -mv.z, 0.15 ), 1.0, 58.0 );
 }`;
 
 const HEAD_FRAG = /* glsl */`
@@ -103,9 +106,33 @@ void main() {
   gl_FragColor = vec4( vColor * t.a, 1.0 );
 }`;
 
+// Module scratch — reused every frame, never reallocated.
+const _dir = new THREE.Vector3();
+const _side = new THREE.Vector3();
+const _up = new THREE.Vector3(0, 1, 0);
+const _emitA = new THREE.Vector3();
+const _emitB = new THREE.Vector3();
+const _world = new THREE.Vector3();
+const _col = new THREE.Vector3();
+
 export class GrindParticles {
-  private sparks: Spark[] = [];
   private scene: THREE.Scene;
+  private group = new THREE.Group();
+
+  // --- particle pool (structure of arrays, swap-removed) ---------------------
+  private px = new Float32Array(MAX_SPARKS);
+  private py = new Float32Array(MAX_SPARKS);
+  private pz = new Float32Array(MAX_SPARKS);
+  private vx = new Float32Array(MAX_SPARKS);
+  private vy = new Float32Array(MAX_SPARKS);
+  private vz = new Float32Array(MAX_SPARKS);
+  private life = new Float32Array(MAX_SPARKS);
+  private maxLife = new Float32Array(MAX_SPARKS);
+  private size = new Float32Array(MAX_SPARKS);
+  private seed = new Float32Array(MAX_SPARKS);
+  private kind = new Uint8Array(MAX_SPARKS);
+  private bounces = new Uint8Array(MAX_SPARKS);
+  private count = 0;
 
   private headGeo: THREE.BufferGeometry;
   private headMat: THREE.ShaderMaterial;
@@ -115,13 +142,20 @@ export class GrindParticles {
   private streakMat: THREE.LineBasicMaterial;
   private streaks: THREE.LineSegments;
 
+  /** Wide warm halo + tight white core. Two sprites so the flare has a value range. */
   private flare: THREE.Sprite;
+  private core: THREE.Sprite;
+  private light: THREE.PointLight;
   private flareEnergy = 0;
+  private flarePos = new THREE.Vector3();
 
   private spawnAccumulator = 0;
-  private readonly SPAWN_RATE = 190;   // sparks/second while grinding
-  private group = new THREE.Group();
-  private tmpColor = new THREE.Vector3();
+  private groundY = 0;
+  private time = 0;
+
+  /** Optional chair binding, so sparks leave the real caster contact patches. */
+  private chairRoot: THREE.Object3D | null = null;
+  private contacts: THREE.Vector3[] | null = null;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -171,7 +205,8 @@ export class GrindParticles {
     // --- contact flare ------------------------------------------------------
     this.flare = new THREE.Sprite(new THREE.SpriteMaterial({
       map: sparkTexture(),
-      color: new THREE.Color(1.0, 0.72, 0.34),
+      // >1 on purpose: this is the anchor the bloom is supposed to bite on.
+      color: new THREE.Color(3.4, 1.55, 0.42),
       blending: THREE.AdditiveBlending,
       transparent: true,
       depthWrite: false,
@@ -183,82 +218,227 @@ export class GrindParticles {
     this.flare.renderOrder = 9;
     this.group.add(this.flare);
 
+    this.core = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: sparkTexture(),
+      color: new THREE.Color(6.0, 5.2, 3.4),
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+      fog: false,
+    }));
+    this.core.name = 'grindCore';
+    this.core.visible = false;
+    this.core.renderOrder = 10;
+    this.group.add(this.core);
+
+    // --- contact light ------------------------------------------------------
+    // Created up front (never added/removed at runtime) so the one-time material
+    // recompile that a light-count change forces happens at level build, not mid-grind.
+    this.light = new THREE.PointLight(0xff7a1e, 0, 6.5, 2);
+    this.light.name = 'grindLight';
+    this.light.castShadow = false;
+    this.group.add(this.light);
+
     this.scene.add(this.group);
   }
 
   /**
-   * Emit a burst. `direction` is the grind travel direction; sparks fire mostly BACKWARDS along
-   * it in a tight cone, which is what makes the spray read as friction rather than as a fountain.
+   * Bind the chair so sparks are emitted from the real caster contact patches.
+   * @param root          chair root object (world transform is read each frame).
+   * @param localContacts ChairModel `wheelContactPoints` — root-local, y === 0.
    */
-  spawn(position: THREE.Vector3, direction: THREE.Vector3, count = 3): void {
-    for (let i = 0; i < count && this.sparks.length < MAX_SPARKS; i++) {
-      const ember = Math.random() < 0.22;
-      const back = -(2.2 + Math.random() * 5.0);
-      const spread = ember ? 1.4 : 2.4;
+  setChairSource(root: THREE.Object3D | null, localContacts?: THREE.Vector3[] | null): void {
+    this.chairRoot = root;
+    this.contacts = localContacts && localContacts.length > 0 ? localContacts : null;
+  }
 
-      const velocity = new THREE.Vector3(
-        (Math.random() - 0.5) * spread,
-        // Sparks leave the contact patch downward-ish and then get flung; a pure upward
-        // fountain is the classic "particle system" tell.
-        (Math.random() - 0.25) * 2.6 + 1.1,
-        (Math.random() - 0.5) * spread,
-      );
-      velocity.addScaledVector(direction, back * (0.35 + Math.random() * 0.65));
+  /** Floor height the embers bounce off. Levels are built on y = 0. */
+  setGroundLevel(y: number): void {
+    this.groundY = y;
+  }
 
-      const maxLife = ember ? 0.55 + Math.random() * 0.55 : 0.16 + Math.random() * 0.22;
-      this.sparks.push({
-        position: position.clone().addScaledVector(direction, (Math.random() - 0.5) * 0.10),
-        velocity,
-        life: maxLife,
-        maxLife,
-        size: ember ? 0.020 + Math.random() * 0.016 : 0.010 + Math.random() * 0.014,
-        ember,
-        seed: Math.random() * 100,
-      });
+  private allocate(): number {
+    if (this.count >= MAX_SPARKS) return -1;
+    return this.count++;
+  }
+
+  /**
+   * Emit a burst. `direction` is the grind travel direction; sparks fire mostly BACKWARDS
+   * along it, which is what makes the spray read as friction rather than as a fountain.
+   *
+   * @param speed grind speed in m/s — drives ejection velocity and cone spread.
+   */
+  spawn(position: THREE.Vector3, direction: THREE.Vector3, count = 3, speed = 8): void {
+    _side.crossVectors(direction, _up);
+    if (_side.lengthSq() < 1e-6) _side.set(1, 0, 0);
+    else _side.normalize();
+
+    const sp = Math.max(2, speed);
+    for (let k = 0; k < count; k++) {
+      const i = this.allocate();
+      if (i < 0) return;
+
+      const ember = Math.random() < 0.26;
+
+      // Backward ejection scales with grind speed — this is what turns a trickle into a
+      // rooster tail as the player picks up pace.
+      const back = -(0.22 + Math.random() * 0.55) * sp;
+      const fan = (Math.random() - 0.5) * (ember ? 0.9 : 1.9) * (0.55 + sp * 0.075);
+      const rise = (ember ? 0.5 : 1.1) + Math.random() * (ember ? 1.4 : 2.9);
+
+      this.px[i] = position.x + direction.x * (Math.random() - 0.5) * 0.10 + _side.x * (Math.random() - 0.5) * 0.06;
+      this.py[i] = position.y + (Math.random() - 0.5) * 0.03;
+      this.pz[i] = position.z + direction.z * (Math.random() - 0.5) * 0.10 + _side.z * (Math.random() - 0.5) * 0.06;
+
+      this.vx[i] = direction.x * back + _side.x * fan + (Math.random() - 0.5) * 0.6;
+      this.vy[i] = rise + (Math.random() - 0.5) * 0.8;
+      this.vz[i] = direction.z * back + _side.z * fan + (Math.random() - 0.5) * 0.6;
+
+      const ml = ember ? 0.60 + Math.random() * 0.85 : 0.13 + Math.random() * 0.24;
+      this.life[i] = ml;
+      this.maxLife[i] = ml;
+      this.size[i] = ember ? 0.026 + Math.random() * 0.022 : 0.012 + Math.random() * 0.018;
+      this.kind[i] = ember ? KIND_EMBER : KIND_FINE;
+      this.bounces[i] = 0;
+      this.seed[i] = Math.random() * 100;
     }
   }
 
-  update(dt: number, isGrinding: boolean, grindPosition?: THREE.Vector3, grindDirection?: THREE.Vector3): void {
-    const dir = grindDirection && grindDirection.lengthSq() > 1e-6
-      ? grindDirection.clone().normalize()
-      : new THREE.Vector3(0, 0, -1);
+  /**
+   * @param speed grind speed in m/s. Defaults to a mid cruise if the caller has none.
+   */
+  update(
+    dt: number,
+    isGrinding: boolean,
+    grindPosition?: THREE.Vector3,
+    grindDirection?: THREE.Vector3,
+    speed = 9,
+  ): void {
+    this.time += dt;
+
+    if (grindDirection && grindDirection.lengthSq() > 1e-6) _dir.copy(grindDirection).normalize();
+    else _dir.set(0, 0, -1);
 
     if (isGrinding && grindPosition) {
-      this.spawnAccumulator += dt * this.SPAWN_RATE;
-      while (this.spawnAccumulator >= 1 && this.sparks.length < MAX_SPARKS) {
+      this.resolveEmitters(grindPosition, _dir);
+
+      // Density rides speed: ~150/s at a crawl, ~560/s flat out.
+      const rate = 130 + Math.min(1, speed / 15) * 430;
+      this.spawnAccumulator += dt * rate;
+      let budget = 24; // cap per frame so a long stall cannot dump the whole pool at once
+      while (this.spawnAccumulator >= 1 && budget-- > 0) {
         this.spawnAccumulator -= 1;
-        this.spawn(grindPosition, dir, 1);
+        // The trailing caster does most of the cutting; the leading one throws a smaller
+        // secondary spray. Two sources is what makes the base read as WIDE.
+        if (Math.random() < 0.62) this.spawn(_emitB, _dir, 1, speed);
+        else this.spawn(_emitA, _dir, 1, speed);
       }
-      this.flareEnergy = Math.min(1, this.flareEnergy + dt * 9);
-      this.flare.position.copy(grindPosition);
+      if (this.spawnAccumulator > 40) this.spawnAccumulator = 0;
+
+      this.flareEnergy = Math.min(1, this.flareEnergy + dt * 11);
+      this.flarePos.lerpVectors(_emitA, _emitB, 0.5);
     } else {
       this.spawnAccumulator = 0;
       this.flareEnergy = Math.max(0, this.flareEnergy - dt * 7);
     }
 
-    // Flicker hard: a steady glow reads as a light, a flickering one reads as friction.
-    const flick = 0.62 + 0.38 * Math.sin(performance.now() * 0.055) * Math.sin(performance.now() * 0.021);
-    const e = this.flareEnergy * flick;
-    this.flare.visible = e > 0.02;
-    if (this.flare.visible) {
-      const s = 0.26 + e * 0.34;
-      this.flare.scale.set(s, s, s);
-      (this.flare.material as THREE.SpriteMaterial).opacity = Math.min(1, e * 1.25);
-    }
-
-    const g = -17.5 * dt;
-    for (let i = this.sparks.length - 1; i >= 0; i--) {
-      const p = this.sparks[i];
-      p.velocity.y += g;
-      // Air drag: fine sparks decelerate hard, which is what gives the spray its cone shape.
-      const drag = p.ember ? 1.4 : 4.2;
-      p.velocity.multiplyScalar(Math.max(0, 1 - drag * dt));
-      p.position.addScaledVector(p.velocity, dt);
-      p.life -= dt;
-      if (p.life <= 0) this.sparks.splice(i, 1);
-    }
-
+    this.updateFlare(speed);
+    this.integrate(dt);
     this.writeBuffers();
+  }
+
+  /** Front-most and rear-most caster contacts, projected onto the rail line. */
+  private resolveEmitters(grindPosition: THREE.Vector3, dir: THREE.Vector3): void {
+    let minT = 0, maxT = 0, found = false;
+    if (this.chairRoot && this.contacts) {
+      this.chairRoot.updateWorldMatrix(true, false);
+      for (let i = 0; i < this.contacts.length; i++) {
+        _world.copy(this.contacts[i]).applyMatrix4(this.chairRoot.matrixWorld);
+        const t = (_world.x - grindPosition.x) * dir.x + (_world.z - grindPosition.z) * dir.z;
+        if (!found) { minT = maxT = t; found = true; }
+        else if (t < minT) minT = t;
+        else if (t > maxT) maxT = t;
+      }
+      // Guard against a degenerate binding collapsing both emitters onto one point.
+      if (maxT - minT < 0.12) { minT = -0.24; maxT = 0.24; }
+    }
+    if (!found) { minT = -0.24; maxT = 0.24; }
+
+    _emitA.copy(grindPosition).addScaledVector(dir, maxT);   // leading contact
+    _emitB.copy(grindPosition).addScaledVector(dir, minT);   // trailing contact
+  }
+
+  private updateFlare(speed: number): void {
+    // Flicker hard: a steady glow reads as a lamp, a flickering one reads as friction.
+    const t = this.time;
+    const flick = 0.58 + 0.42 * Math.sin(t * 47.3) * Math.sin(t * 18.1 + 1.3);
+    const e = this.flareEnergy * flick * (0.55 + Math.min(1, speed / 14) * 0.45);
+
+    const on = e > 0.02;
+    this.flare.visible = on;
+    this.core.visible = on;
+    if (on) {
+      this.flare.position.copy(this.flarePos);
+      this.core.position.copy(this.flarePos);
+      const s = 0.34 + e * 0.52;
+      this.flare.scale.set(s, s, s);
+      this.core.scale.set(s * 0.30, s * 0.30, s * 0.30);
+      (this.flare.material as THREE.SpriteMaterial).opacity = Math.min(1, e * 1.3);
+      (this.core.material as THREE.SpriteMaterial).opacity = Math.min(1, e * 1.5);
+    }
+
+    // The light is the part bloom cannot do: it puts orange on the ledge and the carpet.
+    this.light.intensity = e * 9.0;
+    if (this.light.intensity > 0.001) this.light.position.copy(this.flarePos);
+  }
+
+  private integrate(dt: number): void {
+    const g = -21.0 * dt;
+    const floor = this.groundY;
+    for (let i = this.count - 1; i >= 0; i--) {
+      this.vy[i] += g;
+      // Air drag: fine sparks decelerate hard, which is what gives the spray its cone.
+      const drag = this.kind[i] === KIND_EMBER ? 1.15 : 4.0;
+      const damp = Math.max(0, 1 - drag * dt);
+      this.vx[i] *= damp; this.vy[i] *= damp; this.vz[i] *= damp;
+
+      this.px[i] += this.vx[i] * dt;
+      this.py[i] += this.vy[i] * dt;
+      this.pz[i] += this.vz[i] * dt;
+
+      if (this.py[i] <= floor + 0.01 && this.vy[i] < 0) {
+        if (this.kind[i] === KIND_FINE) {
+          // A fine spark burns out the instant it touches down.
+          this.life[i] = 0;
+        } else {
+          this.py[i] = floor + 0.012;
+          this.vy[i] = -this.vy[i] * 0.36;
+          this.vx[i] *= 0.66;
+          this.vz[i] *= 0.66;
+          this.bounces[i]++;
+          if (this.bounces[i] >= 4 || Math.abs(this.vy[i]) < 0.35) {
+            // Settled: skitter along the floor and burn out fast.
+            this.vy[i] = 0;
+            this.py[i] = floor + 0.012;
+            this.life[i] = Math.min(this.life[i], 0.22);
+          }
+        }
+      }
+
+      this.life[i] -= dt;
+      if (this.life[i] <= 0) this.swapRemove(i);
+    }
+  }
+
+  private swapRemove(i: number): void {
+    const last = --this.count;
+    if (i === last) return;
+    this.px[i] = this.px[last]; this.py[i] = this.py[last]; this.pz[i] = this.pz[last];
+    this.vx[i] = this.vx[last]; this.vy[i] = this.vy[last]; this.vz[i] = this.vz[last];
+    this.life[i] = this.life[last]; this.maxLife[i] = this.maxLife[last];
+    this.size[i] = this.size[last]; this.seed[i] = this.seed[last];
+    this.kind[i] = this.kind[last]; this.bounces[i] = this.bounces[last];
   }
 
   private writeBuffers(): void {
@@ -274,39 +454,43 @@ export class GrindParticles {
     const spa = sp.array as Float32Array;
     const sca = sc.array as Float32Array;
 
-    const n = this.sparks.length;
+    const n = this.count;
     for (let i = 0; i < n; i++) {
-      const p = this.sparks[i];
-      const t = p.life / p.maxLife;
-      sampleRamp(t, this.tmpColor);
+      const t = this.life[i] / this.maxLife[i];
+      sampleRamp(t, _col);
 
       // Sparks twinkle: a per-particle phase makes the spray shimmer instead of dissolving
       // uniformly, which is most of what sells "hot metal" at 60 fps.
-      const twinkle = p.ember ? 1 : 0.55 + 0.45 * Math.sin(p.seed + (1 - t) * 34);
-      const bright = (0.35 + t * 1.55) * twinkle;
+      const fine = this.kind[i] === KIND_FINE;
+      const twinkle = fine ? 0.55 + 0.45 * Math.sin(this.seed[i] + (1 - t) * 34) : 1;
+      // HDR: a fresh fine spark peaks around 7 linear, well past the 0.95 bloom gate and
+      // under the 12.0 input clamp, so it clips to a white core with a tight halo.
+      const bright = (fine ? 0.6 + t * t * 6.6 : 0.45 + t * 2.6) * twinkle;
 
-      hpa[i * 3] = p.position.x;
-      hpa[i * 3 + 1] = p.position.y;
-      hpa[i * 3 + 2] = p.position.z;
-      hca[i * 3] = this.tmpColor.x * bright;
-      hca[i * 3 + 1] = this.tmpColor.y * bright;
-      hca[i * 3 + 2] = this.tmpColor.z * bright;
-      hsa[i] = p.size * (0.55 + t * 0.75);
+      hpa[i * 3] = this.px[i];
+      hpa[i * 3 + 1] = this.py[i];
+      hpa[i * 3 + 2] = this.pz[i];
+      hca[i * 3] = _col.x * bright;
+      hca[i * 3 + 1] = _col.y * bright;
+      hca[i * 3 + 2] = _col.z * bright;
+      hsa[i] = this.size[i] * (0.6 + t * 0.8);
 
-      // Streak: back along the velocity, length proportional to speed.
-      const k = Math.min(0.030, 0.016 + p.velocity.length() * 0.0022);
+      // Streak: back along the velocity, length proportional to speed. Long trails are the
+      // difference between "sparks" and "orange dust".
+      const vlen = Math.sqrt(this.vx[i] * this.vx[i] + this.vy[i] * this.vy[i] + this.vz[i] * this.vz[i]);
+      const k = Math.min(0.055, 0.014 + vlen * 0.0055);
       const b = i * 6;
-      spa[b] = p.position.x;
-      spa[b + 1] = p.position.y;
-      spa[b + 2] = p.position.z;
-      spa[b + 3] = p.position.x - p.velocity.x * k;
-      spa[b + 4] = p.position.y - p.velocity.y * k;
-      spa[b + 5] = p.position.z - p.velocity.z * k;
+      spa[b] = this.px[i];
+      spa[b + 1] = this.py[i];
+      spa[b + 2] = this.pz[i];
+      spa[b + 3] = this.px[i] - this.vx[i] * k;
+      spa[b + 4] = this.py[i] - this.vy[i] * k;
+      spa[b + 5] = this.pz[i] - this.vz[i] * k;
 
-      const hb = bright * 0.85;
-      sca[b] = this.tmpColor.x * hb;
-      sca[b + 1] = this.tmpColor.y * hb;
-      sca[b + 2] = this.tmpColor.z * hb;
+      const hb = bright * 0.8;
+      sca[b] = _col.x * hb;
+      sca[b + 1] = _col.y * hb;
+      sca[b + 2] = _col.z * hb;
       sca[b + 3] = 0;
       sca[b + 4] = 0;
       sca[b + 5] = 0;
@@ -323,6 +507,11 @@ export class GrindParticles {
     this.streaks.visible = n > 0;
   }
 
+  /** Live spark count — for perf HUDs and tests. */
+  get sparkCount(): number {
+    return this.count;
+  }
+
   dispose(): void {
     this.scene.remove(this.group);
     this.headGeo.dispose();
@@ -330,5 +519,6 @@ export class GrindParticles {
     this.streakGeo.dispose();
     this.streakMat.dispose();
     (this.flare.material as THREE.SpriteMaterial).dispose();
+    (this.core.material as THREE.SpriteMaterial).dispose();
   }
 }
