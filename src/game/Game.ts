@@ -588,6 +588,9 @@ export class Game {
     });
 
     const duration = def.duration > 0 ? def.duration : 600;
+    // Cold white snap on every trick that registers — distinct from bank (green, rising)
+    // and bail (red, falling), so the outcome is legible without reading the HUD.
+    if (this.chair) this.landingParticles?.trickPop(this.chair.position, Math.min(1, def.basePoints / 900));
     this.activeTrick = { id: def.id, kind, name: def.displayName, until: performance.now() + duration };
     this.trickAnimator?.playTrick(def.id, kind, duration / 1000);
     this.heldGrabId = held ? def.id : null;
@@ -651,7 +654,10 @@ export class Game {
   /** Bank the open position. Everything else about landing hangs off this. */
   private land(): void {
     if (!this.score.isOpen) return;
+    const banked = this.score.unrealised;
     this.score.land();
+    // Banking a position reads GREEN and RISING — the visual opposite of a bail.
+    if (this.chair) this.landingParticles?.bank(this.chair.position, Math.min(1, banked / 4000));
     this.goals?.notifyScore(this.score.sessionScore);
     this.hud?.setScore(this.score.balance);
   }
@@ -698,6 +704,8 @@ export class Game {
     // own visual language for losing money.
     const pos = this.chair?.position;
     if (pos && this.paperStorm) this.paperStorm.burst(pos.clone().setY(pos.y + 0.6), 26, 6.5);
+    // Red, downward, floor-slapping: the visual grammar of losing the position.
+    if (pos) this.landingParticles?.bailFlash(pos);
 
     this.postFX?.pulse(1.0);
   }
@@ -1055,6 +1063,8 @@ export class Game {
       this.chairParts = parts;
       this.wheelMeshes = parts.casters;
       this.chairTilt.add(parts.root);
+      // Sparks come off the real caster contact patches, not off a single point.
+      this.grindParticles?.setChairSource(parts.root, parts.wheelContactPoints);
       console.log(`Procedural chair built (${parts.root.userData.triangles} tris, ${parts.casters.length} casters)`);
     } catch (error) {
       console.warn('Failed to build procedural chair, using primitives:', error);
@@ -3346,7 +3356,8 @@ export class Game {
     if (this.postFX && this.chairBody) {
       const v = this.physics.getVelocity(this.chairBody);
       const speed = Math.sqrt(v.x * v.x + v.z * v.z);
-      this.postFX.setSpeed(Math.max(0, Math.min(1, speed / 22)));
+      // Same response curve as the speed streaks, so lens and streaks ramp together.
+      this.postFX.setSpeed(this.speedLines ? this.speedLines.getBlurDrive() : Math.max(0, Math.min(1, speed / 22)));
     }
 
     // Always render (even when paused)
@@ -3611,7 +3622,7 @@ export class Game {
     if (gs.rail) {
       const grindPos = new THREE.Vector3().lerpVectors(gs.rail.start, gs.rail.end, gs.progress);
       grindPos.y += 0.1;
-      this.grindParticles.update(dt, true, grindPos, gs.rail.direction);
+      this.grindParticles.update(dt, true, grindPos, gs.rail.direction, speed);
     }
     if (speed < 0.2) this.endGrind();
 

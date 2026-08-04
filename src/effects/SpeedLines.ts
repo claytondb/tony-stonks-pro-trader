@@ -1,93 +1,120 @@
 /**
- * Speed Lines Effect
- * Radial blur-like speed streaks that appear at screen edges when moving fast
- * Adds a sense of velocity and urgency to fast movement
+ * SpeedLines — the sense of velocity.
+ *
+ * A skate game has to sell speed in a STILL frame, and it has to sell it as a BUILD: barely
+ * there at a push-around cruise, overwhelming at flat out. A linear ramp does neither — it is
+ * either always on (and so reads as a constant screen texture the eye stops seeing) or always
+ * off until terminal velocity.
+ *
+ * The response here is deliberately two-part:
+ *   - a gentle toe from ~5 m/s, so pushing hard is *just* perceptible;
+ *   - a steep shoulder above ~11 m/s, where the streak count, streak length, brightness AND
+ *     the inner radius all move together, so the frame closes in on the player as they
+ *     approach top speed.
+ * Four parameters moving at once is what makes the last 30% of the speed range feel like
+ * twice the speed it actually is.
+ *
+ * It also owns the drive signal for the post chain's radial blur / chromatic aberration
+ * (`getBlurDrive()`), so the streaks and the lens distortion ramp on the same curve instead
+ * of fighting each other. PostFX itself is not touched from here — Game feeds it this number.
+ *
+ * One draw call, one geometry, zero allocation per frame.
  */
 
 import * as THREE from 'three';
 
-interface SpeedLine {
-  position: THREE.Vector3;   // Position in camera space
-  velocity: THREE.Vector3;   // Movement direction
-  length: number;            // Line length (scales with speed)
-  life: number;             // Remaining lifetime
-  maxLife: number;          // For fade calculation
-  angle: number;            // Angle from center (radians)
-}
+const MAX_LINES = 112;
+
+const _startLocal = new THREE.Vector3();
+const _endLocal = new THREE.Vector3();
+const _camPos = new THREE.Vector3();
+const _camQuat = new THREE.Quaternion();
 
 export class SpeedLines {
-  private lines: SpeedLine[] = [];
   private geometry: THREE.BufferGeometry;
   private material: THREE.LineBasicMaterial;
   private lineSegments: THREE.LineSegments;
   private camera: THREE.Camera;
-  
-  // Settings
-  // A skate game has to sell velocity in a STILL frame. The old thresholds (10 -> 18 m/s)
-  // meant the effect only existed at terminal velocity, so the "in motion" screenshot was
-  // pixel-identical to the static one. Cruise is ~6-11 m/s; the ramp now lives there.
-  private readonly MAX_LINES = 64;
-  private readonly SPEED_THRESHOLD = 4.5;    // Start showing at this speed
-  private readonly FULL_EFFECT_SPEED = 13;   // Full intensity at this speed
-  private readonly LINE_LIFETIME = 0.17;      // Seconds
-  private readonly SPAWN_RATE = 150;          // Lines per second at full speed
-  private readonly MIN_RADIUS = 0.52;         // Screen-space distance from center (0-1)
-  private readonly MAX_RADIUS = 1.02;
-  
+
+  // --- pooled line state (flat arrays, swap-removed) ------------------------
+  private lx = new Float32Array(MAX_LINES);
+  private ly = new Float32Array(MAX_LINES);
+  private lz = new Float32Array(MAX_LINES);
+  private vx = new Float32Array(MAX_LINES);
+  private vy = new Float32Array(MAX_LINES);
+  private vz = new Float32Array(MAX_LINES);
+  private len = new Float32Array(MAX_LINES);
+  private life = new Float32Array(MAX_LINES);
+  private maxLife = new Float32Array(MAX_LINES);
+  private ang = new Float32Array(MAX_LINES);
+  private count = 0;
+
+  // Cruise on this level sits around 9-13 m/s and tops out near 20.
+  private readonly SPEED_TOE = 5.0;      // first hint of streaks
+  private readonly SPEED_KNEE = 11.0;    // where the effect starts to bite
+  private readonly SPEED_FULL = 19.0;    // everything maxed
+  private readonly LINE_LIFETIME = 0.19;
+  private readonly SPAWN_RATE = 260;     // lines/second at full intensity
+
   private spawnAccumulator = 0;
-  private currentIntensity = 0;  // 0-1 based on speed
-  
+  private currentIntensity = 0;          // 0-1, smoothed
+  private rawSpeed = 0;
+
   constructor(camera: THREE.Camera) {
     this.camera = camera;
-    
-    // Create geometry for line segments
-    // Each line needs 2 vertices (start and end)
+
     this.geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(this.MAX_LINES * 6); // 2 vertices * 3 components * MAX_LINES
-    const colors = new Float32Array(this.MAX_LINES * 6);
-    
-    this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    this.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    
-    // White lines that glow
+    this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_LINES * 6), 3));
+    this.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_LINES * 6), 3));
+
     this.material = new THREE.LineBasicMaterial({
       vertexColors: true,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.9,
       toneMapped: false,
       fog: false,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      depthTest: false,  // Always render on top
+      depthTest: false,   // always on top
     });
-    
+
     this.lineSegments = new THREE.LineSegments(this.geometry, this.material);
-    this.lineSegments.frustumCulled = false;  // Always render
-    this.lineSegments.renderOrder = 999;       // Render last
+    this.lineSegments.frustumCulled = false;
+    this.lineSegments.renderOrder = 999;
   }
-  
-  /**
-   * Get the mesh to add to scene
-   */
+
   getMesh(): THREE.LineSegments {
     return this.lineSegments;
   }
-  
+
   /**
-   * Spawn a new speed line at a random edge position
+   * Map raw speed to a 0-1 feel curve: flat until the toe, gentle to the knee, then steep.
+   * The exponent below the knee is what keeps a normal cruise clean.
    */
+  private response(speed: number): number {
+    if (speed <= this.SPEED_TOE) return 0;
+    if (speed <= this.SPEED_KNEE) {
+      const u = (speed - this.SPEED_TOE) / (this.SPEED_KNEE - this.SPEED_TOE);
+      return u * u * 0.28;                     // 0 -> 0.28, concave: barely there
+    }
+    const u = Math.min(1, (speed - this.SPEED_KNEE) / (this.SPEED_FULL - this.SPEED_KNEE));
+    return 0.28 + Math.pow(u, 0.8) * 0.72;     // 0.28 -> 1.0, convex early: bites fast
+  }
+
   private spawn(): void {
-    if (this.lines.length >= this.MAX_LINES) return;
-    
-    // Random angle around the screen edge
+    if (this.count >= MAX_LINES) return;
+    const i = this.count++;
+    const intensity = this.currentIntensity;
+
     const angle = Math.random() * Math.PI * 2;
-    
-    // Random radius (weighted toward outer edge)
-    const radiusT = Math.pow(Math.random(), 0.5);  // Bias toward outer
-    const radius = this.MIN_RADIUS + radiusT * (this.MAX_RADIUS - this.MIN_RADIUS);
-    
-    // Convert to camera-local position (in front of camera, at the edge of the view frustum).
-    // Deriving the extent from the live camera means the streaks stay pinned to the frame edge
+
+    // As speed builds the streaks encroach from the frame edge toward the centre — the
+    // single strongest cue that the world is being pulled past the camera.
+    const minRadius = 0.62 - intensity * 0.28;
+    const radiusT = Math.pow(Math.random(), 0.5);   // bias toward the outer edge
+    const radius = minRadius + radiusT * (1.06 - minRadius);
+
+    // Derive the extent from the LIVE camera so the streaks stay pinned to the frame edge
     // through the whole speed-driven FOV ramp instead of drifting inward as the lens widens.
     const distance = 2;
     const cam = this.camera as THREE.PerspectiveCamera;
@@ -96,178 +123,149 @@ export class SpeedLines {
       : 1.1;
     const halfW = halfH * (cam.isPerspectiveCamera ? cam.aspect : 1.78);
 
-    const x = Math.cos(angle) * radius * halfW;
-    const y = Math.sin(angle) * radius * halfH;
-    
-    // Velocity points inward (toward center) with slight randomization
-    const inwardSpeed = 8 + Math.random() * 4;
-    const velocity = new THREE.Vector3(
-      -Math.cos(angle) * inwardSpeed,
-      -Math.sin(angle) * inwardSpeed,
-      inwardSpeed * 0.5  // Slight forward movement
-    );
-    
-    // Line length based on intensity
-    const baseLength = 0.15 + this.currentIntensity * 0.25;
-    const length = baseLength * (0.8 + Math.random() * 0.4);
-    
-    this.lines.push({
-      position: new THREE.Vector3(x, y, distance),
-      velocity,
-      length,
-      life: this.LINE_LIFETIME * (0.8 + Math.random() * 0.4),
-      maxLife: this.LINE_LIFETIME,
-      angle
-    });
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+    this.lx[i] = ca * radius * halfW;
+    this.ly[i] = sa * radius * halfH;
+    this.lz[i] = distance;
+
+    // Streaks rush INWARD and past the camera; faster at high intensity.
+    const inward = (7 + Math.random() * 5) * (0.7 + intensity * 1.1);
+    this.vx[i] = -ca * inward;
+    this.vy[i] = -sa * inward;
+    this.vz[i] = inward * 0.55;
+
+    this.len[i] = (0.11 + intensity * intensity * 0.52) * (0.75 + Math.random() * 0.5);
+    const ml = this.LINE_LIFETIME * (0.75 + Math.random() * 0.5);
+    this.life[i] = ml;
+    this.maxLife[i] = ml;
+    this.ang[i] = angle;
   }
-  
+
+  private remove(i: number): void {
+    const last = --this.count;
+    if (i === last) return;
+    this.lx[i] = this.lx[last]; this.ly[i] = this.ly[last]; this.lz[i] = this.lz[last];
+    this.vx[i] = this.vx[last]; this.vy[i] = this.vy[last]; this.vz[i] = this.vz[last];
+    this.len[i] = this.len[last]; this.life[i] = this.life[last];
+    this.maxLife[i] = this.maxLife[last]; this.ang[i] = this.ang[last];
+  }
+
   /**
-   * Update the speed lines based on player velocity
-   * @param dt - Delta time in seconds
-   * @param speed - Current player horizontal speed
-   * @param isGrounded - Whether player is on the ground
+   * @param dt         seconds
+   * @param speed      horizontal player speed, m/s
+   * @param isGrounded airborne gets a bonus: leaving the floor should feel faster
    */
   update(dt: number, speed: number, isGrounded: boolean): void {
-    // Calculate effect intensity based on speed
-    const speedRange = this.FULL_EFFECT_SPEED - this.SPEED_THRESHOLD;
-    const normalizedSpeed = (speed - this.SPEED_THRESHOLD) / speedRange;
-    const targetIntensity = Math.max(0, Math.min(1, normalizedSpeed));
-    
-    // Smooth intensity transitions
-    const intensitySpeed = targetIntensity > this.currentIntensity ? 8 : 4;
-    this.currentIntensity += (targetIntensity - this.currentIntensity) * intensitySpeed * dt;
-    
-    // Spawn new lines if above threshold
-    if (this.currentIntensity > 0.05) {
-      // Slightly more lines when airborne (more dramatic)
-      const airBonus = isGrounded ? 1 : 1.3;
-      const spawnRate = this.SPAWN_RATE * this.currentIntensity * airBonus;
-      
-      this.spawnAccumulator += dt * spawnRate;
-      while (this.spawnAccumulator >= 1 && this.lines.length < this.MAX_LINES) {
+    this.rawSpeed = speed;
+    const targetIntensity = this.response(speed);
+
+    // Attack faster than release, so accelerating reads as an event and slowing down glides.
+    const k = targetIntensity > this.currentIntensity ? 9 : 3.5;
+    this.currentIntensity += (targetIntensity - this.currentIntensity) * Math.min(1, k * dt);
+
+    if (this.currentIntensity > 0.03) {
+      const airBonus = isGrounded ? 1 : 1.35;
+      const rate = this.SPAWN_RATE * Math.pow(this.currentIntensity, 1.3) * airBonus;
+      this.spawnAccumulator += dt * rate;
+      let budget = 24;
+      while (this.spawnAccumulator >= 1 && budget-- > 0) {
         this.spawnAccumulator -= 1;
         this.spawn();
       }
+      if (this.spawnAccumulator > 40) this.spawnAccumulator = 0;
+    } else {
+      this.spawnAccumulator = 0;
     }
-    
-    // Update existing lines
-    for (let i = this.lines.length - 1; i >= 0; i--) {
-      const line = this.lines[i];
-      
-      // Move line
-      line.position.add(line.velocity.clone().multiplyScalar(dt));
-      
-      // Decay
-      line.life -= dt;
-      
-      // Remove dead lines
-      if (line.life <= 0) {
-        this.lines.splice(i, 1);
-      }
+
+    for (let i = this.count - 1; i >= 0; i--) {
+      this.lx[i] += this.vx[i] * dt;
+      this.ly[i] += this.vy[i] * dt;
+      this.lz[i] += this.vz[i] * dt;
+      this.life[i] -= dt;
+      if (this.life[i] <= 0) this.remove(i);
     }
-    
-    // Update geometry
+
     this.updateGeometry();
   }
-  
-  /**
-   * Update the buffer geometry with current line data
-   */
+
   private updateGeometry(): void {
     const positions = this.geometry.attributes.position.array as Float32Array;
     const colors = this.geometry.attributes.color.array as Float32Array;
-    
-    // Position the line segments in camera space
-    const cameraWorldPos = new THREE.Vector3();
-    const cameraWorldQuat = new THREE.Quaternion();
-    this.camera.getWorldPosition(cameraWorldPos);
-    this.camera.getWorldQuaternion(cameraWorldQuat);
-    
-    for (let i = 0; i < this.MAX_LINES; i++) {
-      const baseIdx = i * 6;  // 2 vertices * 3 components
-      
-      if (i < this.lines.length) {
-        const line = this.lines[i];
-        const lifeRatio = line.life / line.maxLife;
-        
-        // Calculate world-space positions
-        // Start point (closer to center/camera)
-        const startLocal = line.position.clone();
-        
-        // End point (extending outward based on line length and angle)
-        const endLocal = startLocal.clone();
-        endLocal.x += Math.cos(line.angle) * line.length;
-        endLocal.y += Math.sin(line.angle) * line.length;
-        
-        // Transform to world space
-        startLocal.applyQuaternion(cameraWorldQuat);
-        startLocal.add(cameraWorldPos);
-        
-        endLocal.applyQuaternion(cameraWorldQuat);
-        endLocal.add(cameraWorldPos);
-        
-        // Set positions
-        positions[baseIdx] = startLocal.x;
-        positions[baseIdx + 1] = startLocal.y;
-        positions[baseIdx + 2] = startLocal.z;
-        
-        positions[baseIdx + 3] = endLocal.x;
-        positions[baseIdx + 4] = endLocal.y;
-        positions[baseIdx + 5] = endLocal.z;
-        
-        // Color - white/cyan with fade
-        const fade = lifeRatio * lifeRatio;  // Quadratic fade
-        const brightness = fade * this.currentIntensity;
-        
-        // Inner end: hot and near-white. Outer end: cools to nothing, so each streak has a
-        // direction and the frame gets a radial read instead of a ring of even dashes.
-        colors[baseIdx] = 1.00 * brightness;
-        colors[baseIdx + 1] = 0.97 * brightness;
-        colors[baseIdx + 2] = 0.90 * brightness;
 
-        colors[baseIdx + 3] = 0.30 * brightness;
-        colors[baseIdx + 4] = 0.26 * brightness;
-        colors[baseIdx + 5] = 0.22 * brightness;
-      } else {
-        // Hide unused line segments by moving off-screen
-        positions[baseIdx] = 0;
-        positions[baseIdx + 1] = -1000;
-        positions[baseIdx + 2] = 0;
-        positions[baseIdx + 3] = 0;
-        positions[baseIdx + 4] = -1000;
-        positions[baseIdx + 5] = 0;
-        
-        // Zero color
-        colors[baseIdx] = 0;
-        colors[baseIdx + 1] = 0;
-        colors[baseIdx + 2] = 0;
-        colors[baseIdx + 3] = 0;
-        colors[baseIdx + 4] = 0;
-        colors[baseIdx + 5] = 0;
-      }
+    this.camera.getWorldPosition(_camPos);
+    this.camera.getWorldQuaternion(_camQuat);
+
+    const n = this.count;
+    for (let i = 0; i < n; i++) {
+      const b = i * 6;
+      const lifeRatio = this.life[i] / this.maxLife[i];
+
+      _startLocal.set(this.lx[i], this.ly[i], this.lz[i]);
+      _endLocal.set(
+        this.lx[i] + Math.cos(this.ang[i]) * this.len[i],
+        this.ly[i] + Math.sin(this.ang[i]) * this.len[i],
+        this.lz[i],
+      );
+      _startLocal.applyQuaternion(_camQuat).add(_camPos);
+      _endLocal.applyQuaternion(_camQuat).add(_camPos);
+
+      positions[b] = _startLocal.x;
+      positions[b + 1] = _startLocal.y;
+      positions[b + 2] = _startLocal.z;
+      positions[b + 3] = _endLocal.x;
+      positions[b + 4] = _endLocal.y;
+      positions[b + 5] = _endLocal.z;
+
+      // Brightness is superlinear in intensity and goes over 1 at the top, so the streaks
+      // themselves start to halate in the bloom pass right when the player is flat out.
+      const fade = lifeRatio * lifeRatio;
+      const bright = fade * this.currentIntensity * (0.55 + this.currentIntensity * 1.15);
+
+      // Inner end hot and near-white, outer end cooling to nothing: each streak has a
+      // direction, so the frame reads radially instead of as a ring of even dashes.
+      colors[b] = 1.00 * bright;
+      colors[b + 1] = 0.97 * bright;
+      colors[b + 2] = 0.92 * bright;
+      colors[b + 3] = 0.22 * bright;
+      colors[b + 4] = 0.20 * bright;
+      colors[b + 5] = 0.18 * bright;
     }
-    
+
+    for (let i = n; i < MAX_LINES; i++) {
+      const b = i * 6;
+      positions[b] = positions[b + 3] = 0;
+      positions[b + 1] = positions[b + 4] = -1000;
+      positions[b + 2] = positions[b + 5] = 0;
+      colors[b] = colors[b + 1] = colors[b + 2] = 0;
+      colors[b + 3] = colors[b + 4] = colors[b + 5] = 0;
+    }
+
     this.geometry.attributes.position.needsUpdate = true;
     this.geometry.attributes.color.needsUpdate = true;
+    this.lineSegments.visible = n > 0;
   }
-  
-  /**
-   * Get current intensity (for UI/debugging)
-   */
+
+  /** Current streak intensity, 0-1. */
   getIntensity(): number {
     return this.currentIntensity;
   }
-  
+
   /**
-   * Manually set intensity (for speed boost effects)
+   * Drive value for the post chain's radial blur / CA, on the SAME curve as the streaks so
+   * the two effects arrive together. Weighted toward the streak intensity but keeping a
+   * little raw-speed floor, so a boost that pins intensity still tracks actual velocity.
    */
-  setIntensity(intensity: number): void {
-    this.currentIntensity = Math.max(0, Math.min(1, intensity));
+  getBlurDrive(): number {
+    const raw = Math.max(0, Math.min(1, (this.rawSpeed - this.SPEED_TOE) / (this.SPEED_FULL - this.SPEED_TOE)));
+    return Math.max(0, Math.min(1, this.currentIntensity * 0.75 + raw * 0.35));
   }
-  
-  /**
-   * Clean up resources
-   */
+
+  /** Force the streaks on — used by speed boosts, decays back on its own. */
+  setIntensity(intensity: number): void {
+    this.currentIntensity = Math.max(this.currentIntensity, Math.max(0, Math.min(1, intensity)));
+  }
+
   dispose(): void {
     this.geometry.dispose();
     this.material.dispose();
