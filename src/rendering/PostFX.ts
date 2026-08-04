@@ -79,6 +79,8 @@ export interface GradeOptions {
   bloomStrength?: number;
   bloomRadius?: number;
   bloomThreshold?: number;
+  /** Upper clamp on any single texel entering the bloom pyramid, in linear radiance. */
+  bloomClamp?: number;
   aoIntensity?: number;
   /** CA at frame centre. Ships at 0 — see the note in sampleScene(). */
   chromaticBase?: number;
@@ -100,19 +102,57 @@ interface TierSpec {
   bloomResScale: number;
   aoSamples: number;
   pdSamples: number;
+  /**
+   * MSAA sample count for the composer's own colour targets.
+   *
+   * THE BUG THIS EXISTS TO FIX. Game.ts asks for `antialias: true`, but that flag only
+   * multisamples the DEFAULT framebuffer — the one nothing is drawn to once a composer
+   * exists. `new EffectComposer(renderer)` with no explicit target allocates a
+   * WebGLRenderTarget whose `samples` defaults to 0, so RenderPass rendered the whole
+   * scene into a single-sampled buffer and every downstream pass inherited it. The MSAA
+   * was paid for in context creation and never happened.
+   *
+   * SMAA cannot cover for that. It is morphological post-AA: it reconstructs an edge from
+   * the neighbourhood it can SEE, and a 4 cm ceiling T-bar 20 m away covers a fraction of
+   * a pixel — there is no edge in the buffer to reconstruct, only an aliased on/off
+   * sequence that changes which pixels it lands on every frame. Measured on a real
+   * capture, 17.96% of pixels in the ceiling-grid band were 1-pixel vertical alternations
+   * exceeding 40 luma levels (the reference art measures 0.00%): the grid rendered as
+   * DASHED lines, and dashed lines crawl in motion. Multisampling resolves sub-pixel
+   * coverage before the pixel is ever written, which is the only thing that fixes it.
+   */
+  msaaSamples: number;
 }
 
 const TIERS: Record<Exclude<PostQuality, 'off'>, TierSpec> = {
-  low: { bloom: true, smaa: false, ao: false, bloomResScale: 0.5, aoSamples: 8, pdSamples: 8 },
+  low: {
+    bloom: true, smaa: false, ao: false, bloomResScale: 0.5,
+    aoSamples: 8, pdSamples: 8, msaaSamples: 0,
+  },
   // 'medium' now gets half-res AO. A frame with NO contact darkening at all does not
   // read as a cheaper frame, it reads as a broken one — everything hovers.
-  medium: { bloom: true, smaa: true, ao: 'half', bloomResScale: 0.5, aoSamples: 8, pdSamples: 8 },
+  medium: {
+    bloom: true, smaa: true, ao: 'half', bloomResScale: 0.5,
+    aoSamples: 8, pdSamples: 8, msaaSamples: 2,
+  },
   // 'high' is the shipping default and is now full-res. At half res the GTAO buffer is
   // mush on exactly the geometry that needs it most: the 25 mm cubicle panel edges, the
   // desk/carpet junction, the chair's caster cluster. Sample count is trimmed to pay
   // for the resolution, which is the right trade — AO wants precision, not samples.
-  high: { bloom: true, smaa: true, ao: 'full', bloomResScale: 0.75, aoSamples: 10, pdSamples: 12 },
-  ultra: { bloom: true, smaa: true, ao: 'full', bloomResScale: 1.0, aoSamples: 16, pdSamples: 16 },
+  //
+  // bloomResScale 0.75 -> 1.0. The bloom pyramid's first mip is built at this scale, and
+  // at 0.75 a mid-distance ceiling troffer — three or four pixels across — sat below that
+  // mip's Nyquist limit. It did not get a small halo, it got NO halo: the high-pass
+  // isolated it and the first downsample deleted it. Every fixture past the near row read
+  // as a rectangle of white paint. Full res is what makes the far fixtures light sources.
+  high: {
+    bloom: true, smaa: true, ao: 'full', bloomResScale: 1.0,
+    aoSamples: 10, pdSamples: 12, msaaSamples: 4,
+  },
+  ultra: {
+    bloom: true, smaa: true, ao: 'full', bloomResScale: 1.0,
+    aoSamples: 16, pdSamples: 16, msaaSamples: 8,
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -481,7 +521,19 @@ const GRADE_DEFAULTS = {
   // exists to stop per-channel CLIPPING, and the new path-to-white below it now handles
   // the hue side of a blown highlight, so the knee can sit higher and give the fixtures
   // and the lit worktops back the top 3% of the range they were being compressed out of.
-  shoulder: 0.93,
+  //
+  // r8: 0.93 -> 0.985. The shoulder is asymptotic — `k + (1-k) * over/(over + (1-k))`
+  // approaches 1.0 but never arrives, so the knee position IS the frame's practical
+  // ceiling. At 0.93 a texel would need to arrive at 6.5 to reach 250/255 and at 60 to
+  // reach 254; after the vignette and the grain nothing in the room got there, which is
+  // precisely why the capture measured a peak of R250/G249/B246 in a room full of
+  // fluorescents while the reference art hits 254.9. There is a real difference between
+  // "no channel clips" and "no light source in the scene is allowed to be a light":
+  // a fixture core SHOULD clip flat, that is what a fixture looks like. Pushing the knee
+  // to 0.985 keeps the soft roll (the compression band is now 0.985-1.0, ~4/255 wide, so
+  // hue still holds through it and there is still no hard per-channel corner) while
+  // letting a genuine emitter land on white. Everything below 251/255 is untouched.
+  shoulder: 0.985,
 };
 
 // threshold 0.85 linear was above everything in the scene EXCEPT the emissive
@@ -508,14 +560,97 @@ const GRADE_DEFAULTS = {
 // were blooming as hard as the lights. That is the yellow-green band smearing across the
 // ceiling/wall junction on the far side of the floorplate.
 //
-// The fixtures are the only things that should qualify. fluorescentDiffuser emits at
-// emissiveIntensity 2.2 with emissiveClamp 2.2 (luma ~2.05) and the pendant bulbs share
-// that clamp, so 1.5 sits comfortably below every fixture in the level and comfortably
-// above every merely-lit surface. Radius 0.6 -> 0.30 keeps the halo inside the troffer's
-// own tile instead of spilling a tile-and-a-half in every direction; strength comes up a
-// little because the pyramid now has far fewer contributors and the fixtures still have to
-// read as light.
-const BLOOM_DEFAULTS = { strength: 0.26, radius: 0.3, threshold: 1.5 };
+// r8: THE THRESHOLD WAS SOLVING THE RIGHT PROBLEM WITH THE WRONG TOOL, AND IT COST THE
+// FRAME ITS ENTIRE TOP END.
+//
+// Measured on the shipping capture: per-channel max R250/G249/B246, peak world luma 249.0,
+// in a room with sixty fluorescent fixtures. The reference art reaches 254.9 with genuinely
+// clipped cores. A profile through a mid-distance troffer read 244 falling to 133 over
+// 12 px — no core, a token halo. Nothing in the frame was a LIGHT; every fixture was a
+// rectangle of white paint.
+//
+// Threshold 1.5 was chosen to stop a near troffer starbursting, and it does — by gating
+// every other emitter in the room out of the bloom entirely. But a gate is the wrong
+// instrument for "one thing is too bright": UnrealBloomPass has no upper bound on its
+// INPUT, so a 20-linear texel contributes strength x 20 no matter where the threshold sits.
+// The fix for unbounded input is to BOUND THE INPUT, not to raise the entrance fee. The
+// high-pass shader is patched (see patchBloomHighPassClamp) with a
+// `min( texel.rgb, vec3(uBloomClamp) )` — after which no single texel can dominate the
+// pyramid, and the threshold is free to sit low enough that lit worktops and the far
+// fixtures halate too. That is what makes the ceiling read as sixty light sources rather
+// than one starburst and fifty-nine painted rectangles.
+//
+// Threshold 0.95 linear: above the room's mid-grey (~0.14) and above ordinary lit surfaces,
+// below the fixtures (fluorescentDiffuser is emissiveIntensity 2.2 / emissiveClamp 2.2,
+// luma ~2.05) and at the level of a worktop directly under one (1.5-2.5), so the worktops
+// halate faintly and the fixtures halate properly.
+//
+// RADIUS IS A REDISTRIBUTION, NOT A GAIN. UnrealBloomPass composites five mips with
+// weights `mix(f, 1.2 - f, radius)` over f = [1.0, 0.8, 0.6, 0.4, 0.2], and that sum is
+// exactly 3.0 for EVERY radius — so radius moves energy between the tight mip and the
+// wide one without changing the total. At the 0.55 the panel suggested, the coarsest
+// (widest) mip outweighs the finest (0.64 vs 0.56) and the result was measured and looked
+// at: the fixtures reached white, and the whole ceiling band went milky with it, because
+// sixty small sources each spreading over a tile-and-a-half is a fog, not sixty lights.
+// The reference art's fixtures are clipped cores with TIGHT halos. 0.38 puts the finest
+// mip back on top (0.70 vs 0.50) and keeps the halo inside the troffer's own tile, which
+// is what makes the ceiling read as sixty separate lights instead of one overcast sky.
+// Strength then carries the brightness, which is the knob that actually means brightness.
+const BLOOM_DEFAULTS = {
+  strength: 0.42,
+  radius: 0.38,
+  threshold: 0.95,
+  // Ceiling on any single texel entering the bloom pyramid, in linear radiance. The
+  // brightest legitimate emitter in the level is ~2.05, so 12.0 is a fuse, not a grade
+  // control: it never touches the fixtures, and it means a stray specular or a future
+  // emissive tuned an order of magnitude hot cannot eat an eighth of the frame.
+  clamp: 12.0,
+};
+
+/**
+ * Give UnrealBloomPass's high-pass filter the upper clamp it has never had.
+ *
+ * three's LuminosityHighPassShader is a pure gate:
+ *   alpha = smoothstep( threshold, threshold + 0.01, luma );  out = mix( black, texel, alpha )
+ * — a 0.01-wide step that passes the FULL texel through. There is no soft knee and no
+ * ceiling, which is why the only previous defence against one very bright emitter was to
+ * raise the threshold until nothing else qualified either.
+ *
+ * This inserts `texel.rgb = min( texel.rgb, vec3( uBloomClamp ) )` immediately after the
+ * fetch. Everything downstream — the luma, the gate, the pyramid — sees the clamped value.
+ *
+ * Deliberately defensive: if three's shader source ever changes shape the patch is skipped
+ * with a warning and the pass still works, just unclamped.
+ */
+function patchBloomHighPassClamp(pass: UnrealBloomPass, clamp: number): boolean {
+  const mat = (pass as unknown as { materialHighPassFilter?: THREE.ShaderMaterial })
+    .materialHighPassFilter;
+  if (!mat || typeof mat.fragmentShader !== 'string' || !mat.uniforms) {
+    console.warn('[PostFX] bloom high-pass material not found; bloom input left unclamped');
+    return false;
+  }
+  if (mat.fragmentShader.includes('uBloomClamp')) {
+    mat.uniforms['uBloomClamp'].value = clamp;
+    return true;
+  }
+
+  const FETCH = 'vec4 texel = texture2D( tDiffuse, vUv );';
+  const DECL = 'uniform float smoothWidth;';
+  if (!mat.fragmentShader.includes(FETCH) || !mat.fragmentShader.includes(DECL)) {
+    console.warn(
+      '[PostFX] LuminosityHighPassShader source not in the expected shape; ' +
+        'bloom input left unclamped'
+    );
+    return false;
+  }
+
+  mat.uniforms['uBloomClamp'] = { value: clamp };
+  mat.fragmentShader = mat.fragmentShader
+    .replace(DECL, `${DECL}\n\t\tuniform float uBloomClamp;`)
+    .replace(FETCH, `${FETCH}\n\n\t\t\ttexel.rgb = min( texel.rgb, vec3( uBloomClamp ) );`);
+  mat.needsUpdate = true;
+  return true;
+}
 
 /** Wrap an addon constructor so a broken/absent pass degrades instead of throwing. */
 function tryMake<T>(label: string, factory: () => T): T | null {
@@ -580,6 +715,7 @@ export class PostFX {
     bloomStrength: BLOOM_DEFAULTS.strength,
     bloomRadius: BLOOM_DEFAULTS.radius,
     bloomThreshold: BLOOM_DEFAULTS.threshold,
+    bloomClamp: BLOOM_DEFAULTS.clamp,
     // The blend is `mix(vec3(1.0), ao, intensity)` multiplied onto the beauty buffer,
     // so intensity > 1 extrapolates past the raw AO. 1.55 was compensating for the
     // thickness bug above by over-driving a buffer that was nearly all white — and it
@@ -646,9 +782,22 @@ export class PostFX {
 
     const tier = TIERS[this.quality];
 
+    // Allocate the composer's ping-pong target OURSELVES so it can be multisampled.
+    // See TierSpec.msaaSamples: the no-argument EffectComposer constructor builds a
+    // samples-0 target and silently discards the `antialias: true` the context was
+    // created with. renderTarget2 is cloned from this one inside the constructor and
+    // RenderTarget.copy() carries `samples` across, so both buffers end up multisampled.
     const composer = tryMake('EffectComposer', () => {
       if (!isCtor(EffectComposer)) throw new Error('EffectComposer missing');
-      return new EffectComposer(this.renderer);
+      // Built at CSS size on purpose: EffectComposer takes the target's dimensions as
+      // its _width/_height (which are CSS units in its own API) and the setPixelRatio()
+      // call immediately below scales the buffers up to the drawing-buffer size.
+      const rt = new THREE.WebGLRenderTarget(this.width, this.height, {
+        type: THREE.HalfFloatType,
+        samples: tier.msaaSamples,
+      });
+      rt.texture.name = 'PostFX.rt1';
+      return new EffectComposer(this.renderer, rt);
     });
     if (!composer) {
       // Total failure — fall back to direct rendering forever.
@@ -757,7 +906,7 @@ export class PostFX {
     if (tier.bloom) {
       this.bloomPass = tryMake('UnrealBloomPass', () => {
         if (!isCtor(UnrealBloomPass)) throw new Error('UnrealBloomPass missing');
-        return new UnrealBloomPass(
+        const p = new UnrealBloomPass(
           new THREE.Vector2(
             Math.max(8, Math.round(bw * tier.bloomResScale)),
             Math.max(8, Math.round(bh * tier.bloomResScale))
@@ -766,6 +915,9 @@ export class PostFX {
           this.opts.bloomRadius,
           this.opts.bloomThreshold
         );
+        // Bound the input BEFORE the gate. This is what lets the threshold sit low.
+        patchBloomHighPassClamp(p, this.opts.bloomClamp);
+        return p;
       });
       if (this.bloomPass) composer.addPass(this.bloomPass);
     }
@@ -905,10 +1057,37 @@ export class PostFX {
 
     if (!this.composer) return;
 
+    this.applyComposerSamples();
     this.composer.setPixelRatio(this.pixelRatio);
     this.composer.setSize(this.width, this.height);
+    this.applyComposerSamples();
 
     this.applyTierScales();
+  }
+
+  /**
+   * Re-assert the tier's MSAA sample count on the composer's ping-pong targets.
+   *
+   * `EffectComposer.setSize()` forwards to `WebGLRenderTarget.setSize()`, which rebuilds
+   * the framebuffer but does not touch `samples` — so in three's current implementation
+   * the count survives a resize. That is an implementation detail, not a contract, and
+   * losing it would silently reinstate exactly the bug this class was fixing (a resize is
+   * also the one code path nobody screenshots). So state it explicitly. `samples` is read
+   * when the framebuffer is (re)allocated, hence the dispose() when the value moves.
+   */
+  private applyComposerSamples(): void {
+    const c = this.composer;
+    if (!c) return;
+    const want = this.quality === 'off' ? 0 : TIERS[this.quality].msaaSamples;
+    for (const rt of [c.renderTarget1, c.renderTarget2]) {
+      if (!rt || rt.samples === want) continue;
+      rt.samples = want;
+      try {
+        rt.dispose();
+      } catch {
+        /* target had no allocation yet; nothing to release */
+      }
+    }
   }
 
   /**
@@ -1014,6 +1193,7 @@ export class PostFX {
       this.bloomPass.strength = this.opts.bloomStrength;
       this.bloomPass.radius = this.opts.bloomRadius;
       this.bloomPass.threshold = this.opts.bloomThreshold;
+      patchBloomHighPassClamp(this.bloomPass, this.opts.bloomClamp);
     }
     if (this.aoPass && this.aoPass instanceof GTAOPass) {
       this.aoPass.blendIntensity = this.opts.aoIntensity;

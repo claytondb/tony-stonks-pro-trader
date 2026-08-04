@@ -3,7 +3,7 @@
  * The epic tale of Tony Stonks escaping the SEC
  */
 
-import { LevelData } from '../levels/LevelData';
+import { LevelData, LevelObject } from '../levels/LevelData';
 
 export interface StoryCheckpoint {
   position: [number, number, number];
@@ -19,6 +19,172 @@ export interface StoryLevelData extends LevelData {
   hasChaseMechanic?: boolean;
   chaseSpeed?: number;
 }
+
+// ===========================================================================
+// FLOW KIT — the authoring primitives every story level is built from.
+//
+// These exist because the nine story levels were authored before push, ollie,
+// grind and manual worked, against assumptions the engine does not hold. Three
+// of those assumptions were measured to be false and they are what the kit
+// encodes:
+//
+//  1. THE LEVELS ARE FLAT, WHETHER THEY LOOK IT OR NOT. Game.createLevelObject
+//     registers every rail at y = 0.80 and builds every ramp / fun box / stairs
+//     collider from y = 0 upward, ignoring the authored Y. The old rooftop level
+//     spawned the player at y = 20 above nine platforms whose colliders were all
+//     at ground level, and the old stairwell "descended" 50 floors of rails that
+//     the grind system had all registered at ankle height. Anything that must be
+//     stood on is authored at y = 0; height is expressed as ramps and fun boxes.
+//
+//  2. SPACING IS A CLOCK, NOT A DISTANCE. The combo window is 2.2 s and the
+//     grind system enforces a 0.8 s re-grind cooldown, so at the 13.5 m/s cruise
+//     a feature more than ~26 m from the last one ends the line, and two rails
+//     closer than ~12 m along the same path cannot both be caught. Long rails
+//     (18-30 m) with ~10-14 m gaps is the shape that measures well. The old
+//     levels put 60 m between features on a 400 m floorplate.
+//
+//  3. A WALL IS EITHER A DEAD END OR A BANKED TURN. GrindSystem captures a rail
+//     from any approach angle within 1.5 m laterally and then drives the player
+//     ALONG it, so a ledge run inset from the boundary turns a run that would
+//     have splattered into the wall into a carried turn. Every level here has a
+//     closed perimeter ledge for exactly that reason: it is what makes a run a
+//     LOOP instead of a corridor with a wall at the end.
+// ===========================================================================
+
+/** A rail running along X (east-west), centred on (x, z). */
+const railX = (x: number, z: number, length: number): LevelObject =>
+  ({ type: 'rail', position: [x, 0, z], rotation: [0, 0, 0], params: { length } });
+
+/** A rail running along Z (north-south), centred on (x, z). */
+const railZ = (x: number, z: number, length: number): LevelObject =>
+  ({ type: 'rail', position: [x, 0, z], rotation: [0, 90, 0], params: { length } });
+
+/**
+ * A kicker. `deg` is the direction it LAUNCHES you: 0 = +Z, 90 = +X, 180 = -Z,
+ * 270 = -X. (The wedge rises toward its own +Z and its coping lip is a grind
+ * edge in its own right, so a kicker also works as a ledge taken side-on.)
+ */
+const kicker = (x: number, z: number, deg: number): LevelObject =>
+  ({ type: 'ramp', position: [x, 0, z], rotation: [0, deg, 0] });
+
+/** A launch/landing pair pointing at each other down a line, `gap` metres apart. */
+const kickerGap = (x: number, z: number, gap: number, alongZ = true): LevelObject[] =>
+  alongZ
+    ? [kicker(x, z - gap / 2, 0), kicker(x, z + gap / 2, 180)]
+    : [kicker(x - gap / 2, z, 90), kicker(x + gap / 2, z, 270)];
+
+/** A low box you can ride over and land on: desk bank, loading dock, planter run. */
+const funbox = (x: number, z: number, width: number, depth: number, height = 0.8): LevelObject =>
+  ({ type: 'fun_box', position: [x, 0, z], params: { width, depth, height } });
+
+/**
+ * A rail running at 45 degrees. `deg` is 45 for a NE/SW line, 135 for NW/SE.
+ */
+const railDiag = (x: number, z: number, length: number, deg: 45 | 135): LevelObject =>
+  ({ type: 'rail', position: [x, 0, z], rotation: [0, deg, 0], params: { length } });
+
+/**
+ * One skate lane: a run of grindable edge broken into segments no longer than a
+ * player can hold without touching the balance stick.
+ *
+ * The segment length is the load-bearing number. BalanceSystem gives an
+ * uncorrected grind 4.2 s at the start of a line and 2.6 s once a combo is
+ * twenty tricks deep; at the 13-18 m/s this game actually runs at, a single
+ * 50 m rail is a guaranteed bail deep in a line — measured, on the first draft
+ * of this level: a ten-trick 18,000-stonk position blown at 11.4 s on a rail
+ * that was simply too long to hold. 15 m segments are ~0.9 s each.
+ */
+const lane = (v: number, span: number, dir: 'x' | 'z', segMax = 15, gap = 3): LevelObject[] => {
+  const n = Math.max(1, Math.ceil(span / (segMax + gap)));
+  const pitch = span / n;
+  const segLength = pitch - gap;
+  const out: LevelObject[] = [];
+  for (let i = 0; i < n; i++) {
+    const o = -span / 2 + pitch * (i + 0.5);
+    out.push(dir === 'z' ? railZ(v, o, segLength) : railX(o, v, segLength));
+  }
+  return out;
+};
+
+/**
+ * THE SKATE FLOOR. Parallel lanes on both axes, plus a ledge run tight against
+ * each wall and a diagonal across each corner. Every level in this file is built
+ * on one of these; what changes between levels is the size, what the lanes are
+ * made of in the fiction, and what is staged in the bays between them.
+ *
+ * Three measurements set the geometry, and all three came from watching runs
+ * die:
+ *
+ *   - PITCH ~7.5 m. GrindSystem will not start a new grind for 0.8 s after the
+ *     last one ends, which at cruise is 8-12 m of uncatchable rolling. Lanes at
+ *     this pitch mean that wherever the cooldown expires, and whichever way the
+ *     player is pointing, there is another edge under them within a second.
+ *   - A LEDGE 1.5 m OFF EVERY WALL. A run that ends up scraping the boundary is
+ *     otherwise unskateable for as long as it lasts: the first draft of level 1
+ *     lost a combo to a 2.4 s scrape along a wall with the nearest rail 6 m
+ *     inboard. Against the wall the scrape becomes a wallride-ish ledge run.
+ *   - DIAGONALS ACROSS THE CORNERS. A corner is two walls and a dead stop, and
+ *     a stop with a combo open is a bail, not a pause. The chamfer catches the
+ *     run before the corner and throws it back across the floor.
+ */
+const skateFloor = (half: number, pitch = 7.5, segMax = 15): LevelObject[] => {
+  const outer = half - 1.5;              // the wall ledges
+  const lines: number[] = [0];
+  for (let v = pitch; v <= outer - pitch * 0.5; v += pitch) lines.push(v, -v);
+  lines.push(outer, -outer);
+  const span = outer * 2;
+  const out = lines.flatMap((v) => [
+    ...lane(v, span, 'z', segMax),
+    ...lane(v, span, 'x', segMax),
+  ]);
+  const c = outer - pitch;
+  const diagLen = Math.min(span * 0.4, 20);
+  out.push(
+    railDiag(c, c, diagLen, 135),
+    railDiag(c, -c, diagLen, 45),
+    railDiag(-c, -c, diagLen, 135),
+    railDiag(-c, c, diagLen, 45),
+  );
+  return out;
+};
+
+/**
+ * The centre line of the nth bay out from the middle, for a given lane pitch.
+ * EVERYTHING staged inside a level — kickers, pads, props, scenery — sits on one
+ * of these, and nothing sits on a lane. A water cooler 0.6 m off a rail is what
+ * turned ch1_office's thirteen-trick line into 0.0 m/s in a single frame.
+ */
+const bay = (pitch: number, n: number): number => (n + 0.5) * pitch;
+
+/**
+ * The kickers and pads that go in the bays. Derived from the lane pitch rather
+ * than hand-placed, so the staging cannot drift into a lane when a level's
+ * density is retuned — which it will be, because density is the dial that
+ * decides whether a run is one long line or four short ones.
+ *
+ * Pads are 0.4 m: STEP_HEIGHT is 0.42, so the casters roll straight up them and
+ * they extend a line as manual pads. At 0.8 m the same box is a wall that
+ * deflects the run and, hit square, ends it.
+ */
+const bayStaging = (pitch: number): LevelObject[] => {
+  const b = (n: number) => bay(pitch, n);
+  const w = pitch - 1.6;             // transverse size: never touches a lane
+  const l = pitch * 1.8;             // along the bay, where there is room
+  return [
+    ...kickerGap(-b(2), 0, pitch * 2.2),
+    ...kickerGap(b(2), 0, pitch * 2.2),
+    ...kickerGap(0, -b(2), pitch * 2.2, false),
+    ...kickerGap(0, b(2), pitch * 2.2, false),
+    kicker(-b(1), -b(0), 0), kicker(b(1), b(0), 180),
+    kicker(-b(0), b(1), 270), kicker(b(0), -b(1), 90),
+    kicker(-b(3), b(1), 90), kicker(b(3), -b(1), 270),
+    funbox(-b(1), b(2), l, w, 0.4),
+    funbox(b(1), -b(2), l, w, 0.4),
+    funbox(-b(2), -b(1), w, l, 0.4),
+    funbox(b(2), b(1), w, l, 0.4),
+    funbox(b(0), b(0), w, w, 0.4),
+  ];
+};
 
 // ===========================================
 // CHAPTER 1: THE ESCAPE
@@ -43,159 +209,79 @@ const LEVEL_1_OFFICE: StoryLevelData = {
   ambientLight: 1.5,
   sunIntensity: 0,
   
-  groundSize: 400,
+  // A 64 m indoor floorplate, not the old 400 m one. The old level put the spawn
+  // 150 m from the nearest rail INSIDE a 50x50x22 m cubicle block — the chair was
+  // depenetrated straight down through the carpet and the whole probe run was a
+  // 26-second fall (median speed 0.0, 100% dead). Everything now sits inside one
+  // lap of the combo clock.
+  groundSize: 64,
   groundColor: '#8B8B8B',  // Medium gray carpet
-  
+
   spawnPoint: {
-    position: [-120, 1.0, -140],  // Y=1.0 prevents sinking into ground
-    rotation: 90
+    position: [-20, 0.6, -22],  // In the west aisle, facing straight up a desk row
+    rotation: 0
   },
-  
+
   bounds: {
-    minX: -195,
-    maxX: 195,
-    minZ: -195,
-    maxZ: 195
+    minX: -30,
+    maxX: 30,
+    minZ: -30,
+    maxZ: 30
   },
-  
+
   checkpoints: [
     {
-      position: [0, 1.0, 145],
+      position: [0, 0.6, 27],
       rotation: 0,
       name: 'Reached the stairwell',
       dialogue: ['TONY: There\'s the stairs! Time to ride!']
     }
   ],
-  
+
   objects: [
-    // =============================================
-    // PERIMETER WALLS (indoor room enclosure)
-    // =============================================
-    { type: 'wall_indoor', position: [0, 15, 195], params: { width: 390, height: 30, depth: 1 } },
-    { type: 'wall_indoor', position: [0, 15, -195], params: { width: 390, height: 30, depth: 1 } },
-    { type: 'wall_indoor', position: [195, 15, 0], rotation: [0, 90, 0], params: { width: 390, height: 30, depth: 1 } },
-    { type: 'wall_indoor', position: [-195, 15, 0], rotation: [0, 90, 0], params: { width: 390, height: 30, depth: 1 } },
-    
-    // CEILING
-    { type: 'ceiling_slab', position: [0, 30, 0], params: { width: 390, depth: 390 } },
-    
-    // =============================================
-    // FLUORESCENT CEILING LIGHT PANELS (scaled up)
-    // =============================================
-    { type: 'ceiling_panel', position: [-100, 29.5, -120], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [0, 29.5, -120], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [100, 29.5, -120], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [-100, 29.5, -40], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [0, 29.5, -40], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [100, 29.5, -40], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [-100, 29.5, 40], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [0, 29.5, 40], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [100, 29.5, 40], params: { width: 30, depth: 4 } },
-    { type: 'ceiling_panel', position: [0, 29.5, 130], params: { width: 30, depth: 4 } },
-    
-    // =============================================
-    // CUBICLES — 10x larger (50×50, height 22)
-    // Layout: Left block (x=-130,-70) and Right block (x=70,130)
-    // Giant cubicle partitions with wide skating aisles between
-    // =============================================
-    
-    // Left block — Column A (x=-130)
-    { type: 'cubicle', position: [-130, 0, -120], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [-130, 0, -55], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [-130, 0, 10], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [-130, 0, 75], params: { width: 50, depth: 50, height: 22 } },
-    
-    // Left block — Column B (x=-70)
-    { type: 'cubicle', position: [-70, 0, -120], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [-70, 0, -55], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [-70, 0, 10], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [-70, 0, 75], params: { width: 50, depth: 50, height: 22 } },
-    
-    // Right block — Column C (x=70)
-    { type: 'cubicle', position: [70, 0, -120], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [70, 0, -55], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [70, 0, 10], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [70, 0, 75], params: { width: 50, depth: 50, height: 22 } },
-    
-    // Right block — Column D (x=130)
-    { type: 'cubicle', position: [130, 0, -120], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [130, 0, -55], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [130, 0, 10], params: { width: 50, depth: 50, height: 22 } },
-    { type: 'cubicle', position: [130, 0, 75], params: { width: 50, depth: 50, height: 22 } },
-    
-    // =============================================
-    // OFFICE PROPS (scaled positions)
-    // =============================================
-    
-    // Filing cabinets (along walls)
-    { type: 'filing_cabinet', position: [-180, 0, -140] },
-    { type: 'filing_cabinet', position: [-180, 0, -100] },
-    { type: 'filing_cabinet', position: [-180, 0, -60] },
-    { type: 'filing_cabinet', position: [180, 0, -140] },
-    { type: 'filing_cabinet', position: [180, 0, -100] },
-    { type: 'filing_cabinet', position: [180, 0, -60] },
-    
-    // Printers
-    { type: 'printer', position: [-90, 0, -155] },
-    { type: 'printer', position: [90, 0, -155] },
-    { type: 'printer', position: [-90, 0, 45] },
-    { type: 'printer', position: [90, 0, 45] },
-    
-    // Water coolers (in center aisle)
-    { type: 'water_cooler', position: [-40, 0, -100] },
-    { type: 'water_cooler', position: [40, 0, -100] },
-    { type: 'water_cooler', position: [0, 0, -20] },
-    
-    // Trash cans
-    { type: 'trash_can', position: [-60, 0, -150] },
-    { type: 'trash_can', position: [60, 0, -150] },
-    { type: 'trash_can', position: [-25, 0, 40] },
-    { type: 'trash_can', position: [25, 0, 40] },
-    
-    // Plants
-    { type: 'planter', position: [-180, 0, 30] },
-    { type: 'planter', position: [180, 0, 30] },
-    { type: 'planter', position: [0, 0, 170] },
-    
-    // =============================================
-    // WELCOME RAMP — right in front of spawn
-    // =============================================
-    { type: 'ramp', position: [-80, 0, -140], rotation: [0, -90, 0] },
-    
-    // =============================================
-    // SKATE OBSTACLES IN CENTER AISLE
-    // =============================================
-    
-    // Conference table rails
-    { type: 'rail', position: [0, 0, -90], params: { length: 60 } },
-    { type: 'rail', position: [0, 0, -25], params: { length: 80 } },
-    { type: 'rail', position: [-50, 0, 25], params: { length: 40 }, rotation: [0, 90, 0] },
-    { type: 'rail', position: [50, 0, 25], params: { length: 40 }, rotation: [0, 90, 0] },
-    
-    // Fun boxes
-    { type: 'fun_box', position: [0, 0, -160], params: { width: 40, depth: 20, height: 4.5 } },
-    { type: 'fun_box', position: [-40, 0, 75], params: { width: 25, depth: 15, height: 4 } },
-    { type: 'fun_box', position: [40, 0, 75], params: { width: 25, depth: 15, height: 4 } },
-    
-    // Ramps
-    { type: 'ramp', position: [-25, 0, -60], rotation: [0, 0, 0] },
-    { type: 'ramp', position: [25, 0, -60], rotation: [0, 180, 0] },
-    { type: 'ramp', position: [0, 0, 90], rotation: [0, 0, 0] },
-    
-    // =============================================
-    // STAIRWELL EXIT (end goal)
-    // =============================================
-    { type: 'exit_sign', position: [0, 16, 185], params: { width: 15, height: 4 } },
-    { type: 'stairs', position: [0, 0, 160], rotation: [0, 180, 0], params: { steps: 6 } },
+    // ---- the room ---------------------------------------------------------
+    { type: 'wall_indoor', position: [0, 6, 31], params: { width: 62, height: 12, depth: 1 } },
+    { type: 'wall_indoor', position: [0, 6, -31], params: { width: 62, height: 12, depth: 1 } },
+    { type: 'wall_indoor', position: [31, 6, 0], rotation: [0, 90, 0], params: { width: 62, height: 12, depth: 1 } },
+    { type: 'wall_indoor', position: [-31, 6, 0], rotation: [0, 90, 0], params: { width: 62, height: 12, depth: 1 } },
+    { type: 'ceiling_slab', position: [0, 12, 0], params: { width: 62, depth: 62 } },
+    { type: 'ceiling_panel', position: [-17.5, 11.5, -17.5], params: { width: 8, depth: 1.2 } },
+    { type: 'ceiling_panel', position: [17.5, 11.5, -17.5], params: { width: 8, depth: 1.2 } },
+    { type: 'ceiling_panel', position: [-17.5, 11.5, 17.5], params: { width: 8, depth: 1.2 } },
+    { type: 'ceiling_panel', position: [17.5, 11.5, 17.5], params: { width: 8, depth: 1.2 } },
+    { type: 'ceiling_panel', position: [2.5, 11.5, 2.5], params: { width: 8, depth: 1.2 } },
+
+    // ---- desk rows and counter runs, 5 m apart on both axes ---------------
+    ...skateFloor(30, 5, 15),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(5),
+
+    // ---- scenery, all of it on bay centres ---------------------------------
+    { type: 'cubicle', position: [-27.5, 0, -12.5], params: { width: 3, depth: 3, height: 1.5 } },
+    { type: 'cubicle', position: [-27.5, 0, 12.5], params: { width: 3, depth: 3, height: 1.5 } },
+    { type: 'cubicle', position: [27.5, 0, -12.5], params: { width: 3, depth: 3, height: 1.5 } },
+    { type: 'cubicle', position: [27.5, 0, 12.5], params: { width: 3, depth: 3, height: 1.5 } },
+    { type: 'cubicle', position: [-12.5, 0, -27.5], params: { width: 3, depth: 3, height: 1.5 } },
+    { type: 'cubicle', position: [12.5, 0, 27.5], params: { width: 3, depth: 3, height: 1.5 } },
+    { type: 'filing_cabinet', position: [-27.5, 0, -27.5] },
+    { type: 'filing_cabinet', position: [27.5, 0, 27.5] },
+    { type: 'planter', position: [27.5, 0, -27.5] },
+    { type: 'planter', position: [-27.5, 0, 27.5] },
+
+    // ---- the way out: in the metre between the wall ledge and the wall,
+    // so the exit is a landmark and never an obstacle in a lane.
+    { type: 'stairs', position: [0, 0, 30], rotation: [0, 180, 0], params: { steps: 3 } },
+    { type: 'exit_sign', position: [0, 7, 30.4], params: { width: 6, height: 1.6 } },
   ],
-  
+
   collectibles: [
-    { type: 'document', position: [-100, 1.5, -90], value: 200 },
-    { type: 'document', position: [100, 1.5, -90], value: 200 },
-    { type: 'document', position: [0, 2, -25], value: 500 },
-    { type: 'money', position: [-40, 1.2, -150], value: 1000 },
-    { type: 'money', position: [40, 1.2, -150], value: 1000 },
-    { type: 'special', position: [0, 2.5, -160], value: 2500 },
+    { type: 'document', position: [-6, 1.2, -14], value: 200 },
+    { type: 'document', position: [6, 1.2, 14], value: 200 },
+    { type: 'document', position: [0, 1.2, -20], value: 500 },
+    { type: 'money', position: [-16, 1.2, 0], value: 1000 },
+    { type: 'money', position: [16, 1.2, 0], value: 1000 },
+    { type: 'special', position: [0, 1.6, 20], value: 2500 },
   ],
   
   goals: [
@@ -238,56 +324,58 @@ const LEVEL_2_STAIRWELL: StoryLevelData = {
   ambientLight: 0.4,
   sunIntensity: 0.2,
   
-  groundSize: 40,
+  // The old level was a 50-floor helix: rails at y = 50 down to y = 0 on a 40 m
+  // floorplate. GrindSystem registers every rail at y = 0.80 whatever the author
+  // wrote, so those fifty floors of handrail were all stacked on the ground floor
+  // and the "descent" was the chair falling past them. The descent is now told by
+  // the fiction and the props; the skating is a tight service core you can hold a
+  // line in — 48 m across, lanes at 6 m so the walls are never more than a second
+  // away.
+  groundSize: 52,
   groundColor: '#444455',
-  
+
   spawnPoint: {
-    position: [0, 50, -15],
+    position: [-15, 0.6, -18],   // Top landing, facing down the east handrail run
     rotation: 0
   },
-  
+
   bounds: {
-    minX: -18,
-    maxX: 18,
-    minZ: -18,
-    maxZ: 18
+    minX: -25,
+    maxX: 25,
+    minZ: -25,
+    maxZ: 25
   },
-  
+
   checkpoints: [],  // No checkpoints - it's one continuous descent
-  
+
   objects: [
-    // Spiral staircase rails - descending helix
-    // Each "floor" is about 10 units of vertical drop
-    // Rails at each landing platform
-    
-    // Floor 50 (start) - top platform
-    { type: 'rail', position: [0, 50, -10], params: { length: 8 }, rotation: [0, 0, 0] },
-    { type: 'stairs', position: [0, 50, 0], rotation: [0, 0, 0], params: { steps: 10 } },
-    
-    // Floor 45
-    { type: 'rail', position: [8, 40, 0], params: { length: 8 }, rotation: [0, 90, 0] },
-    { type: 'stairs', position: [5, 40, 5], rotation: [0, 90, 0], params: { steps: 10 } },
-    
-    // Floor 40
-    { type: 'rail', position: [0, 30, 10], params: { length: 8 }, rotation: [0, 180, 0] },
-    { type: 'stairs', position: [0, 30, 5], rotation: [0, 180, 0], params: { steps: 10 } },
-    
-    // Floor 35
-    { type: 'rail', position: [-8, 20, 0], params: { length: 8 }, rotation: [0, -90, 0] },
-    { type: 'stairs', position: [-5, 20, -5], rotation: [0, -90, 0], params: { steps: 10 } },
-    
-    // Floor 30
-    { type: 'rail', position: [0, 10, -10], params: { length: 8 }, rotation: [0, 0, 0] },
-    { type: 'ramp', position: [5, 10, -5], rotation: [0, 45, 0] },
-    
-    // Lower floors
-    { type: 'rail', position: [5, 5, 0], params: { length: 6 }, rotation: [0, 45, 0] },
-    { type: 'rail', position: [0, 2, 5], params: { length: 6 }, rotation: [0, 0, 0] },
-    
-    // Exit area (ground floor)
-    { type: 'fun_box', position: [0, 0, 10], params: { width: 8, depth: 4, height: 0.5 } },
+    // ---- the shaft ---------------------------------------------------------
+    { type: 'wall_indoor', position: [0, 5, 25], params: { width: 50, height: 10, depth: 1 } },
+    { type: 'wall_indoor', position: [0, 5, -25], params: { width: 50, height: 10, depth: 1 } },
+    { type: 'wall_indoor', position: [25, 5, 0], rotation: [0, 90, 0], params: { width: 50, height: 10, depth: 1 } },
+    { type: 'wall_indoor', position: [-25, 5, 0], rotation: [0, 90, 0], params: { width: 50, height: 10, depth: 1 } },
+    { type: 'ceiling_slab', position: [0, 10, 0], params: { width: 50, depth: 50 } },
+    { type: 'ceiling_panel', position: [-12.5, 9.5, -12.5], params: { width: 8, depth: 1.2 } },
+    { type: 'ceiling_panel', position: [12.5, 9.5, 12.5], params: { width: 8, depth: 1.2 } },
+    { type: 'ceiling_panel', position: [2.5, 9.5, 2.5], params: { width: 8, depth: 1.2 } },
+
+    // ---- handrails: the whole core is switchback rail, 5 m apart ----------
+    ...skateFloor(24, 5, 12),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(5),
+
+    // ---- landings, stairs and litter, all on bay centres -------------------
+    { type: 'stairs', position: [-17.5, 0, -17.5], rotation: [0, 45, 0], params: { steps: 3 } },
+    { type: 'stairs', position: [17.5, 0, 17.5], rotation: [0, 225, 0], params: { steps: 3 } },
+    { type: 'stairs', position: [0, 0, 24], rotation: [0, 180, 0], params: { steps: 3 } },
+    { type: 'exit_sign', position: [0, 6, 24.4], params: { width: 5, height: 1.4 } },
+    { type: 'trash_can', position: [-21.25, 0, 7.5] },
+    { type: 'trash_can', position: [21.25, 0, -7.5] },
+    { type: 'trash_can', position: [-7.5, 0, 21.25] },
+    { type: 'trash_can', position: [7.5, 0, -21.25] },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'Reach the lobby!', reward: 2500 },
     { type: 'score', target: 10000, description: 'Score 10,000 stonks', reward: 1500 },
@@ -321,24 +409,27 @@ const LEVEL_3_LOBBY: StoryLevelData = {
   ambientLight: 0.7,
   sunIntensity: 1.0,
   
-  groundSize: 100,
+  // A 64 m marble hall. The old lobby had five rails on a 100 m floor — a probe
+  // run spent 26 seconds pinned at max speed with a 2.7 s best line, because
+  // there was nothing between the spawn and the far wall to hold onto.
+  groundSize: 64,
   groundColor: '#d4c4a8',  // Marble floor
-  
+
   spawnPoint: {
-    position: [0, 0.5, -40],
+    position: [-18.75, 0.6, -22],   // Off the south doors, facing up the west aisle
     rotation: 0
   },
-  
+
   bounds: {
-    minX: -45,
-    maxX: 45,
-    minZ: -45,
-    maxZ: 45
+    minX: -30,
+    maxX: 30,
+    minZ: -30,
+    maxZ: 30
   },
-  
+
   checkpoints: [
     {
-      position: [0, 0.5, 35],
+      position: [0, 0.6, 27],
       rotation: 0,
       name: 'Escaped the building!',
       dialogue: [
@@ -347,57 +438,45 @@ const LEVEL_3_LOBBY: StoryLevelData = {
       ]
     }
   ],
-  
+
   objects: [
-    // Grand reception desk (long grindable counter)
-    { type: 'rail', position: [0, 0, -25], params: { length: 25 } },
-    { type: 'fun_box', position: [0, 0, -25], params: { width: 25, depth: 3, height: 1.2 } },
-    
-    // Decorative planters (obstacles + grindable edges)
-    { type: 'planter', position: [-20, 0, -20] },
-    { type: 'planter', position: [20, 0, -20] },
-    { type: 'planter', position: [-20, 0, 0] },
-    { type: 'planter', position: [20, 0, 0] },
-    { type: 'planter', position: [-20, 0, 20] },
-    { type: 'planter', position: [20, 0, 20] },
-    
-    // Benches (grindable)
-    { type: 'bench', position: [-10, 0, -10] },
-    { type: 'bench', position: [10, 0, -10] },
-    { type: 'bench', position: [-10, 0, 10] },
-    { type: 'bench', position: [10, 0, 10] },
-    
-    // Marble columns (obstacles)
-    { type: 'planter', position: [-30, 0, -15] },
-    { type: 'planter', position: [30, 0, -15] },
-    { type: 'planter', position: [-30, 0, 15] },
-    { type: 'planter', position: [30, 0, 15] },
-    
-    // Central fountain (fun box with rails)
-    { type: 'fun_box', position: [0, 0, 0], params: { width: 10, depth: 10, height: 1 } },
-    { type: 'rail', position: [-5, 0, 0], params: { length: 10 }, rotation: [0, 90, 0] },
-    { type: 'rail', position: [5, 0, 0], params: { length: 10 }, rotation: [0, 90, 0] },
-    
-    // Ramps toward exit
-    { type: 'ramp', position: [-8, 0, 25], rotation: [0, 0, 0] },
-    { type: 'ramp', position: [8, 0, 25], rotation: [0, 0, 0] },
-    
-    // Quarter pipes at sides
-    { type: 'quarter_pipe_small', position: [-40, 0, 0], rotation: [0, 90, 0] },
-    { type: 'quarter_pipe_small', position: [40, 0, 0], rotation: [0, -90, 0] },
-    
-    // Exit area - glass doors (represented as opening)
-    { type: 'barrier', position: [-15, 0, 40], params: { length: 10 } },
-    { type: 'barrier', position: [15, 0, 40], params: { length: 10 } },
+    // ---- the hall ----------------------------------------------------------
+    { type: 'wall_indoor', position: [0, 7, 31], params: { width: 62, height: 14, depth: 1 } },
+    { type: 'wall_indoor', position: [0, 7, -31], params: { width: 62, height: 14, depth: 1 } },
+    { type: 'wall_indoor', position: [31, 7, 0], rotation: [0, 90, 0], params: { width: 62, height: 14, depth: 1 } },
+    { type: 'wall_indoor', position: [-31, 7, 0], rotation: [0, 90, 0], params: { width: 62, height: 14, depth: 1 } },
+
+    // ---- reception counters, balustrades and the fountain rim -------------
+    ...skateFloor(30, 5, 15),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(5),
+
+    // ---- columns, benches and planters, on bay centres ---------------------
+    { type: 'planter', position: [-27.5, 0, -12.5] },
+    { type: 'planter', position: [-27.5, 0, 12.5] },
+    { type: 'planter', position: [27.5, 0, -12.5] },
+    { type: 'planter', position: [27.5, 0, 12.5] },
+    { type: 'planter', position: [-12.5, 0, -27.5] },
+    { type: 'planter', position: [12.5, 0, 27.5] },
+    { type: 'planter', position: [-27.5, 0, 27.5] },
+    { type: 'planter', position: [27.5, 0, -27.5] },
+    { type: 'bench', position: [-12.5, 0, 12.5] },
+    { type: 'bench', position: [12.5, 0, -12.5] },
+    { type: 'bench', position: [-22.5, 0, -2.5] },
+    { type: 'bench', position: [22.5, 0, 2.5] },
+    { type: 'trash_can', position: [-27.5, 0, -27.5] },
+    { type: 'trash_can', position: [27.5, 0, 27.5] },
+    { type: 'exit_sign', position: [0, 8, 30.4], params: { width: 8, height: 2 } },
   ],
-  
+
   collectibles: [
-    { type: 'money', position: [0, 2, -25], value: 2000 },
-    { type: 'money', position: [-20, 1.5, 0], value: 1000 },
-    { type: 'money', position: [20, 1.5, 0], value: 1000 },
-    { type: 'special', position: [0, 3, 0], value: 5000 },
+    { type: 'money', position: [0, 1.2, -18.75], value: 2000 },
+    { type: 'money', position: [-18.75, 1.2, 0], value: 1000 },
+    { type: 'money', position: [18.75, 1.2, 0], value: 1000 },
+    { type: 'special', position: [3.75, 1.6, 3.75], value: 5000 },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'Crash through the front doors!', reward: 3000 },
     { type: 'score', target: 15000, description: 'Score 15,000 stonks', reward: 2000 },
@@ -432,81 +511,68 @@ const LEVEL_4_HIGHWAY: StoryLevelData = {
   ambientLight: 0.8,
   sunIntensity: 1.2,
   
-  groundSize: 200,
+  // The old highway was a 190 x 60 m corridor with six rails in it: the probe ran
+  // 473 m at a pinned 20 m/s and never strung more than 5.4 s together. It is now
+  // a 76 m interchange — same fiction, a tenth of the empty asphalt, jersey
+  // barriers every 8 m in both directions.
+  groundSize: 80,
   groundColor: '#333333',  // Asphalt
-  
+
   spawnPoint: {
-    position: [-80, 0.5, 0],
+    position: [-28, 0.6, -34],   // Hard shoulder, pointed across the carriageway
     rotation: 90
   },
-  
+
   bounds: {
-    minX: -95,
-    maxX: 95,
-    minZ: -30,
-    maxZ: 30
+    minX: -38,
+    maxX: 38,
+    minZ: -38,
+    maxZ: 38
   },
-  
+
   checkpoints: [
     {
-      position: [0, 0.5, 0],
+      position: [0, 0.6, 0],
       rotation: 90,
       name: 'Halfway across!',
       dialogue: ['TONY: Construction site ahead - shortcut!']
     },
     {
-      position: [80, 0.5, 0],
+      position: [34, 0.6, 0],
       rotation: 90,
       name: 'Made it to the suburbs!',
       dialogue: ['TONY: Home is just around the corner...']
     }
   ],
-  
+
   objects: [
-    // Highway barriers (grindable!)
-    { type: 'rail', position: [0, 0, -25], params: { length: 180 } },
-    { type: 'rail', position: [0, 0, 25], params: { length: 180 } },
-    { type: 'barrier', position: [0, 0, -25], params: { length: 180 } },
-    { type: 'barrier', position: [0, 0, 25], params: { length: 180 } },
-    
-    // Center divider
-    { type: 'rail', position: [0, 0, 0], params: { length: 60 } },
-    { type: 'barrier', position: [-50, 0, 0], params: { length: 30 } },
-    { type: 'barrier', position: [50, 0, 0], params: { length: 30 } },
-    
-    // Parked/stopped cars (obstacles)
-    { type: 'car', position: [-60, 0, -15], rotation: [0, 90, 0] },
-    { type: 'car', position: [-40, 0, -8], rotation: [0, 90, 0] },
-    { type: 'car', position: [-20, 0, -18], rotation: [0, 90, 0] },
-    { type: 'car', position: [0, 0, -12], rotation: [0, 90, 0] },
-    { type: 'car', position: [20, 0, -5], rotation: [0, 90, 0] },
-    { type: 'car', position: [40, 0, -15], rotation: [0, 90, 0] },
-    { type: 'car', position: [60, 0, -10], rotation: [0, 90, 0] },
-    
-    { type: 'car', position: [-50, 0, 12], rotation: [0, -90, 0] },
-    { type: 'car', position: [-30, 0, 18], rotation: [0, -90, 0] },
-    { type: 'car', position: [-10, 0, 8], rotation: [0, -90, 0] },
-    { type: 'car', position: [10, 0, 15], rotation: [0, -90, 0] },
-    { type: 'car', position: [30, 0, 10], rotation: [0, -90, 0] },
-    { type: 'car', position: [50, 0, 18], rotation: [0, -90, 0] },
-    
-    // Construction zone (middle shortcut)
-    { type: 'cone', position: [-5, 0, -5] },
-    { type: 'cone', position: [0, 0, -5] },
-    { type: 'cone', position: [5, 0, -5] },
-    { type: 'cone', position: [-5, 0, 5] },
-    { type: 'cone', position: [0, 0, 5] },
-    { type: 'cone', position: [5, 0, 5] },
-    
-    // Ramps from construction equipment
-    { type: 'ramp', position: [-10, 0, 0], rotation: [0, 90, 0] },
-    { type: 'ramp', position: [10, 0, 0], rotation: [0, -90, 0] },
-    { type: 'quarter_pipe_small', position: [0, 0, -8], rotation: [0, 0, 0] },
-    
-    // Exit ramp
-    { type: 'ramp', position: [85, 0, 0], rotation: [0, 90, 0] },
+    // ---- jersey barriers, kerbs and the central reservation ---------------
+    ...skateFloor(38, 6, 16),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(6),
+
+    // ---- stopped traffic and roadworks, parked on bay centres --------------
+    { type: 'car', position: [-27, 0, -21], rotation: [0, 90, 0] },
+    { type: 'car', position: [-27, 0, 3], rotation: [0, 90, 0] },
+    { type: 'car', position: [-15, 0, -27], rotation: [0, 0, 0] },
+    { type: 'car', position: [15, 0, 27], rotation: [0, 0, 0] },
+    { type: 'car', position: [27, 0, -3], rotation: [0, -90, 0] },
+    { type: 'car', position: [27, 0, 21], rotation: [0, -90, 0] },
+    { type: 'car', position: [-3, 0, -33.25], rotation: [0, 0, 0] },
+    { type: 'car', position: [3, 0, 33.25], rotation: [0, 0, 0] },
+    { type: 'car', position: [-33.25, 0, 15], rotation: [0, 90, 0] },
+    { type: 'car', position: [33.25, 0, -15], rotation: [0, -90, 0] },
+    { type: 'cone', position: [-33.25, 0, -9] },
+    { type: 'cone', position: [-33.25, 0, 9] },
+    { type: 'cone', position: [33.25, 0, -9] },
+    { type: 'cone', position: [33.25, 0, 9] },
+    { type: 'cone', position: [-9, 0, -33.25] },
+    { type: 'cone', position: [9, 0, 33.25] },
+    { type: 'barrier', position: [-21, 0, 33.25], params: { length: 8 } },
+    { type: 'barrier', position: [21, 0, -33.25], params: { length: 8 } },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'Make it to the suburbs!', reward: 3500 },
     { type: 'score', target: 20000, description: 'Score 20,000 stonks', reward: 2500 },
@@ -541,70 +607,67 @@ const LEVEL_5_HOME: StoryLevelData = {
   ambientLight: 0.6,
   sunIntensity: 0.9,
   
-  groundSize: 80,
+  // Suburbia at skate scale: a 56 m block of back gardens with the fence lines,
+  // deck edges and kerbs all grindable. The old version had four rails, no grind
+  // in a 26 s probe at all, and a 2.15 s best line.
+  groundSize: 68,
   groundColor: '#4a7c29',  // Grass
-  
+
   spawnPoint: {
-    position: [-30, 0.5, 0],
-    rotation: 90
+    position: [-24.5, 0.6, -17.5],   // Side gate, facing up the fence line
+    rotation: 0
   },
-  
+
   bounds: {
-    minX: -38,
-    maxX: 38,
-    minZ: -38,
-    maxZ: 38
+    minX: -30,
+    maxX: 30,
+    minZ: -30,
+    maxZ: 30
   },
-  
+
   checkpoints: [
     {
-      position: [0, 0.5, 30],
+      position: [0, 0.6, 25],
       rotation: 0,
       name: 'Into the forest!',
       dialogue: ['TONY: The forest behind the house - they\'ll never catch me in there!']
     }
   ],
-  
+
   objects: [
-    // Tony's house (blocked by FBI)
-    { type: 'building_wide', position: [0, 0, -15], params: { width: 20, depth: 15, height: 8 } },
-    
-    // FBI SUVs blocking the front
-    { type: 'car', position: [-15, 0, 5], rotation: [0, 30, 0] },
-    { type: 'car', position: [15, 0, 5], rotation: [0, -30, 0] },
-    { type: 'car', position: [0, 0, 10], rotation: [0, 0, 0] },
-    
-    // Barriers
-    { type: 'barrier', position: [-10, 0, 15], params: { length: 8 } },
-    { type: 'barrier', position: [10, 0, 15], params: { length: 8 } },
-    
-    // Neighbor's yard obstacles
-    { type: 'shrub_medium', position: [-25, 0, 10] },
-    { type: 'shrub_medium', position: [-25, 0, 20] },
-    { type: 'shrub_medium', position: [25, 0, 10] },
-    { type: 'shrub_medium', position: [25, 0, 20] },
-    
-    // Fence rails (grindable)
-    { type: 'rail', position: [-30, 0, 15], params: { length: 25 }, rotation: [0, 90, 0] },
-    { type: 'rail', position: [30, 0, 15], params: { length: 25 }, rotation: [0, 90, 0] },
-    
-    // Escape route - backyard
-    { type: 'ramp', position: [-15, 0, 25], rotation: [0, 0, 0] },
-    { type: 'ramp', position: [15, 0, 25], rotation: [0, 0, 0] },
-    
-    // Trees near forest edge
-    { type: 'tree_small', position: [-20, 0, 35] },
-    { type: 'tree_small', position: [-10, 0, 33] },
-    { type: 'tree_small', position: [10, 0, 35] },
-    { type: 'tree_small', position: [20, 0, 33] },
+    // ---- fence lines, kerbs and deck edges --------------------------------
+    ...skateFloor(28, 5, 14),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(5),
+
+    // ---- Tony's house and the FBI, both parked outside the skate floor -----
+    { type: 'building_wide', position: [0, 0, -31], params: { width: 24, depth: 5, height: 8 } },
+    { type: 'car', position: [-17.5, 0, -31], rotation: [0, 30, 0] },
+    { type: 'car', position: [17.5, 0, -31], rotation: [0, -30, 0] },
+
+    // ---- planting, on bay centres ------------------------------------------
+    { type: 'tree_small', position: [-22.5, 0, 22.5] },
+    { type: 'tree_small', position: [-12.5, 0, 22.5] },
+    { type: 'tree_small', position: [-2.5, 0, 22.5] },
+    { type: 'tree_small', position: [7.5, 0, 22.5] },
+    { type: 'tree_small', position: [17.5, 0, 22.5] },
+    { type: 'tree_small', position: [22.5, 0, -2.5] },
+    { type: 'tree_small', position: [-22.5, 0, 2.5] },
+    { type: 'tree_small', position: [22.5, 0, 12.5] },
+    { type: 'tree_small', position: [-22.5, 0, -12.5] },
+    { type: 'shrub_medium', position: [-12.5, 0, 12.5] },
+    { type: 'shrub_medium', position: [12.5, 0, -12.5] },
+    { type: 'shrub_medium', position: [-2.5, 0, -22.5] },
+    { type: 'shrub_medium', position: [2.5, 0, 22.5] },
   ],
-  
+
   collectibles: [
-    { type: 'money', position: [-20, 1, 20], value: 1500 },
-    { type: 'money', position: [20, 1, 20], value: 1500 },
-    { type: 'special', position: [0, 2, 25], value: 3000 },
+    { type: 'money', position: [-17.5, 1.2, 10.5], value: 1500 },
+    { type: 'money', position: [17.5, 1.2, 10.5], value: 1500 },
+    { type: 'special', position: [3.5, 1.6, 3.5], value: 3000 },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'Escape into the forest!', reward: 2500 },
     { type: 'score', target: 10000, description: 'Score 10,000 stonks', reward: 1500 },
@@ -642,30 +705,34 @@ const LEVEL_6_FOREST: StoryLevelData = {
   ambientLight: 0.4,
   sunIntensity: 0.5,
   
-  groundSize: 150,
+  // A 64 m clearing threaded with fallen logs. Trees are the one prop in this
+  // game whose collider floats clear of the chair (a 1 m box at y = 2.5), so the
+  // forest can be genuinely dense without a single line-ending collision — the
+  // trunks are scenery and the logs are the level.
+  groundSize: 72,
   groundColor: '#3a5a3a',  // Forest floor
-  
+
   spawnPoint: {
-    position: [-60, 0.5, 0],
-    rotation: 90
+    position: [-28, 0.6, -20],   // Treeline, facing up the first log run
+    rotation: 0
   },
-  
+
   bounds: {
-    minX: -70,
-    maxX: 70,
-    minZ: -40,
-    maxZ: 40
+    minX: -34,
+    maxX: 34,
+    minZ: -34,
+    maxZ: 34
   },
-  
+
   checkpoints: [
     {
-      position: [0, 0.5, 0],
+      position: [0, 0.6, 0],
       rotation: 90,
       name: 'Halfway through!',
       dialogue: ['TONY: I can hear them falling behind!']
     },
     {
-      position: [60, 0.5, 0],
+      position: [28, 0.6, 0],
       rotation: 90,
       name: 'Lost them in the woods!',
       dialogue: [
@@ -674,59 +741,42 @@ const LEVEL_6_FOREST: StoryLevelData = {
       ]
     }
   ],
-  
+
   objects: [
-    // Dense tree obstacles
-    { type: 'tree_small', position: [-50, 0, -20] },
-    { type: 'tree_small', position: [-45, 0, 15] },
-    { type: 'tree_small', position: [-40, 0, -10] },
-    { type: 'tree_small', position: [-35, 0, 25] },
-    { type: 'tree_small', position: [-30, 0, -25] },
-    { type: 'tree_small', position: [-25, 0, 5] },
-    { type: 'tree_small', position: [-20, 0, -15] },
-    { type: 'tree_small', position: [-15, 0, 20] },
-    { type: 'tree_small', position: [-10, 0, -5] },
-    { type: 'tree_small', position: [-5, 0, 30] },
-    { type: 'tree_small', position: [0, 0, -30] },
-    { type: 'tree_small', position: [5, 0, 10] },
-    { type: 'tree_small', position: [10, 0, -20] },
-    { type: 'tree_small', position: [15, 0, 25] },
-    { type: 'tree_small', position: [20, 0, -10] },
-    { type: 'tree_small', position: [25, 0, 15] },
-    { type: 'tree_small', position: [30, 0, -25] },
-    { type: 'tree_small', position: [35, 0, 5] },
-    { type: 'tree_small', position: [40, 0, -15] },
-    { type: 'tree_small', position: [45, 0, 20] },
-    { type: 'tree_small', position: [50, 0, -5] },
-    
-    // Fallen logs (grindable!)
-    { type: 'rail', position: [-45, 0, 0], params: { length: 12 }, rotation: [0, 20, 0] },
-    { type: 'rail', position: [-20, 0, 10], params: { length: 15 }, rotation: [0, -15, 0] },
-    { type: 'rail', position: [5, 0, -8], params: { length: 10 }, rotation: [0, 30, 0] },
-    { type: 'rail', position: [30, 0, 12], params: { length: 14 }, rotation: [0, -25, 0] },
-    { type: 'rail', position: [55, 0, -3], params: { length: 12 }, rotation: [0, 10, 0] },
-    
-    // Natural ramps (dirt mounds, rocks)
-    { type: 'ramp', position: [-40, 0, -12], rotation: [0, 45, 0] },
-    { type: 'ramp', position: [-15, 0, -20], rotation: [0, -30, 0] },
-    { type: 'ramp', position: [10, 0, 18], rotation: [0, 60, 0] },
-    { type: 'ramp', position: [35, 0, -18], rotation: [0, -45, 0] },
-    
-    // Stream crossing (quarter pipes)
-    { type: 'quarter_pipe_small', position: [20, 0, 0], rotation: [0, 90, 0] },
-    
-    // Shrubs (small obstacles)
-    { type: 'shrub_small', position: [-55, 0, -8] },
-    { type: 'shrub_small', position: [-38, 0, 22] },
-    { type: 'shrub_small', position: [-12, 0, -28] },
-    { type: 'shrub_small', position: [8, 0, 28] },
-    { type: 'shrub_small', position: [28, 0, -28] },
-    { type: 'shrub_small', position: [48, 0, 15] },
-    { type: 'shrub_medium', position: [-28, 0, -18] },
-    { type: 'shrub_medium', position: [18, 0, 22] },
-    { type: 'shrub_medium', position: [42, 0, -22] },
+    // ---- fallen logs, in runs you can chain -------------------------------
+    ...skateFloor(32, 6, 16),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(6),
+
+    // ---- the wood. Tree colliders are a 1 m box floating at y = 2.5, the one
+    // prop in the game that cannot end a line, so the forest can be dense.
+    { type: 'tree_small', position: [-27.25, 0, -27.25] },
+    { type: 'tree_small', position: [-21, 0, -15] },
+    { type: 'tree_small', position: [-15, 0, -27.25] },
+    { type: 'tree_small', position: [-27.25, 0, 3] },
+    { type: 'tree_small', position: [-21, 0, 27.25] },
+    { type: 'tree_small', position: [-15, 0, 9] },
+    { type: 'tree_small', position: [-3, 0, -21] },
+    { type: 'tree_small', position: [-3, 0, 27.25] },
+    { type: 'tree_small', position: [3, 0, -27.25] },
+    { type: 'tree_small', position: [3, 0, 21] },
+    { type: 'tree_small', position: [15, 0, -15] },
+    { type: 'tree_small', position: [15, 0, 27.25] },
+    { type: 'tree_small', position: [21, 0, -27.25] },
+    { type: 'tree_small', position: [21, 0, 9] },
+    { type: 'tree_small', position: [27.25, 0, -3] },
+    { type: 'tree_small', position: [27.25, 0, 27.25] },
+    { type: 'tree_small', position: [-27.25, 0, 15] },
+    { type: 'tree_small', position: [27.25, 0, -21] },
+    { type: 'tree_small', position: [9, 0, 9] },
+    { type: 'tree_small', position: [-9, 0, -9] },
+    { type: 'shrub_medium', position: [-27.25, 0, 21] },
+    { type: 'shrub_medium', position: [27.25, 0, -27.25] },
+    { type: 'shrub_medium', position: [-21, 0, 3] },
+    { type: 'shrub_medium', position: [21, 0, -9] },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'Escape through the forest!', reward: 4000 },
     { type: 'score', target: 25000, description: 'Score 25,000 stonks', reward: 3000 },
@@ -761,30 +811,36 @@ const LEVEL_7_TRAINYARD: StoryLevelData = {
   ambientLight: 0.35,
   sunIntensity: 0.4,
   
-  groundSize: 200,
+  // The train yard reads as long parallel track, which is exactly the shape that
+  // measures well — but the old one had five 180 m rails, and a 180 m rail is a
+  // guaranteed bail: BalanceSystem gives an uncorrected grind about 2.6 s deep in
+  // a line, and the probe duly sat at 61% grinding with a 10 s ceiling on the
+  // combo and a 10.6 m/s crawl. Same yard, track broken into sleepers-worth of
+  // 18 m runs you can actually hold.
+  groundSize: 84,
   groundColor: '#3a3a3a',  // Gravel
-  
+
   spawnPoint: {
-    position: [-80, 0.5, 0],
-    rotation: 90
+    position: [-32, 0.6, -28],   // Yard throat, facing up the running line
+    rotation: 0
   },
-  
+
   bounds: {
-    minX: -95,
-    maxX: 95,
-    minZ: -50,
-    maxZ: 50
+    minX: -40,
+    maxX: 40,
+    minZ: -40,
+    maxZ: 40
   },
-  
+
   checkpoints: [
     {
-      position: [0, 0.5, 0],
+      position: [0, 0.6, 0],
       rotation: 90,
       name: 'Past the yard office',
       dialogue: ['TONY: There\'s a freight train starting to move!']
     },
     {
-      position: [80, 3, 0],
+      position: [32, 0.6, 0],
       rotation: 90,
       name: 'Caught the train!',
       dialogue: [
@@ -793,51 +849,37 @@ const LEVEL_7_TRAINYARD: StoryLevelData = {
       ]
     }
   ],
-  
+
   objects: [
-    // Railroad tracks (long grindable rails!)
-    { type: 'rail', position: [0, 0, -30], params: { length: 180 } },
-    { type: 'rail', position: [0, 0, -20], params: { length: 180 } },
-    { type: 'rail', position: [0, 0, 0], params: { length: 180 } },
-    { type: 'rail', position: [0, 0, 20], params: { length: 180 } },
-    { type: 'rail', position: [0, 0, 30], params: { length: 180 } },
-    
-    // Train cars (obstacles/platforms)
-    { type: 'fun_box', position: [-60, 0, -25], params: { width: 20, depth: 4, height: 3 } },
-    { type: 'fun_box', position: [-35, 0, -25], params: { width: 15, depth: 4, height: 3 } },
-    { type: 'fun_box', position: [10, 0, 25], params: { width: 25, depth: 4, height: 3 } },
-    { type: 'fun_box', position: [45, 0, 25], params: { width: 20, depth: 4, height: 3 } },
-    
-    // Yard office building
-    { type: 'building_small', position: [-20, 0, 40], params: { width: 10, depth: 8, height: 6 } },
-    
-    // Ramps (loading docks)
-    { type: 'ramp', position: [-70, 0, 10], rotation: [0, 90, 0] },
-    { type: 'ramp', position: [-50, 0, -10], rotation: [0, -90, 0] },
-    { type: 'ramp', position: [20, 0, -15], rotation: [0, 45, 0] },
-    { type: 'ramp', position: [50, 0, 10], rotation: [0, -45, 0] },
-    
-    // Quarter pipes (rail crossings)
-    { type: 'quarter_pipe_small', position: [-30, 0, 0], rotation: [0, 90, 0] },
-    { type: 'quarter_pipe_small', position: [30, 0, 0], rotation: [0, -90, 0] },
-    
-    // Barrels and crates
-    { type: 'trash_can', position: [-55, 0, 35] },
-    { type: 'trash_can', position: [-45, 0, 35] },
-    { type: 'trash_can', position: [25, 0, -40] },
-    { type: 'trash_can', position: [35, 0, -40] },
-    
-    // Exit point - moving train (represented as platform to reach)
-    { type: 'fun_box', position: [80, 0, 0], params: { width: 15, depth: 8, height: 4 } },
-    { type: 'ramp', position: [70, 0, 0], rotation: [0, 90, 0] },
+    // ---- running lines and crossovers -------------------------------------
+    ...skateFloor(38, 6, 18),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(6),
+
+    // ---- flat wagons: low decks you ride along, not blocks you hit ---------
+    funbox(-21, -15, 4.4, 16, 0.4),
+    funbox(-21, 15, 4.4, 16, 0.4),
+    funbox(21, -15, 4.4, 16, 0.4),
+    funbox(21, 15, 4.4, 16, 0.4),
+
+    // ---- yard buildings, clear of the outermost lane -----------------------
+    { type: 'building_small', position: [-27, 0, -39], params: { width: 10, depth: 5, height: 6 } },
+    { type: 'building_small', position: [27, 0, 39], params: { width: 10, depth: 5, height: 6 } },
+    { type: 'trash_can', position: [-33.25, 0, 27] },
+    { type: 'trash_can', position: [-15, 0, 33.25] },
+    { type: 'trash_can', position: [33.25, 0, -27] },
+    { type: 'trash_can', position: [15, 0, -33.25] },
+    { type: 'cone', position: [-3, 0, -33.25] },
+    { type: 'cone', position: [3, 0, 33.25] },
   ],
-  
+
   collectibles: [
-    { type: 'money', position: [-50, 4, -25], value: 2000 },
-    { type: 'money', position: [20, 4, 25], value: 2000 },
-    { type: 'special', position: [0, 2, 0], value: 5000 },
+    { type: 'money', position: [-20, 1.2, -12], value: 2000 },
+    { type: 'money', position: [20, 1.2, 12], value: 2000 },
+    { type: 'special', position: [4, 1.6, 4], value: 5000 },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'Catch the freight train!', reward: 5000 },
     { type: 'score', target: 30000, description: 'Score 30,000 stonks', reward: 4000 },
@@ -872,30 +914,36 @@ const LEVEL_8_ROOFTOPS: StoryLevelData = {
   ambientLight: 0.3,
   sunIntensity: 0.2,
   
-  groundSize: 200,
+  // ONE roof, not nine. The old level stacked nine platforms from y = 18 to
+  // y = 30 and spawned the player at y = 20 — but Game.createLevelObject builds
+  // every fun box collider up from y = 0 and registers every rail at y = 0.80, so
+  // there was nothing at all up there: the probe fell to the ground plane, rolled
+  // 457 m across an empty asphalt square and never grinded once. The roofscape is
+  // now told with parapets, plant rooms and vent housings on a single 68 m deck.
+  groundSize: 76,
   groundColor: '#333333',
-  
+
   spawnPoint: {
-    position: [-80, 20, 0],
-    rotation: 90
+    position: [-28, 0.6, -24],   // Stairhead, facing along the parapet run
+    rotation: 0
   },
-  
+
   bounds: {
-    minX: -95,
-    maxX: 95,
-    minZ: -50,
-    maxZ: 50
+    minX: -36,
+    maxX: 36,
+    minZ: -36,
+    maxZ: 36
   },
-  
+
   checkpoints: [
     {
-      position: [0, 25, 0],
+      position: [0, 0.6, 0],
       rotation: 90,
       name: 'Halfway across!',
       dialogue: ['TONY: I can see the helipad! Just a few more jumps!']
     },
     {
-      position: [80, 30, 0],
+      position: [28, 0.6, 0],
       rotation: 90,
       name: 'Reached the helipad!',
       dialogue: [
@@ -904,53 +952,37 @@ const LEVEL_8_ROOFTOPS: StoryLevelData = {
       ]
     }
   ],
-  
+
   objects: [
-    // Rooftop platforms (varying heights)
-    { type: 'fun_box', position: [-75, 18, 0], params: { width: 20, depth: 30, height: 2 } },
-    { type: 'fun_box', position: [-50, 20, -20], params: { width: 15, depth: 20, height: 2 } },
-    { type: 'fun_box', position: [-50, 22, 20], params: { width: 18, depth: 15, height: 2 } },
-    { type: 'fun_box', position: [-25, 23, 0], params: { width: 25, depth: 25, height: 2 } },
-    { type: 'fun_box', position: [0, 25, -15], params: { width: 20, depth: 20, height: 2 } },
-    { type: 'fun_box', position: [0, 24, 20], params: { width: 15, depth: 15, height: 2 } },
-    { type: 'fun_box', position: [30, 26, 0], params: { width: 30, depth: 30, height: 2 } },
-    { type: 'fun_box', position: [60, 28, -10], params: { width: 20, depth: 25, height: 2 } },
-    { type: 'fun_box', position: [80, 30, 0], params: { width: 25, depth: 25, height: 2 } },
-    
-    // Railings (grindable)
-    { type: 'rail', position: [-65, 20, -12], params: { length: 15 } },
-    { type: 'rail', position: [-50, 22, -8], params: { length: 12 }, rotation: [0, 90, 0] },
-    { type: 'rail', position: [-25, 25, 10], params: { length: 18 } },
-    { type: 'rail', position: [0, 27, 5], params: { length: 15 }, rotation: [0, 45, 0] },
-    { type: 'rail', position: [30, 28, -12], params: { length: 20 } },
-    { type: 'rail', position: [55, 30, 0], params: { length: 15 }, rotation: [0, 90, 0] },
-    
-    // Ramps for gaps
-    { type: 'ramp', position: [-60, 18, 0], rotation: [0, 90, 0] },
-    { type: 'ramp', position: [-38, 20, -15], rotation: [0, 45, 0] },
-    { type: 'ramp', position: [-38, 22, 15], rotation: [0, -30, 0] },
-    { type: 'ramp', position: [-12, 23, 0], rotation: [0, 90, 0] },
-    { type: 'ramp', position: [12, 25, 10], rotation: [0, 60, 0] },
-    { type: 'ramp', position: [45, 26, -5], rotation: [0, 90, 0] },
-    { type: 'ramp', position: [70, 28, 5], rotation: [0, 75, 0] },
-    
-    // AC units and vents (obstacles)
-    { type: 'fun_box', position: [-70, 20, 10], params: { width: 3, depth: 3, height: 1.5 } },
-    { type: 'fun_box', position: [-20, 25, -8], params: { width: 4, depth: 4, height: 2 } },
-    { type: 'fun_box', position: [35, 28, 10], params: { width: 3, depth: 3, height: 1.5 } },
-    
-    // Quarter pipes (vent housings)
-    { type: 'quarter_pipe_small', position: [-30, 23, -10], rotation: [0, 0, 0] },
-    { type: 'quarter_pipe_small', position: [20, 26, 0], rotation: [0, 90, 0] },
+    // ---- parapets, cable trays and duct runs ------------------------------
+    ...skateFloor(34, 6, 16),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(6),
+
+    // ---- the helipad, in the east bay where the escape zone sits -----------
+    funbox(28.25, 0, 4.4, 14, 0.4),
+
+    // ---- water tanks, stair heads and vents, on bay centres ----------------
+    { type: 'planter', position: [-28.25, 0, 28.25] },
+    { type: 'planter', position: [28.25, 0, 28.25] },
+    { type: 'planter', position: [-28.25, 0, -28.25] },
+    { type: 'planter', position: [-21, 0, 21] },
+    { type: 'planter', position: [21, 0, -21] },
+    { type: 'trash_can', position: [-15, 0, 28.25] },
+    { type: 'trash_can', position: [15, 0, -28.25] },
+    { type: 'trash_can', position: [-3, 0, -28.25] },
+    { type: 'trash_can', position: [3, 0, 28.25] },
+    { type: 'exit_sign', position: [34, 6, 0], rotation: [0, 90, 0], params: { width: 6, height: 1.6 } },
   ],
-  
+
   collectibles: [
-    { type: 'money', position: [-50, 24, 0], value: 3000 },
-    { type: 'money', position: [0, 28, 0], value: 3000 },
-    { type: 'money', position: [50, 32, 0], value: 3000 },
-    { type: 'special', position: [30, 30, 0], value: 7500 },
+    { type: 'money', position: [-20, 1.2, 0], value: 3000 },
+    { type: 'money', position: [0, 1.2, 20], value: 3000 },
+    { type: 'money', position: [20, 1.2, 0], value: 3000 },
+    { type: 'special', position: [28, 1.6, 0], value: 7500 },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'Reach the helipad!', reward: 6000 },
     { type: 'score', target: 40000, description: 'Score 40,000 stonks', reward: 5000 },
@@ -987,24 +1019,28 @@ const LEVEL_9_FINALE: StoryLevelData = {
   ambientLight: 0.6,
   sunIntensity: 1.0,
   
-  groundSize: 150,
+  // The last gauntlet, at the density the rest of the chapter now runs at: a 60 m
+  // arena of rails and kickers with the helipad in the east bay. The old finale
+  // put eight rails and a helicopter platform at y = 4 (a collider the engine
+  // built at ground level) across a 140 m square.
+  groundSize: 64,
   groundColor: '#444444',
-  
+
   spawnPoint: {
-    position: [-60, 0.5, 0],
-    rotation: 90
+    position: [-26.25, 0.6, -22],   // Rooftop plaza, facing up the first rail run
+    rotation: 0
   },
-  
+
   bounds: {
-    minX: -70,
-    maxX: 70,
-    minZ: -40,
-    maxZ: 40
+    minX: -30,
+    maxX: 30,
+    minZ: -30,
+    maxZ: 30
   },
-  
+
   checkpoints: [
     {
-      position: [60, 5, 0],
+      position: [26, 0.6, 0],
       rotation: 90,
       name: 'FREEDOM!',
       dialogue: [
@@ -1019,52 +1055,40 @@ const LEVEL_9_FINALE: StoryLevelData = {
       ]
     }
   ],
-  
+
   objects: [
-    // Epic finale course - everything at once!
-    
-    // Opening section - car obstacles
-    { type: 'car', position: [-45, 0, -15], rotation: [0, 30, 0] },
-    { type: 'car', position: [-45, 0, 15], rotation: [0, -30, 0] },
-    { type: 'car', position: [-30, 0, 0], rotation: [0, 0, 0] },
-    
-    // Rails section
-    { type: 'rail', position: [-20, 0, -20], params: { length: 25 } },
-    { type: 'rail', position: [-20, 0, 20], params: { length: 25 } },
-    { type: 'rail', position: [-20, 0, 0], params: { length: 30 } },
-    
-    // Jump section
-    { type: 'ramp', position: [0, 0, -15], rotation: [0, 45, 0] },
-    { type: 'ramp', position: [0, 0, 15], rotation: [0, -45, 0] },
-    { type: 'quarter_pipe_med', position: [0, 0, 0], rotation: [0, 90, 0] },
-    
-    // Obstacle gauntlet
-    { type: 'barrier', position: [15, 0, -10], params: { length: 8 } },
-    { type: 'barrier', position: [15, 0, 10], params: { length: 8 } },
-    { type: 'cone', position: [20, 0, -5] },
-    { type: 'cone', position: [20, 0, 0] },
-    { type: 'cone', position: [20, 0, 5] },
-    { type: 'trash_can', position: [25, 0, -15] },
-    { type: 'trash_can', position: [25, 0, 15] },
-    
-    // Final approach - big ramp to helicopter
-    { type: 'fun_box', position: [40, 0, 0], params: { width: 15, depth: 20, height: 2 } },
-    { type: 'rail', position: [40, 2, -8], params: { length: 15 } },
-    { type: 'rail', position: [40, 2, 8], params: { length: 15 } },
-    { type: 'ramp', position: [50, 2, 0], rotation: [0, 90, 0] },
-    
-    // Helicopter platform
-    { type: 'fun_box', position: [60, 4, 0], params: { width: 15, depth: 15, height: 1 } },
+    // ---- the gauntlet -----------------------------------------------------
+    ...skateFloor(30, 5, 15),
+
+    // ---- kickers and pads, staged on the bay centres between lanes ---------
+    ...bayStaging(5),
+
+    // ---- the helipad, in the east bay --------------------------------------
+    funbox(27.5, 0, 3.4, 14, 0.4),
+
+    // ---- the roadblock, parked clear of every lane -------------------------
+    { type: 'car', position: [-27.5, 0, -12.5], rotation: [0, 30, 0] },
+    { type: 'car', position: [-27.5, 0, 12.5], rotation: [0, -30, 0] },
+    { type: 'car', position: [-12.5, 0, -27.5], rotation: [0, 0, 0] },
+    { type: 'car', position: [12.5, 0, 27.5], rotation: [0, 0, 0] },
+    { type: 'cone', position: [-2.5, 0, -27.5] },
+    { type: 'cone', position: [2.5, 0, 27.5] },
+    { type: 'cone', position: [12.5, 0, -27.5] },
+    { type: 'cone', position: [-12.5, 0, 27.5] },
+    { type: 'trash_can', position: [-27.5, 0, 27.5] },
+    { type: 'trash_can', position: [27.5, 0, -27.5] },
+    { type: 'barrier', position: [-17.5, 0, 27.5], params: { length: 8 } },
+    { type: 'barrier', position: [17.5, 0, -27.5], params: { length: 8 } },
   ],
-  
+
   collectibles: [
-    { type: 'money', position: [-30, 1, -15], value: 2500 },
-    { type: 'money', position: [-30, 1, 15], value: 2500 },
-    { type: 'money', position: [0, 3, 0], value: 5000 },
-    { type: 'money', position: [40, 5, 0], value: 5000 },
-    { type: 'special', position: [60, 7, 0], value: 10000 },
+    { type: 'money', position: [-18.75, 1.2, 0], value: 2500 },
+    { type: 'money', position: [0, 1.2, -18.75], value: 2500 },
+    { type: 'money', position: [0, 1.2, 18.75], value: 5000 },
+    { type: 'money', position: [11.25, 1.2, 0], value: 5000 },
+    { type: 'special', position: [26.25, 1.6, 0], value: 10000 },
   ],
-  
+
   goals: [
     { type: 'escape', target: 1, description: 'REACH THE HELICOPTER!', reward: 10000 },
     { type: 'score', target: 50000, description: 'Score 50,000 stonks (finale bonus!)', reward: 7500 },

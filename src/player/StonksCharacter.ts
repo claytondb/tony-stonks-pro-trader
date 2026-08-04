@@ -1,6 +1,18 @@
 /**
  * StonksCharacter — the hero, rebuilt.
  *
+ * WHAT DRIVES IT
+ * --------------
+ * In game this rig's joints are driven by TrickAnimator, which puts it in the KICK-PUSH stance:
+ * one knee on the seat pan, the other leg working the floor, both hands over the backrest's top
+ * edge. The poses in this file (`sit`, `stand`, ...) are the fallback for when no animator is
+ * attached — the model viewer, the debug cycler, and the frames before binding. Two consequences
+ * worth knowing before changing anything here:
+ *   - the joint OFFSETS (P.thigh, P.shin, P.shoulderX ...) are pose constraints for the animator's
+ *     solver, not styling; see the note on the thigh/shin ratio below;
+ *   - the constructor's pose is what TrickAnimator captures as the bind pose, because a
+ *     procedural rig has no skinning bind matrices to recover one from.
+ *
  * WHY THIS EXISTS
  * ---------------
  * The build previously used a Meshy.ai FBX mannequin: smooth-shaded, anatomically neutral, no
@@ -19,8 +31,8 @@
  *   - baked vertex-colour occlusion so every part has internal value range before lighting
  *   - a camera-relative Fresnel rim so the black slacks separate from the carpet
  *   - a real joint hierarchy driven procedurally: no animation clips to mislabel
- *   - two-bone IK on both arms, pinned to the chair's armrest sockets, so the grip contact from
- *     the concept art actually reads at gameplay distance
+ *   - two-bone IK on both arms; in game TrickAnimator re-solves them onto the backrest's real top
+ *     edge, so the grip contact from the concept art actually reads at gameplay distance
  *   - continuous lean/roll/bob/tie-flutter additives driven by speed and turn rate, so the
  *     "in motion" frame is not pixel-identical to the static one
  *
@@ -109,13 +121,24 @@ interface SkinSpec {
  */
 const SKINS: Record<CharacterSkin, SkinSpec> = {
   tony_stonks: {
-    shirt: 0xfbf8f0, skin: 0xcb8a55, hair: 0x2a1a12, tie: 0xc4202c,
-    dark: 0x464c5e, rim: 0xdbe6f7,
+    // TROUSERS. 0x464c5e was described in the table above as "dark charcoal, ~0.043 linear".
+    // It is not: 0x46/0x5e is a mid slate blue at 0.062..0.113 linear, and under this level's
+    // exposure (1.35) with a 0.56 rim on top it renders PALER THAN THE CHAIR. At follow distance
+    // that turned the legs and the shirt into one continuous light mass with no waistline, which
+    // is most of why the figure read as a standing blob. 0x1d2028 is the value the comment
+    // always claimed: three clear stops under the chair fabric and under the carpet.
+    //
+    // HAIR went the other way. 0x2a1a12 is so close to black that under the office key it is a
+    // hole in the head rather than a shape, and it needed a 0.42 rim to be visible at all, which
+    // then turned the whole cap pale. The concept art's hair is a mid warm brown; 0x4e3423 is
+    // that, and it reads as a distinct mass against both the white shirt and the ceiling.
+    shirt: 0xfbf8f0, skin: 0xcb8a55, hair: 0x4e3423, tie: 0xc4202c,
+    dark: 0x1d2028, rim: 0xdbe6f7,
   },
   // Second skin reads cooler and older: pale blue shirt, gold tie, iron-grey hair.
   stonks_guy: {
-    shirt: 0xd8e5f2, skin: 0xb47845, hair: 0x24262b, tie: 0xe0a129,
-    dark: 0x4e5163, rim: 0xe8dcc4,
+    shirt: 0xd8e5f2, skin: 0xb47845, hair: 0x3a3d45, tie: 0xe0a129,
+    dark: 0x212228, rim: 0xe8dcc4,
   },
 };
 
@@ -139,13 +162,17 @@ function makeMats(spec: SkinSpec): Mats {
   };
   const shirt = mk(spec.shirt, 0.76, 0.10);
   const skin = mk(spec.skin, 0.66, 0.16);
-  // Hair carries a strong rim on purpose: it is the darkest big shape on the character and it
-  // is what the follow camera looks straight at, so it needs an edge or it becomes a hole.
-  const hair = mk(spec.hair, 0.88, 0.42);
+  // Hair carries a rim on purpose: it is a dark shape and the follow camera looks straight at
+  // it, so it needs an edge or it becomes a hole. It does NOT need enough rim to turn the whole
+  // cap pale, which is what 0.42 did on a chamfered volume whose facets are mostly grazing.
+  const hair = mk(spec.hair, 0.88, 0.24);
   const tie = mk(spec.tie, 0.52, 0.18);
-  // The slacks are the darkest mass below the waist. The rim is what stops the lower half of
-  // the character dissolving into the chair, which is nearly the same value from behind.
-  const dark = mk(spec.dark, 0.68, 0.56);
+  // The slacks are the darkest mass below the waist, and A RIM IS NOT WHAT SEPARATES THEM.
+  // A Fresnel term on a chamfered low-poly limb catches nearly every facet — at 0.56 it lifted
+  // the whole leg to roughly the shirt's value, which is the exact opposite of what the value
+  // ladder above is for. The separation comes from the base colour now; the rim is back to a
+  // thin edge that keeps the silhouette off a dark carpet.
+  const dark = mk(spec.dark, 0.68, 0.12);
   return { shirt, skin, hair, tie, dark, all: [shirt, skin, hair, tie, dark] };
 }
 
