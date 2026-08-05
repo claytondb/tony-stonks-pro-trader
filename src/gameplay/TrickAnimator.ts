@@ -1018,13 +1018,20 @@ export class TrickAnimator {
   //   3. LEAN is then solved so the shoulders land `gripExtension` of an arm's length from the
   //      rail. Nothing else is free, so nothing else can set the elbow bend.
   //
-  // MEASURED on tier 1 with the shipped rider (tools/posepreview/probe.ts, coasting at 6 m/s):
-  //   pelvis      0.359 over the pan, 0.195 back from the seat anchor -> hips at y 0.919
-  //   planted knee(-0.203, 0.632, 0.060)  ON the cushion, 0.09 clear of the backrest face
-  //   planted shoe(-0.376, 0.600, -0.322) hanging in the air off the seat's rear outer corner
-  //   push shoe   ( 0.290, 0.295, -0.330) tucked at ~82% leg extension while coasting; the sole
-  //               goes flat on the carpet at a standstill and through the kick
-  //   both hands  on the rail at y 0.972, z 0.250, elbows at ~85% of full extension
+  // MEASURED on tier 1 with the shipped rider, chair-root frame, floor y = 0
+  // (`npx vite-node tools/posepreview/probe.ts -- 0 false`, i.e. stopped and coasting):
+  //   pelvis      0.255 over the pan, 0.282 back from the seat anchor -> hips at y 0.815
+  //   planted knee(-0.207, 0.619, 0.071)  ON the cushion: 59 mm over a pan top at 0.560, which
+  //               with a 66 mm shin radius is the shin's flesh 7 mm into the cushion. Inside the
+  //               pan's own footprint (x +-0.23, z -0.227..0.240) and 78 mm clear of the
+  //               backrest's seat-facing face at z 0.149.
+  //   planted shoe(-0.380, 0.549, -0.300) hanging in the air off the pan's rear outer corner,
+  //               418 mm above the carpet, sole tipped back at the chase camera
+  //   push shoe   ( 0.290, 0.136, -0.417) SOLE ON THE FLOOR (5 mm proud), hip-to-ankle 0.711 on
+  //               a 0.800 leg = 89% -> a knee that visibly breaks forward, at (0.265, 0.467)
+  //   both hands  wrists on the rail at y 0.972 (rail top 0.932 + 40 mm of grip), z 0.250,
+  //               shoulder-to-wrist 0.406 on a 0.478 arm = 85%: a bent but reaching arm
+  //   head        y 1.142, 0.21 above the top of the chair, facing down the direction of travel
   // Re-run that probe after touching ANY number in this block; every one of them moves the others.
   readonly config: AnimatorConfig = {
     rigForward: 1,
@@ -1046,7 +1053,7 @@ export class TrickAnimator {
 
     // A CEILING, not the answer: solveStance derives the real height from `thighPitch` and only
     // clamps against this so a rig with freakish leg lengths cannot launch the rider off the
-    // chair. On tier 1 with this rig the solve lands at 0.394.
+    // chair. On tier 1 with this rig the solve lands at 0.255, so this never binds.
     pelvisAboveSeat: 0.440,
     pelvisForward: -0.200,      // solved at bind time unless autoPelvis is off
     pelvisLateral: 0,
@@ -1061,13 +1068,37 @@ export class TrickAnimator {
     // down the centre line and the seat swallows it completely from every camera angle.
     kneeOutboard: 0.195,
     kneeOutboardMax: 0.205,     // tier-1 cushion is 0.23 half-wide; the bolster crest is 0.204
-    shinDroop: 0.02,
-    thighPitch: 0.85,
+    // 0.10, not 0.02: the shin has to visibly SLOPE OFF THE BACK of the pan.
+    // At 0.02 it ran dead level 40 mm above the cushion and the trailing shoe finished at seat
+    // height, which from behind reads as a leg sticking out sideways in mid-air rather than as a
+    // leg lying on a seat. Dropping the far end to just under the pan's own top plane — past its
+    // rear edge, so nothing intersects — gives the planted leg a shape that starts on the chair.
+    shinDroop: 0.10,
+    // 0.50 rad (29 deg) — MEASURED DOWN from 0.85 because 0.85 was reading as "standing".
+    //
+    // thighPitch is the one number that decides how high the pelvis rides, and every other part
+    // of the silhouette hangs off it:
+    //   0.85 rad put the pelvis 0.359 m over the pan, which is level with the TOP OF THE
+    //   BACKREST. From there the head clears the chair by 330 mm, the grip line is below his
+    //   hips, and — the tell that made four reviewers call this "a man standing behind a chair"
+    //   — the kicking leg has to span 0.756 m of air to reach the carpet on a 0.800 m leg. That
+    //   is 99.4% extension: a dead straight stilt, which is exactly what a standing leg is.
+    //   0.50 rad drops the pelvis to 0.255 m over the pan. The kicking leg then spans 0.685 m,
+    //   or 86% — a clearly bent knee, the single strongest "he is crouched over this thing
+    //   pushing it" cue available — and the hip settles back over the rear of the pan with the
+    //   shin under it, which is what kneeling on a seat actually looks like.
+    // The cost is 88 mm more distance to the rail, which solveLeanForGrip spends as forward
+    // torso lean (0.37 -> 0.49 rad). That is the right way to spend it: it is the scooter fold.
+    thighPitch: 0.50,
 
     backTopY: CHAIR_BACK_TOP_Y[1],
     backTopZ: CHAIR_BACK_TOP_Z[1],
     handsApart: CHAIR_BACK_GRIP_HALF_W[1],
-    gripRise: 0.040,
+    // 0.030: this rig has no hand joint, so the two-bone solve lands the WRIST here and the fist
+    // mesh continues ~33 mm further along the forearm. Measured on the built chair that puts the
+    // bottom of the fist within 3 mm of the rail's top plane, which is the contact the concept
+    // art sells. Raise it and the hands hover; drop it and the forearms sink into the panel.
+    gripRise: 0.030,
 
     ankleRise: 0.075,
     pushReach: 0.290,
@@ -2138,8 +2169,16 @@ export class TrickAnimator {
     this.setDirPitch(CHEST, lean * 1.05);
     this.setDirPitch(UPCHEST, lean * 1.00);
     // Head up and looking down the road, so the lean never buries his face in the backrest.
+    //
+    // The neck carries most of that counter-rotation, but THIS RIG HAS NO NECK JOINT (the
+    // procedural rider's head hangs straight off the chest), and an unbound slot silently
+    // absorbs whatever is written to it. Leave it there and the head keeps 0.75x of the torso's
+    // fold instead of 0.40x — at the ride lean that is a rider staring into the seat cushion,
+    // which is the difference between a face and a haircut at gameplay distance. So when the
+    // neck is missing, the head takes the neck's share as well.
     this.setDirPitch(NECK, -lean * 0.35);
-    this.addRot(HEAD, -0.03 - lean * 0.30, 0, 0);
+    const neckShare = this.slots[NECK] ? 0 : -lean * 0.35;
+    this.addRot(HEAD, -0.03 - lean * 0.30 + neckShare, 0, 0);
 
     const planted = this.plantedIndex();
     const push = this.pushIndex();
@@ -2343,7 +2382,12 @@ export class TrickAnimator {
 
     // --- airborne: fold it up under him ----------------------------------------------------
     if (this.airSm > 0.01) {
-      _v2.set(side * (c.pushApart * 0.75), -c.pelvisAboveSeat + 0.150, 0.090);
+      // Ankle 300 mm under the pelvis and just clear of the pan's rear edge: knee up and
+      // forward, heel in, at roughly 40% of full leg extension. Deliberately NOT expressed as
+      // `-pelvisAboveSeat + k`, which is how it used to read: that ties the tuck to how high the
+      // rider kneels, so lowering the kneel silently pulled the ankle up into the pelvis and the
+      // ollie folded the leg flat instead of tucking it.
+      _v2.set(side * (c.pushApart * 0.85), -0.300, 0.020);
       _v1.lerp(_v2, this.airSm);
       toeDown += 0.25 * this.airSm;
     }

@@ -186,9 +186,144 @@ const bayStaging = (pitch: number): LevelObject[] => {
   ];
 };
 
+// ===========================================================================
+// THE HOLDING PENS — the thing that was actually ending every line.
+//
+// Measured, with ScoreSystem instrumented inside the play harness: EVERY combo
+// break in a 20 s probe of story_2 and story_5 was `bail('police')`. Not a
+// lapsed combo clock, not a blown balance, not a collision — an officer's
+// 1.75 m catch radius. Removing the squad from the harness (and changing
+// nothing else) took story_2 from 8.6 s to 19.2 s and story_5 from 7.7 s to
+// 19.3 s, in one unbroken line each. The rail spacing in this file was never
+// the problem; the police were standing on it.
+//
+// Game.spawnPolice() drops four officers on a 17 m ring around the LEVEL'S
+// SPAWN POINT, at four fixed bearings 90 degrees apart, each patrolling a chord
+// back across the middle of that ring. On the open floorplates in this file
+// that is four mines wandering the skate floor, and at the 15-19 m/s these
+// levels actually run at the player blunders into one every five to eight
+// seconds. Note what that means for the author: the squad's position is a
+// function of `spawnPoint`, so it IS level design, and it is the only handle
+// this file has on it.
+//
+// ch1_office survives the identical squad — 17-25 s lines — purely by accident
+// of its floorplan: the cubicle block between the corridors breaks the
+// officers' line of sight, and an officer who never reaches the CHASING state
+// cannot catch you at all (PoliceAI: the catch test lives in `case 'chasing'`).
+// Their view cone is 24 m, and the line-of-sight ray is a real physics ray.
+//
+// So every patrol post that lands on the skate floor gets a blockhouse built on
+// it. The officer starts inside a solid box with no sightline — the ch1_office
+// condition, reproduced deliberately instead of by luck — and the level keeps
+// its squad, its chase fiction and its arrest, instead of having the police
+// deleted. Posts that land outside the floorplate are left alone: those
+// officers are already behind a wall or off the plate, and they read as the
+// cordon closing in from outside.
+// ===========================================================================
+
+/** Radius of the patrol ring Game.spawnPolice() builds around the spawn point. */
+const POLICE_RING = 17;
+
+/**
+ * The four patrol posts Game.spawnPolice() derives from a spawn point. Kept in
+ * lockstep with it by construction: same radius, same 0.4 rad bearing offset,
+ * same four quarters.
+ */
+const policePosts = (sx: number, sz: number): [number, number][] =>
+  [0, 1, 2, 3].map((i) => {
+    const a = (i / 4) * Math.PI * 2 + 0.4;
+    return [sx + Math.cos(a) * POLICE_RING, sz + Math.sin(a) * POLICE_RING] as [number, number];
+  });
+
+/**
+ * A blockhouse on each patrol post that lands INSIDE the skate floor. From a
+ * spawn tucked into a corner — which is where every level in this file spawns —
+ * that is one or two of the four; the other posts are already off the plate.
+ * The four bearings are fixed and 90 degrees apart, so no spawn point anywhere
+ * inside a square floorplate can push all four off it. That is why this exists
+ * rather than a cleverer spawn.
+ *
+ * `reach` is how far out a post still needs penning, and it is NOT the same
+ * number indoors and out. Indoors it is the skate floor: an officer posted
+ * beyond the room's wall has no line of sight into it and never leaves patrol.
+ * Outdoors there is no wall, and a post 6 m past the last lane is an officer who
+ * strolls onto the floorplate and takes the line at t = 7.2 s — measured, on
+ * story_5, with the on-floor post already penned. Outdoor levels therefore pass
+ * the whole ground plate.
+ *
+ * `size` is deliberately small (4 m). It has to be big enough to break a
+ * sightline from inside it and small enough that a run which does hit it is a
+ * clip, not a wall.
+ */
+const holdingPens = (
+  spawn: [number, number],
+  reach: number,
+  kind: 'wall_indoor' | 'building_small',
+  size = 4,
+  height = 4,
+): LevelObject[] =>
+  policePosts(spawn[0], spawn[1])
+    .filter(([x, z]) => Math.abs(x) < reach && Math.abs(z) < reach)
+    .map(([x, z]) =>
+      kind === 'wall_indoor'
+        ? {
+            type: 'wall_indoor' as const,
+            position: [x, height / 2, z] as [number, number, number],
+            params: { width: size, height, depth: size },
+          }
+        : {
+            type: 'building_small' as const,
+            position: [x, 0, z] as [number, number, number],
+            params: { width: size, depth: size, height },
+          },
+    );
+
+/** Ground footprint of a staged object, for the keep-out test below. */
+const footprint = (o: LevelObject): { x0: number; x1: number; z0: number; z1: number } => {
+  const [px, , pz] = o.position;
+  if (o.type === 'rail' || o.type === 'rail_angled' || o.type === 'rail_curved') {
+    // Matches Game.createLevelObject's endpoint maths exactly.
+    const rad = ((o.rotation?.[1] ?? 0) * Math.PI) / 180;
+    const h = ((o.params?.length as number) ?? 10) / 2;
+    const dx = Math.abs(Math.cos(rad) * h);
+    const dz = Math.abs(Math.sin(rad) * h);
+    return { x0: px - dx, x1: px + dx, z0: pz - dz, z1: pz + dz };
+  }
+  if (o.type === 'fun_box') {
+    const w = ((o.params?.width as number) ?? 6) / 2;
+    const d = ((o.params?.depth as number) ?? 4) / 2;
+    return { x0: px - w, x1: px + w, z0: pz - d, z1: pz + d };
+  }
+  // Kickers: RAMP_W 3.4 by RAMP_D 1.8, any yaw — treat as the circumscribed square.
+  return { x0: px - 1.7, x1: px + 1.7, z0: pz - 1.7, z1: pz + 1.7 };
+};
+
+/**
+ * Drop anything that would be buried in a blockhouse. A rail inside a wall is a
+ * grind that drives the player into it, and a kicker against one is a launch
+ * into masonry. The grid is dense enough (5-6 m lane pitch) that losing a
+ * segment or two around a 4 m box reads as the lift core interrupting a desk
+ * row, and the parallel lane 5 m over still catches the run.
+ */
+const clearOf = (objs: LevelObject[], pens: LevelObject[], pad = 0.9): LevelObject[] => {
+  const rects = pens.map((p) => ({
+    x: p.position[0],
+    z: p.position[2],
+    s: ((p.params?.width as number) ?? 4) / 2 + pad,
+  }));
+  return objs.filter((o) => {
+    const b = footprint(o);
+    return !rects.some(
+      (r) => b.x1 > r.x - r.s && b.x0 < r.x + r.s && b.z1 > r.z - r.s && b.z0 < r.z + r.s,
+    );
+  });
+};
+
 // ===========================================
 // CHAPTER 1: THE ESCAPE
 // ===========================================
+
+const LEVEL_1_PENS = holdingPens([-20, -22], 28.5, 'wall_indoor');
 
 const LEVEL_1_OFFICE: StoryLevelData = {
   id: 'story_1_office',
@@ -251,11 +386,14 @@ const LEVEL_1_OFFICE: StoryLevelData = {
     { type: 'ceiling_panel', position: [17.5, 11.5, 17.5], params: { width: 8, depth: 1.2 } },
     { type: 'ceiling_panel', position: [2.5, 11.5, 2.5], params: { width: 8, depth: 1.2 } },
 
-    // ---- desk rows and counter runs, 5 m apart on both axes ---------------
-    ...skateFloor(30, 5, 15),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(30, 5, 15), ...bayStaging(5)], LEVEL_1_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(5),
+    // ---- the server cabinet the aisle bends around: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_1_PENS,
 
     // ---- scenery, all of it on bay centres ---------------------------------
     { type: 'cubicle', position: [-27.5, 0, -12.5], params: { width: 3, depth: 3, height: 1.5 } },
@@ -305,6 +443,8 @@ const LEVEL_1_OFFICE: StoryLevelData = {
     'SEC AGENT: He\'s heading down! All units to the stairwell!'
   ]
 };
+
+const LEVEL_2_PENS = holdingPens([-15, -18], 22.5, 'wall_indoor');
 
 const LEVEL_2_STAIRWELL: StoryLevelData = {
   id: 'story_2_stairwell',
@@ -359,11 +499,14 @@ const LEVEL_2_STAIRWELL: StoryLevelData = {
     { type: 'ceiling_panel', position: [12.5, 9.5, 12.5], params: { width: 8, depth: 1.2 } },
     { type: 'ceiling_panel', position: [2.5, 9.5, 2.5], params: { width: 8, depth: 1.2 } },
 
-    // ---- handrails: the whole core is switchback rail, 5 m apart ----------
-    ...skateFloor(24, 5, 12),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(24, 5, 12), ...bayStaging(5)], LEVEL_2_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(5),
+    // ---- the lift core the switchbacks wrap: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_2_PENS,
 
     // ---- landings, stairs and litter, all on bay centres -------------------
     { type: 'stairs', position: [-17.5, 0, -17.5], rotation: [0, 45, 0], params: { steps: 3 } },
@@ -390,6 +533,8 @@ const LEVEL_2_STAIRWELL: StoryLevelData = {
     'TONY: These chair wheels were made for grinding!'
   ]
 };
+
+const LEVEL_3_PENS = holdingPens([-18.75, -22], 28.5, 'wall_indoor');
 
 const LEVEL_3_LOBBY: StoryLevelData = {
   id: 'story_3_lobby',
@@ -446,11 +591,14 @@ const LEVEL_3_LOBBY: StoryLevelData = {
     { type: 'wall_indoor', position: [31, 7, 0], rotation: [0, 90, 0], params: { width: 62, height: 14, depth: 1 } },
     { type: 'wall_indoor', position: [-31, 7, 0], rotation: [0, 90, 0], params: { width: 62, height: 14, depth: 1 } },
 
-    // ---- reception counters, balustrades and the fountain rim -------------
-    ...skateFloor(30, 5, 15),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(30, 5, 15), ...bayStaging(5)], LEVEL_3_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(5),
+    // ---- the security desk island: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_3_PENS,
 
     // ---- columns, benches and planters, on bay centres ---------------------
     { type: 'planter', position: [-27.5, 0, -12.5] },
@@ -492,6 +640,8 @@ const LEVEL_3_LOBBY: StoryLevelData = {
     'TONY: Try and catch me!'
   ]
 };
+
+const LEVEL_4_PENS = holdingPens([-28, -34], 40, 'building_small');
 
 const LEVEL_4_HIGHWAY: StoryLevelData = {
   id: 'story_4_highway',
@@ -546,11 +696,14 @@ const LEVEL_4_HIGHWAY: StoryLevelData = {
   ],
 
   objects: [
-    // ---- jersey barriers, kerbs and the central reservation ---------------
-    ...skateFloor(38, 6, 16),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(38, 6, 16), ...bayStaging(6)], LEVEL_4_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(6),
+    // ---- the gantry pier: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_4_PENS,
 
     // ---- stopped traffic and roadworks, parked on bay centres --------------
     { type: 'car', position: [-27, 0, -21], rotation: [0, 90, 0] },
@@ -588,6 +741,8 @@ const LEVEL_4_HIGHWAY: StoryLevelData = {
     'TONY: Just need to get to my house and grab my go-bag!'
   ]
 };
+
+const LEVEL_5_PENS = holdingPens([-24.5, -17.5], 34, 'building_small');
 
 const LEVEL_5_HOME: StoryLevelData = {
   id: 'story_5_home',
@@ -635,11 +790,14 @@ const LEVEL_5_HOME: StoryLevelData = {
   ],
 
   objects: [
-    // ---- fence lines, kerbs and deck edges --------------------------------
-    ...skateFloor(28, 5, 14),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(28, 5, 14), ...bayStaging(5)], LEVEL_5_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(5),
+    // ---- the garden studio: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_5_PENS,
 
     // ---- Tony's house and the FBI, both parked outside the skate floor -----
     { type: 'building_wide', position: [0, 0, -31], params: { width: 24, depth: 5, height: 8 } },
@@ -683,6 +841,8 @@ const LEVEL_5_HOME: StoryLevelData = {
     'TONY: Through the backyard and into the forest!'
   ]
 };
+
+const LEVEL_6_PENS = holdingPens([-28, -20], 36, 'building_small');
 
 const LEVEL_6_FOREST: StoryLevelData = {
   id: 'story_6_forest',
@@ -743,11 +903,14 @@ const LEVEL_6_FOREST: StoryLevelData = {
   ],
 
   objects: [
-    // ---- fallen logs, in runs you can chain -------------------------------
-    ...skateFloor(32, 6, 16),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(32, 6, 16), ...bayStaging(6)], LEVEL_6_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(6),
+    // ---- the ranger hut: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_6_PENS,
 
     // ---- the wood. Tree colliders are a 1 m box floating at y = 2.5, the one
     // prop in the game that cannot end a line, so the forest can be dense.
@@ -792,6 +955,8 @@ const LEVEL_6_FOREST: StoryLevelData = {
     'TONY: Tricks give me speed boosts - time to show off!'
   ]
 };
+
+const LEVEL_7_PENS = holdingPens([-32, -28], 42, 'building_small');
 
 const LEVEL_7_TRAINYARD: StoryLevelData = {
   id: 'story_7_trainyard',
@@ -851,11 +1016,14 @@ const LEVEL_7_TRAINYARD: StoryLevelData = {
   ],
 
   objects: [
-    // ---- running lines and crossovers -------------------------------------
-    ...skateFloor(38, 6, 18),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(38, 6, 18), ...bayStaging(6)], LEVEL_7_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(6),
+    // ---- the signal box: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_7_PENS,
 
     // ---- flat wagons: low decks you ride along, not blocks you hit ---------
     funbox(-21, -15, 4.4, 16, 0.4),
@@ -895,6 +1063,8 @@ const LEVEL_7_TRAINYARD: StoryLevelData = {
     'TONY: If I can catch it, I\'m home free!'
   ]
 };
+
+const LEVEL_8_PENS = holdingPens([-28, -24], 38, 'building_small');
 
 const LEVEL_8_ROOFTOPS: StoryLevelData = {
   id: 'story_8_rooftops',
@@ -954,11 +1124,14 @@ const LEVEL_8_ROOFTOPS: StoryLevelData = {
   ],
 
   objects: [
-    // ---- parapets, cable trays and duct runs ------------------------------
-    ...skateFloor(34, 6, 16),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(34, 6, 16), ...bayStaging(6)], LEVEL_8_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(6),
+    // ---- the rooftop plant room: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_8_PENS,
 
     // ---- the helipad, in the east bay where the escape zone sits -----------
     funbox(28.25, 0, 4.4, 14, 0.4),
@@ -998,6 +1171,8 @@ const LEVEL_8_ROOFTOPS: StoryLevelData = {
     '🚁 PILOT: *radio* Mr. Stonks, hurry! They\'re closing in!'
   ]
 };
+
+const LEVEL_9_PENS = holdingPens([-26.25, -22], 32, 'building_small');
 
 const LEVEL_9_FINALE: StoryLevelData = {
   id: 'story_9_finale',
@@ -1057,11 +1232,14 @@ const LEVEL_9_FINALE: StoryLevelData = {
   ],
 
   objects: [
-    // ---- the gauntlet -----------------------------------------------------
-    ...skateFloor(30, 5, 15),
+    // ---- the lanes, and the kickers and pads staged on the bay centres
+    // between them. Anything that would end up buried in a blockhouse is
+    // dropped rather than left inside it.
+    ...clearOf([...skateFloor(30, 5, 15), ...bayStaging(5)], LEVEL_9_PENS),
 
-    // ---- kickers and pads, staged on the bay centres between lanes ---------
-    ...bayStaging(5),
+    // ---- the plaza service block: a blockhouse standing on the police patrol post
+    // that lands inside the floorplate. See THE HOLDING PENS above.
+    ...LEVEL_9_PENS,
 
     // ---- the helipad, in the east bay --------------------------------------
     funbox(27.5, 0, 3.4, 14, 0.4),
