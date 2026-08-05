@@ -261,6 +261,15 @@ export class LandingParticles {
     this.groundY = y;
   }
 
+  /**
+   * Surface height under a chair whose ORIGIN is at `y`. The Rapier capsule centres the body
+   * 0.7 m above the caster contact patch, so using groundY directly put the dust and the
+   * shockwave ring on the floor slab even when the landing happened on top of a 1 m ledge.
+   */
+  private surfaceUnder(y: number): number {
+    return Math.max(this.groundY, y - 0.7);
+  }
+
   // =========================================================================
   // Emitters
   // =========================================================================
@@ -272,7 +281,7 @@ export class LandingParticles {
    */
   spawn(position: THREE.Vector3, intensity: number = 0.5): void {
     const t = Math.max(0, Math.min(1, intensity));
-    const floor = Math.min(position.y, this.groundY + 0.02);
+    const floor = this.surfaceUnder(position.y);
     const n = Math.floor(10 + t * 22);
 
     for (let k = 0; k < n; k++) {
@@ -300,7 +309,7 @@ export class LandingParticles {
     // A real landing rings the floor. Below ~a half-height drop it does not, so the ring
     // stays meaningful instead of firing on every hop.
     if (t > 0.32) {
-      this.ring(position.x, floor + 0.03, position.z, 0.5, 1.6 + t * 2.6, 0.55 + t * 0.35, 0.92, 0.88, 0.78, 0.42 + t * 0.3);
+      this.ring(position.x, floor + 0.03, position.z, 0.4, 1.2 + t * 1.8, 0.5 + t * 0.3, 0.92, 0.88, 0.78, 0.45 + t * 0.3);
       // A hard landing also throws a few hot scuff motes.
       const m = Math.floor(t * 12);
       for (let k = 0; k < m; k++) {
@@ -379,12 +388,12 @@ export class LandingParticles {
       this.motes.scale[i] = 0.022 + Math.random() * 0.024;
       this.motes.grow[i] = -0.25;
       if (Math.random() < 0.35) {
-        this.motes.cr[i] = 3.6; this.motes.cg[i] = 2.7; this.motes.cb[i] = 0.6;   // gold
+        this.motes.cr[i] = 2.6; this.motes.cg[i] = 1.9; this.motes.cb[i] = 0.45;  // gold
       } else {
-        this.motes.cr[i] = 0.5; this.motes.cg[i] = 3.4; this.motes.cb[i] = 1.1;   // stonks green
+        this.motes.cr[i] = 0.14; this.motes.cg[i] = 2.0; this.motes.cb[i] = 0.5;  // stonks green
       }
     }
-    this.ring(position.x, this.groundY + 0.04, position.z, 0.6, 2.4 + t * 3.0, 0.7, 0.55, 3.0, 1.0, 0.75);
+    this.ring(position.x, this.surfaceUnder(position.y) + 0.04, position.z, 0.5, 1.6 + t * 1.8, 0.65, 0.10, 1.35, 0.34, 0.9);
   }
 
   /**
@@ -405,7 +414,7 @@ export class LandingParticles {
       this.motes.life[i] = ml; this.motes.maxLife[i] = ml;
       this.motes.scale[i] = 0.028 + Math.random() * 0.03;
       this.motes.grow[i] = 0.2;
-      this.motes.cr[i] = 4.2; this.motes.cg[i] = 0.55; this.motes.cb[i] = 0.22;   // alarm red
+      this.motes.cr[i] = 2.6; this.motes.cg[i] = 0.32; this.motes.cb[i] = 0.12;   // alarm red
     }
     for (let k = 0; k < 14; k++) {
       const i = this.dust.alloc();
@@ -413,7 +422,7 @@ export class LandingParticles {
       const a = Math.random() * Math.PI * 2;
       const s = 1.6 + Math.random() * 2.6;
       this.dust.px[i] = position.x + Math.cos(a) * 0.2;
-      this.dust.py[i] = Math.max(this.groundY + 0.08, position.y - 0.5);
+      this.dust.py[i] = this.surfaceUnder(position.y) + 0.08;
       this.dust.pz[i] = position.z + Math.sin(a) * 0.2;
       this.dust.vx[i] = Math.cos(a) * s; this.dust.vy[i] = 0.3 + Math.random(); this.dust.vz[i] = Math.sin(a) * s;
       this.dust.grav[i] = -2.2; this.dust.drag[i] = 2.8;
@@ -424,7 +433,7 @@ export class LandingParticles {
       this.dust.cr[i] = 0.62; this.dust.cg[i] = 0.5; this.dust.cb[i] = 0.44;
     }
     // Fast, tight, red: a slap rather than a bloom.
-    this.ring(position.x, this.groundY + 0.03, position.z, 0.4, 2.2, 0.36, 3.2, 0.35, 0.2, 0.85);
+    this.ring(position.x, this.surfaceUnder(position.y) + 0.03, position.z, 0.35, 1.8, 0.34, 1.35, 0.10, 0.05, 0.95);
   }
 
   /** Fire one shockwave ring. Oldest is recycled. */

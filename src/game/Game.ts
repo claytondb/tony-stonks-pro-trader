@@ -20,7 +20,7 @@ import { TrickAnimator } from '../gameplay/TrickAnimator';
 import { DestructibleManager, scatterDestructibles, type DestructibleDef, type SmashEvent } from '../gameplay/Destructibles';
 import { PoliceSquad, type SquadEvent } from '../gameplay/PoliceAI';
 import { PaperStorm } from '../vfx/PaperStorm';
-import { HUD } from '../ui/HUD';
+import { HUD, minimapFootprints } from '../ui/HUD';
 import { PlayerModel } from '../player/PlayerModel';
 import { proceduralSounds } from '../audio/ProceduralSounds';
 import { soundManager } from '../audio/SoundManager';
@@ -384,6 +384,10 @@ export class Game {
     // Camera controller
     this.cameraController = new CameraController(this.camera);
     this.cameraController.setupMouseControls(this.canvas);
+    // Boom collision: the camera asks the physics world whether a wall is between it and
+    // the rider. Deferred through a closure because physics/chairBody do not exist yet.
+    this.cameraController.setOcclusionProbe((origin, dir, maxDist) =>
+      this.physics?.probeDirection(origin, dir, maxDist, this.chairBody)?.distance ?? null);
   }
 
   /**
@@ -492,6 +496,7 @@ export class Game {
       case 'bail': {
         proceduralSounds.playBail();
         this.cameraController.shake(0.8, 0.4);
+        this.cameraController.startBail();
         break;
       }
 
@@ -1966,6 +1971,7 @@ export class Game {
 
     // Reset HUD
     this.hud?.reset();
+    this.hud?.setMinimapLayout(minimapFootprints(this.levelObjects));
     this.hud?.setScore(this.score.balance);
     this.hud?.setGoals(this.goals ? this.goals.progress : []);
     this.goalHudTimer = 0;
@@ -3532,14 +3538,17 @@ export class Game {
 
     this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);
     this.hud?.setSpeed(currentSpeed);
+    this.hud?.setMinimapPlayer(this.chair.position.x, this.chair.position.z, this.chair.rotation.y);
     this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
     this.cameraController.setTrickZoom(this.playerState.isAirborne, this.playerState.airTime);
+    this.cameraController.setManualing(this.playerState.isManualing);
 
     // ---- 11. HUD COMBO + BALANCE ------------------------------------------------------
     const comboState = this.score.state;
     this.hud?.setComboState(comboState.open ? comboState : null);
 
     if (this.balance.isActive) {
+      this.hud?.setBalanceMode(this.balance.state.mode);
       this.hud?.setBalanceVisible(true);
       this.hud?.setBalance(this.balance.balance01);
     } else {

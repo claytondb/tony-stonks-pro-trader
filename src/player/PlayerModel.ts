@@ -246,14 +246,23 @@ export class PlayerModel {
       ankleL: 'LeftFoot', ankleR: 'RightFoot',
     };
 
+    // Collect the joints AS WE RENAME THEM.
+    //
+    // This used to rename every joint, flag it isBone, and then return `bones: new Map()` — an
+    // empty map. TrickAnimator therefore bound zero joints and silently posed nothing, which is
+    // why four separate attempts at authoring the kneeling pose produced no visible change: the
+    // pose code was correct and was being handed an empty rig. The rider stayed in whatever
+    // default stance StonksCharacter built him in.
+    const bones = new Map<string, THREE.Bone>();
     root.traverse((o) => {
       const to = RENAME[o.name];
       if (!to) return;
       o.name = to;
       (o as THREE.Object3D & { isBone?: boolean }).isBone = true;
+      bones.set(to, o as unknown as THREE.Bone);
     });
 
-    return { model: root, mixer: null, clips: new Map(), bones: new Map(), chairRoot };
+    return { model: root, mixer: null, clips: new Map(), bones, chairRoot };
   }
 
   getCurrentAnimation(): AnimationName | null {

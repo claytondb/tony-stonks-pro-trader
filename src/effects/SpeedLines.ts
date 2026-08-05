@@ -24,16 +24,49 @@
 import * as THREE from 'three';
 
 const MAX_LINES = 112;
+const VERTS_PER_LINE = 6;   // two triangles
+
+/**
+ * WHY QUADS AND NOT `LineSegments`: a GL line is ONE PIXEL wide on every desktop driver
+ * (lineWidth > 1 is a no-op in core WebGL). Measured on the 1600x900 capture, forty live
+ * streaks at maxColor 1.22 were mathematically present and visually invisible against a
+ * bright office. A streak has to have WIDTH to read, and width has to grow with speed, so
+ * each streak is a tapered camera-space quad instead.
+ */
+const RIBBON_VERT = /* glsl */`
+attribute float aEdge;      // -1..1 across the ribbon
+attribute float aFade;      // 1 at the hot end, 0 at the tail
+varying float vEdge;
+varying float vFade;
+varying vec3 vColor;
+void main() {
+  vEdge = aEdge;
+  vFade = aFade;
+  vColor = color;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+}`;
+
+const RIBBON_FRAG = /* glsl */`
+varying float vEdge;
+varying float vFade;
+varying vec3 vColor;
+void main() {
+  // Soft across the width, soft along the length: a streak with hard edges reads as a
+  // polygon, and the eye notices polygons.
+  float w = 1.0 - vEdge * vEdge;
+  float a = w * w * vFade;
+  if ( a < 0.003 ) discard;
+  gl_FragColor = vec4( vColor * a, 1.0 );
+}`;
 
 const _startLocal = new THREE.Vector3();
-const _endLocal = new THREE.Vector3();
 const _camPos = new THREE.Vector3();
 const _camQuat = new THREE.Quaternion();
 
 export class SpeedLines {
   private geometry: THREE.BufferGeometry;
-  private material: THREE.LineBasicMaterial;
-  private lineSegments: THREE.LineSegments;
+  private material: THREE.ShaderMaterial;
+  private lineSegments: THREE.Mesh;
   private camera: THREE.Camera;
 
   // --- pooled line state (flat arrays, swap-removed) ------------------------
@@ -54,7 +87,7 @@ export class SpeedLines {
   private readonly SPEED_KNEE = 11.0;    // where the effect starts to bite
   private readonly SPEED_FULL = 19.0;    // everything maxed
   private readonly LINE_LIFETIME = 0.19;
-  private readonly SPAWN_RATE = 260;     // lines/second at full intensity
+  private readonly SPAWN_RATE = 150;     // lines/second at full intensity
 
   private spawnAccumulator = 0;
   private currentIntensity = 0;          // 0-1, smoothed
@@ -63,27 +96,45 @@ export class SpeedLines {
   constructor(camera: THREE.Camera) {
     this.camera = camera;
 
+    const n = MAX_LINES * VERTS_PER_LINE;
     this.geometry = new THREE.BufferGeometry();
-    this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_LINES * 6), 3));
-    this.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_LINES * 6), 3));
+    this.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    this.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    this.geometry.setAttribute('aEdge', new THREE.BufferAttribute(new Float32Array(n), 1));
+    this.geometry.setAttribute('aFade', new THREE.BufferAttribute(new Float32Array(n), 1));
+    this.geometry.setDrawRange(0, 0);
 
-    this.material = new THREE.LineBasicMaterial({
+    // Per-vertex constants: the two triangles of each quad, hot end -> tail.
+    const edge = this.geometry.attributes.aEdge.array as Float32Array;
+    const fade = this.geometry.attributes.aFade.array as Float32Array;
+    for (let i = 0; i < MAX_LINES; i++) {
+      const b = i * VERTS_PER_LINE;
+      // tri 1: hot-left, hot-right, tail-left   tri 2: hot-right, tail-right, tail-left
+      edge[b] = -1; edge[b + 1] = 1; edge[b + 2] = -1;
+      edge[b + 3] = 1; edge[b + 4] = 1; edge[b + 5] = -1;
+      fade[b] = 1; fade[b + 1] = 1; fade[b + 2] = 0;
+      fade[b + 3] = 1; fade[b + 4] = 0; fade[b + 5] = 0;
+    }
+
+    this.material = new THREE.ShaderMaterial({
+      vertexShader: RIBBON_VERT,
+      fragmentShader: RIBBON_FRAG,
       vertexColors: true,
       transparent: true,
-      opacity: 0.9,
       toneMapped: false,
       fog: false,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       depthTest: false,   // always on top
+      side: THREE.DoubleSide,
     });
 
-    this.lineSegments = new THREE.LineSegments(this.geometry, this.material);
+    this.lineSegments = new THREE.Mesh(this.geometry, this.material);
     this.lineSegments.frustumCulled = false;
     this.lineSegments.renderOrder = 999;
   }
 
-  getMesh(): THREE.LineSegments {
+  getMesh(): THREE.Mesh {
     return this.lineSegments;
   }
 
@@ -110,16 +161,25 @@ export class SpeedLines {
 
     // As speed builds the streaks encroach from the frame edge toward the centre — the
     // single strongest cue that the world is being pulled past the camera.
-    const minRadius = 0.62 - intensity * 0.28;
+    const minRadius = 0.70 - intensity * 0.24;
     const radiusT = Math.pow(Math.random(), 0.5);   // bias toward the outer edge
-    const radius = minRadius + radiusT * (1.06 - minRadius);
+    // Cap at 0.95 rather than 1.06: beyond ~1.0 the streak spawns OUTSIDE the frustum and
+    // dies before it ever crosses the frame, which is how a 165 lines/second effect ends up
+    // showing three streaks in a still.
+    const radius = minRadius + radiusT * (0.95 - minRadius);
 
     // Derive the extent from the LIVE camera so the streaks stay pinned to the frame edge
     // through the whole speed-driven FOV ramp instead of drifting inward as the lens widens.
-    const distance = 2;
+    //
+    // THE Z SIGN IS NOT COSMETIC. Camera space in three.js looks down NEGATIVE Z. Every
+    // previous version of this file placed the streaks at z = +2 — i.e. two metres BEHIND
+    // the lens — so they projected past the far plane (measured NDC z = 1.245) and were
+    // clipped. The effect has been running, spawning and updating for its whole life while
+    // drawing nothing. This is why "speed lines" never showed up in any capture.
+    const distance = -2;
     const cam = this.camera as THREE.PerspectiveCamera;
     const halfH = cam.isPerspectiveCamera
-      ? distance * Math.tan(THREE.MathUtils.degToRad(cam.fov) * 0.5)
+      ? Math.abs(distance) * Math.tan(THREE.MathUtils.degToRad(cam.fov) * 0.5)
       : 1.1;
     const halfW = halfH * (cam.isPerspectiveCamera ? cam.aspect : 1.78);
 
@@ -127,13 +187,14 @@ export class SpeedLines {
     const sa = Math.sin(angle);
     this.lx[i] = ca * radius * halfW;
     this.ly[i] = sa * radius * halfH;
-    this.lz[i] = distance;
+    this.lz[i] = distance;   // negative: in FRONT of the camera
 
-    // Streaks rush INWARD and past the camera; faster at high intensity.
+    // Streaks rush INWARD and toward the lens; faster at high intensity. +Z here means
+    // "closer to the camera", since the streak plane sits at negative z.
     const inward = (7 + Math.random() * 5) * (0.7 + intensity * 1.1);
     this.vx[i] = -ca * inward;
     this.vy[i] = -sa * inward;
-    this.vz[i] = inward * 0.55;
+    this.vz[i] = inward * 0.30;
 
     this.len[i] = (0.11 + intensity * intensity * 0.52) * (0.75 + Math.random() * 0.5);
     const ml = this.LINE_LIFETIME * (0.75 + Math.random() * 0.5);
@@ -183,7 +244,8 @@ export class SpeedLines {
       this.ly[i] += this.vy[i] * dt;
       this.lz[i] += this.vz[i] * dt;
       this.life[i] -= dt;
-      if (this.life[i] <= 0) this.remove(i);
+      // Retire before a streak can cross the lens plane and wrap around behind the camera.
+      if (this.life[i] <= 0 || this.lz[i] > -0.45) this.remove(i);
     }
 
     this.updateGeometry();
@@ -196,54 +258,61 @@ export class SpeedLines {
     this.camera.getWorldPosition(_camPos);
     this.camera.getWorldQuaternion(_camQuat);
 
+    // Streak width grows with intensity: at a cruise these are hairlines, flat out they are
+    // bars. Width is in camera-space units at the reference plane |z| = 2 and is scaled per
+    // streak by its own depth, so a streak sweeping past the lens keeps a roughly constant
+    // SCREEN width instead of ballooning into a white slab.
+    const halfW = 0.003 + this.currentIntensity * this.currentIntensity * 0.010;
+
     const n = this.count;
     for (let i = 0; i < n; i++) {
-      const b = i * 6;
+      const b = i * VERTS_PER_LINE;
       const lifeRatio = this.life[i] / this.maxLife[i];
+      const ca = Math.cos(this.ang[i]);
+      const sa = Math.sin(this.ang[i]);
+      // Perpendicular to the streak, in the camera plane.
+      const wScale = Math.min(1.6, Math.abs(this.lz[i]) * 0.5);
+      const nx = -sa * halfW * wScale;
+      const ny = ca * halfW * wScale;
 
-      _startLocal.set(this.lx[i], this.ly[i], this.lz[i]);
-      _endLocal.set(
-        this.lx[i] + Math.cos(this.ang[i]) * this.len[i],
-        this.ly[i] + Math.sin(this.ang[i]) * this.len[i],
-        this.lz[i],
-      );
-      _startLocal.applyQuaternion(_camQuat).add(_camPos);
-      _endLocal.applyQuaternion(_camQuat).add(_camPos);
+      // Hot (inner) end and tail (outer) end.
+      const hx = this.lx[i], hy = this.ly[i], hz = this.lz[i];
+      const tx = hx + ca * this.len[i];
+      const ty = hy + sa * this.len[i];
 
-      positions[b] = _startLocal.x;
-      positions[b + 1] = _startLocal.y;
-      positions[b + 2] = _startLocal.z;
-      positions[b + 3] = _endLocal.x;
-      positions[b + 4] = _endLocal.y;
-      positions[b + 5] = _endLocal.z;
+      // 0: hot-left  1: hot-right  2: tail-left  3: hot-right  4: tail-right  5: tail-left
+      this.writeVert(positions, b + 0, hx - nx, hy - ny, hz);
+      this.writeVert(positions, b + 1, hx + nx, hy + ny, hz);
+      this.writeVert(positions, b + 2, tx - nx, ty - ny, hz);
+      this.writeVert(positions, b + 3, hx + nx, hy + ny, hz);
+      this.writeVert(positions, b + 4, tx + nx, ty + ny, hz);
+      this.writeVert(positions, b + 5, tx - nx, ty - ny, hz);
 
       // Brightness is superlinear in intensity and goes over 1 at the top, so the streaks
       // themselves start to halate in the bloom pass right when the player is flat out.
-      const fade = lifeRatio * lifeRatio;
-      const bright = fade * this.currentIntensity * (0.55 + this.currentIntensity * 1.15);
-
-      // Inner end hot and near-white, outer end cooling to nothing: each streak has a
-      // direction, so the frame reads radially instead of as a ring of even dashes.
-      colors[b] = 1.00 * bright;
-      colors[b + 1] = 0.97 * bright;
-      colors[b + 2] = 0.92 * bright;
-      colors[b + 3] = 0.22 * bright;
-      colors[b + 4] = 0.20 * bright;
-      colors[b + 5] = 0.18 * bright;
-    }
-
-    for (let i = n; i < MAX_LINES; i++) {
-      const b = i * 6;
-      positions[b] = positions[b + 3] = 0;
-      positions[b + 1] = positions[b + 4] = -1000;
-      positions[b + 2] = positions[b + 5] = 0;
-      colors[b] = colors[b + 1] = colors[b + 2] = 0;
-      colors[b + 3] = colors[b + 4] = colors[b + 5] = 0;
+      const f = lifeRatio * lifeRatio;
+      const bright = f * this.currentIntensity * (0.35 + this.currentIntensity * 0.85);
+      for (let v = 0; v < VERTS_PER_LINE; v++) {
+        const c = (b + v) * 3;
+        colors[c] = 1.00 * bright;
+        colors[c + 1] = 0.97 * bright;
+        colors[c + 2] = 0.92 * bright;
+      }
     }
 
     this.geometry.attributes.position.needsUpdate = true;
     this.geometry.attributes.color.needsUpdate = true;
+    this.geometry.setDrawRange(0, n * VERTS_PER_LINE);
     this.lineSegments.visible = n > 0;
+  }
+
+  /** Camera-space vertex -> world, using the scratch vectors. */
+  private writeVert(out: Float32Array, index: number, x: number, y: number, z: number): void {
+    _startLocal.set(x, y, z).applyQuaternion(_camQuat).add(_camPos);
+    const o = index * 3;
+    out[o] = _startLocal.x;
+    out[o + 1] = _startLocal.y;
+    out[o + 2] = _startLocal.z;
   }
 
   /** Current streak intensity, 0-1. */
