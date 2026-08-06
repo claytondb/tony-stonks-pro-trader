@@ -17,7 +17,7 @@
  *     let a settings screen rewrite it at runtime with no code changes.
  *
  * THPS scheme reproduced (gamepad is the reference, keyboard mirrors it):
- *   Cross / A            ollie — HOLD to crouch & charge, RELEASE to pop (height scales)
+ *   Cross / A            ollie — pops on the PRESS, KEEP HOLDING to go higher (capped)
  *   Square / X           flip trick  (+ direction for the variant)
  *   Circle / B           grab trick  (+ direction) — HELD, must be released before landing
  *   Triangle / Y         grind — held; direction at the moment of contact picks the type
@@ -54,15 +54,26 @@ export interface ControlIntent {
   turn: number;
 
   /**
-   * Ollie crouch charge, 0..1.
-   * While the ollie button is held this ramps from `ollieMinCharge` to 1 over
-   * `ollieChargeMs`. On the frame `olliePopped` is true it holds the value the
-   * charge reached at release — multiply your jump impulse by it.
+   * Ollie charge, 0..1. `ollieMinCharge` on the frame the button goes down (which is
+   * also the frame it pops) and ramping to 1 over `ollieChargeMs` for as long as it is
+   * held. Multiply the launch impulse by the value on the `olliePopped` frame; use the
+   * later, larger values to drive the hold-to-go-higher lift and the crouch pose.
    * 0 when the ollie button is not involved.
    */
   ollieCharge: number;
-  /** Edge: true for exactly one update, on the frame the ollie is released/fired. */
+  /**
+   * Edge: true for exactly one update, on the frame the ollie button goes DOWN.
+   *
+   * The pop deliberately fires on the press, not on the release. Charging on release
+   * costs the player the entire hold in input latency and makes the height depend on
+   * one sampled frame — which is what produced both the swallowed jumps and the
+   * height scatter the feel harness measured. Height now comes from `ollieHeld`
+   * being sustained after the pop, so it is an integral over frames the player can
+   * see and feel rather than a sample they cannot.
+   */
   olliePopped: boolean;
+  /** Ollie button level — true from the press frame until it is let go. Drives the lift. */
+  ollieHeld: boolean;
 
   /** Flip button level. */
   flip: boolean;
@@ -201,10 +212,11 @@ export interface THPSControlsConfig {
 }
 
 export const DEFAULT_CONFIG: THPSControlsConfig = {
-  // A tap has to be worth taking. At 0.45 the shortest possible pop cleared 34 cm and was
-  // over in a third of a second — not enough air for a trick to read, so the tap ollie was
-  // functionally a dead button. 0.7 makes the quick pop useful and leaves the full charge
-  // as the difference between clearing a rail and clearing a gap.
+  // `ollieMinCharge` is now the height a TAP is worth, delivered on the press frame, and
+  // `ollieChargeMs` is how long holding keeps adding to it. At 0.45 the shortest possible
+  // pop cleared 34 cm and was over in a third of a second — not enough air for a trick to
+  // read, so the tap ollie was a dead button. 0.7 makes the quick pop useful and leaves
+  // the held pop as the difference between clearing a rail and clearing a gap.
   ollieChargeMs: 340,
   ollieMinCharge: 0.7,
   manualWindowMs: 250,
@@ -651,24 +663,20 @@ export class THPSControls {
       this.nollieLatched = false;
     }
 
-    if (this.options.chargeOllie) {
-      if (ollie.down) {
-        this.ollieChargeMs += dt * 1000;
-        if (dirY > 0) this.nollieArmed = true;
-        ollieCharge = this.chargeCurve(this.ollieChargeMs);
-      }
-      if (ollie.released) {
-        ollieCharge = this.chargeCurve(this.ollieChargeMs);
-        olliePopped = true;
-        this.nollieLatched = this.nollieArmed;
-        this.ollieChargeMs = 0;
-      }
-    } else if (ollie.pressed) {
-      // Legacy: fixed-impulse pop the moment the button goes down.
-      ollieCharge = 1;
+    if (ollie.down) {
+      if (dirY > 0) this.nollieArmed = true;
+      // The press frame is charge 0 by definition; time only accrues on later frames,
+      // so the same number of held frames always yields the same charge.
+      if (!ollie.pressed) this.ollieChargeMs += dt * 1000;
+      ollieCharge = this.options.chargeOllie ? this.chargeCurve(this.ollieChargeMs) : 1;
+    }
+    if (ollie.pressed) {
+      // Pop on the press. Both profiles do this now; `chargeOllie` decides only whether
+      // holding afterwards buys extra height.
       olliePopped = true;
       this.nollieLatched = this.nollieArmed;
     }
+    if (ollie.released) this.ollieChargeMs = 0;
 
     // --- 6. trick buttons ---------------------------------------------------
     const flipSig = sig('flip');
@@ -721,6 +729,7 @@ export class THPSControls {
       turn: this.turnValue,
       ollieCharge,
       olliePopped,
+      ollieHeld: ollie.down,
       flip: flipSig.down,
       flipEdge,
       grab: grabSig.down,
@@ -833,7 +842,7 @@ export class THPSControls {
       { action: 'Brake / Reverse', keyboard: kb('brake'), gamepad: gp('brake') },
       { action: 'Steer', keyboard: `${kb('turnLeft')} / ${kb('turnRight')}`, gamepad: 'L-Stick / D-Pad ←→' },
       {
-        action: this.options.chargeOllie ? 'Ollie (hold to charge)' : 'Ollie',
+        action: this.options.chargeOllie ? 'Ollie (hold for height)' : 'Ollie',
         keyboard: kb('ollie'),
         gamepad: gp('ollie'),
       },
@@ -1209,6 +1218,7 @@ function makeEmptyIntent(): ControlIntent {
     turn: 0,
     ollieCharge: 0,
     olliePopped: false,
+    ollieHeld: false,
     flip: false,
     flipEdge: false,
     grab: false,

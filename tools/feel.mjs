@@ -101,7 +101,26 @@ async function main() {
       const y = () => g.chair?.position?.y ?? 0;
       const yaw = () => { const e = new (Object.getPrototypeOf(g.chair.rotation).constructor)(); e.setFromQuaternion(g.chair.quaternion, 'YXZ'); return e.y; };
       const grounded = () => !!g.playerState?.isGrounded;
-      const reset = async () => { releaseAll(); g.loadLevel(level); step(30); };
+      // A real reset. g.loadLevel() repositions the chair but does NOT zero its
+      // rigid body, so probes that relied on it alone started from ~13 m/s and
+      // reported instant acceleration and inconsistent ollies that were artifacts
+      // of the harness, not the game. Zero the body explicitly and settle it.
+      const reset = async () => {
+        releaseAll();
+        g.loadLevel(level);
+        try {
+          const Z = { x: 0, y: 0, z: 0 };
+          g.physics.setVelocity(g.chairBody, Z);
+          g.physics.setAngularVelocity(g.chairBody, Z);
+        } catch {}
+        step(45);
+        try {
+          const Z = { x: 0, y: 0, z: 0 };
+          g.physics.setVelocity(g.chairBody, Z);
+          g.physics.setAngularVelocity(g.chairBody, Z);
+        } catch {}
+        step(10);
+      };
 
       const out = {};
 
@@ -118,8 +137,11 @@ async function main() {
       }
 
       // ---- 2. acceleration curve ----------------------------------------------
+      // Assert we actually start from rest; a probe that inherits speed from the
+      // previous experiment reports instant acceleration that is not real.
       await reset();
       {
+        out.accelStartSpeed = +spd().toFixed(3);
         down('KeyW');
         const marks = {}; const curve = [];
         for (let i = 1; i <= 600; i++) {
@@ -135,7 +157,14 @@ async function main() {
       }
 
       // ---- 3. coast / deceleration --------------------------------------------
+      // MUST reset and use a SHORT run-up. The first version of this probe inherited
+      // the acceleration probe's state, which had held forward for ten simulated
+      // seconds — about 130 metres on a 46 metre floorplate. It was therefore
+      // measuring a wall collision and reporting it as speed decay.
+      await reset();
       {
+        down('KeyW'); step(120);          // ~2s run-up, well short of any wall
+        up('KeyW');
         const s0 = spd(); const decel = {};
         for (let i = 1; i <= 900; i++) {
           step();
@@ -148,6 +177,7 @@ async function main() {
         }
         out.coastFromSpeed = +s0.toFixed(2);
         out.coastSeconds = decel;
+        out.coastEndedEarly = spd() < 0.5;
       }
 
       // ---- 4. ollie: height, airtime, and consistency across repeats -----------

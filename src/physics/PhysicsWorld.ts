@@ -58,7 +58,13 @@ export class PhysicsWorld {
       .setMass(50)
       .setFriction(0.0)
       .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min)
-      .setRestitution(0.0);
+      // Contacts are perfectly inelastic from the chair's side. The walls carry
+      // restitution 0.3 and the default combine rule is Average, so clipping one used to
+      // reverse 15% of the impact velocity — speed spent pushing the player backwards.
+      // Min makes a graze remove the into-the-wall component and nothing more, which is
+      // what lets resolveObstacles steer the line out instead of rebuilding it.
+      .setRestitution(0.0)
+      .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min);
     
     this.world.createCollider(bodyCollider, body);
     

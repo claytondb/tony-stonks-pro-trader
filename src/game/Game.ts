@@ -94,7 +94,19 @@ export class Game {
   // Constants
   private readonly PHYSICS_TIMESTEP = 1 / 60;
   private readonly MAX_FRAME_SKIP = 5;
-  private readonly COYOTE_TIME_MS = 130; // Allow jumping 130ms after leaving ground
+  // --- ollie feel ------------------------------------------------------------------
+  /**
+   * Grace after the wheels leave the floor during which a pop still fires. Nine frames:
+   * enough that rolling off a desk lip a hair early still pops, short enough that the
+   * chair is never visibly jumping out of mid-air.
+   */
+  private readonly COYOTE_TIME_MS = 150;
+  /** A pop pressed this long before touchdown is remembered and fired on contact. */
+  private readonly OLLIE_BUFFER_MS = 170;
+  /** Upward acceleration applied while the ollie button stays held after the pop. */
+  private readonly OLLIE_LIFT = 11;
+  /** How long that lift lasts — the cap beyond which holding buys nothing more. */
+  private readonly OLLIE_LIFT_SECONDS = 0.45;
   
   // Three.js
   private scene!: THREE.Scene;
@@ -178,6 +190,14 @@ export class Game {
   private landedFromTransition = false;
   /** Charge held on the ollie button at the moment it popped, 0..1. */
   private ollieCharge = 1;
+  /** simTime of a pop pressed while there was no floor to push off. Fires on touchdown. */
+  private ollieBufferedAt = -Infinity;
+  /** One coyote-window pop per airborne period, so the grace can never become a double jump. */
+  private ollieCoyoteUsed = false;
+  /** Seconds of hold-to-go-higher lift still owed to the current pop. */
+  private ollieLiftLeft = 0;
+  /** simTime of the step on which the grind path already spent this frame's pop. */
+  private olliePopHandledAt = -Infinity;
   /** Seconds of grace after a bail during which the player cannot score. */
   private bailRecovery = 0;
   /** Guards against a second bail landing in the same instant from a different source. */
@@ -188,6 +208,9 @@ export class Game {
   private prevSpeed = 0;
   /** Chair yaw last frame, so air rotation can be fed to the spin scorer. */
   private lastYaw = 0;
+  /** Steering state: the yaw rate the model wants, and the rate actually commanded. */
+  private turnRate = 0;
+  private turnCommand = 0;
   /** Where the wheels last left the floor, for gap detection on touchdown. */
   private takeoffPos = new THREE.Vector3();
   /** The goal zone the player was in last frame, so entries fire exactly once. */
@@ -226,10 +249,16 @@ export class Game {
   private readonly MAX_SPEED = 20;
   /** Push acceleration at a standstill, m/s^2. Eases off toward CRUISE_SPEED. */
   private readonly PUSH_ACCEL = 16;
-  /** Rolling resistance while coasting, m/s^2. Deliberately tiny — coasting is the game. */
-  private readonly ROLL_DRAG = 0.55;
+  /**
+   * Rolling resistance while coasting, m/s^2. Deliberately tiny — coasting is the game.
+   * The constant term is what eventually brings a stationary-ish chair to rest; the
+   * speed-proportional term below is what sets where a free coast settles. Together they
+   * cost a 13 m/s cruise about a quarter of its speed over three and a half seconds,
+   * which is the THPS-ish "you can still set up the next feature" budget.
+   */
+  private readonly ROLL_DRAG = 0.42;
   /** Extra drag proportional to speed, 1/s. Sets where a free coast settles. */
-  private readonly ROLL_DRAG_K = 0.045;
+  private readonly ROLL_DRAG_K = 0.035;
   /** How fast velocity is redirected to the way the chair points, 1/s. Carving keeps speed. */
   private readonly GRIP_RATE = 9.0;
   /** Tallest obstacle the casters will roll up instead of stopping dead. */
@@ -3643,6 +3672,10 @@ export class Game {
         proceduralSounds.playOllie(intent.ollieCharge || 1);
         const v = this.physics.getVelocity(this.chairBody);
         this.physics.setVelocity(this.chairBody, new THREE.Vector3(v.x, 10 * this.jumpMultiplier * intent.ollieCharge, v.z));
+        // This step's pop is spent — applyMovement must not fire it again or buffer it —
+        // but holding the button still buys height off a rail, same as off the floor.
+        this.olliePopHandledAt = this.simTime;
+        this.ollieLiftLeft = this.OLLIE_LIFT_SECONDS;
       }
       return;
     }
@@ -4205,9 +4238,15 @@ export class Game {
       }
     }
 
-    // A wall that is simply eating the push, with no ray to explain it (a corner, a prop
+    // A wall that is simply eating the line, with no ray to explain it (a corner, a prop
     // the feeler slipped past). Track it so the recovery below still fires.
-    if (pushing && speed < 1.2) this.pinnedFor += dt;
+    //
+    // This used to require the player to be HOLDING the push, which meant the one case that
+    // most needs rescuing was the one case it ignored: coast a full-speed line into a corner
+    // and the chair stops dead and stays there, because a player mid-line is not leaning on
+    // forward. An entitlement above 3.5 m/s counts as intent to keep moving — and braking
+    // cannot trigger it, because braking bleeds that entitlement away with the speed.
+    if ((pushing || this.carriedSpeed > 3.5) && speed < 1.2) this.pinnedFor += dt;
     else if (!blocked) this.pinnedFor = Math.max(0, this.pinnedFor - dt * 2);
 
     const pinned = this.pinnedFor >= this.PIN_SECONDS;
@@ -4271,6 +4310,10 @@ export class Game {
   private applyMovement(intent: ControlIntent, dt: number): void {
     // Only allow full movement when mounted on chair
     if (!this.isMounted) {
+      // Steering state is stale while off the chair — clear it so remounting starts from
+      // straight instead of resuming a carve the player asked for a minute ago.
+      this.turnRate = 0;
+      this.turnCommand = 0;
       this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, -intent.turn * 1.5, 0));
       return;
     }
@@ -4315,14 +4358,34 @@ export class Game {
       // Speed the solver ate on the previous step. A glancing hit should cost you a
       // fraction of your speed and a change of line, not the whole run — this is the
       // difference between a level that punishes exploration and one that rewards it.
-      if (this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.6) {
-        speed = this.carriedSpeed * (contact ? 0.78 : 0.85);
+      //
+      // The window used to be "lost more than 40% in one frame, hand back 78-85%", which
+      // meant a clip that cost 35% was kept in full — and in a room-sized level that is
+      // most of them. Measured coasting through ch1_office, single-frame solver bites of
+      // 3-5 m/s were the whole of the speed problem; authored rolling drag was never even
+      // a third of it. So the window opens at a 15% single-step loss and hands back most
+      // of it. Deliberate deceleration can never trigger it: braking is gated out here, and
+      // the entitlement below only ever bleeds by the exact amount this model chose to
+      // take, so slowing down on purpose is never mistaken for the solver taking a bite.
+      if (!intent.brake && this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.85) {
+        speed = this.carriedSpeed * (contact ? 0.85 : 0.93);
       }
+      const speedAfterRestore = speed;
 
       if (intent.push) {
-        // Ease-off accel: full kick from a standstill, nothing left once you are cruising.
+        // Ease-off accel: full kick from a standstill, almost nothing left once you are
+        // cruising. The residual term used to be a flat 25% of PUSH_ACCEL — 4 m/s^2 that
+        // never faded, so simply holding forward on any clear straight dragged the player
+        // to MAX_SPEED and pinned them there. That made top speed uncontrollable and, worse,
+        // meant every coast started from a wall-scraping 18-20 m/s that no line ever
+        // actually earned. It now fades to zero as MAX_SPEED approaches, so the push alone
+        // settles a little above CRUISE_SPEED and the ceiling stays reserved for what is
+        // supposed to earn it: ramps, downhills and grind pops.
         const headroom = Math.max(0, 1 - speed / Math.max(1, cruiseSpeed));
-        speed += this.PUSH_ACCEL * (0.25 + 0.75 * headroom) * this.speedMultiplier * dt;
+        const overCruise = Math.max(0, Math.min(1,
+          (maxSpeed - speed) / Math.max(1, maxSpeed - cruiseSpeed)));
+        speed += this.PUSH_ACCEL * (0.12 * overCruise + 0.88 * headroom)
+          * this.speedMultiplier * dt;
 
         const now = performance.now();
         if (now - this.lastPushSoundTime > 400) {
@@ -4358,8 +4421,19 @@ export class Game {
       );
       this.physics.setVelocity(this.chairBody, newVel);
 
-      // Remember the speed we are entitled to, so the next contact cannot simply delete it.
-      this.carriedSpeed = Math.min(maxSpeed, Math.max(speed, this.carriedSpeed - 9 * dt));
+      // The speed the player is ENTITLED to: what they would have if nothing but this model
+      // had touched them. It bleeds by exactly the losses authored above — rolling drag, the
+      // brake, gravity up a ramp, the MAX_SPEED clamp — and by nothing else, so any further
+      // gap between it and the body's actual velocity is the solver, and only the solver.
+      //
+      // It used to decay on a flat timer (9, then 18 m/s^2) instead, which quietly made
+      // sustained contact the single biggest speed sink in the game: every frame spent
+      // scraping a wall or a desk leg cost 0.3 m/s on top of whatever the solver took, so a
+      // graze at 15 m/s bled out inside a second. A wall now costs a fixed slice at the
+      // moment of contact plus a mild 3 m/s^2 while you stay on it, and the line survives.
+      const authoredLoss = Math.min(0, speed - speedAfterRestore);
+      this.carriedSpeed = Math.min(maxSpeed, Math.max(speed,
+        this.carriedSpeed + authoredLoss - (contact ? 3 : 0) * dt));
     } else if (intent.brake && currentSpeed > 0.1) {
       // Air brake is deliberately feeble — you commit when you leave the floor.
       const k = Math.max(0, 1 - 1.2 * dt);
@@ -4370,44 +4444,109 @@ export class Game {
 
     // TURNING — analog, with weight at both ends so the camera has something continuous
     // to follow rather than a step function.
-    const turnSpeed = 3.6;      // rad/s, grounded
-    const airTurnSpeed = 3.0;   // rad/s, airborne
-    const TURN_ACCEL = 18;      // rad/s^2 toward the target rate
-    const TURN_DECAY = 14;      // rad/s^2 back to zero on release
+    //
+    // A/D used to STEP the yaw rate from 0 to full in a single frame, which whipped the
+    // camera round; the fix was a constant-acceleration ramp. That killed the whip but the
+    // ramp then took ~18 frames to arrive, because it was chasing a target read back out of
+    // the rigid body — whose 8.0 angular damping ate ~12% of the rate every step, so a
+    // linear 18 rad/s^2 ramp spent itself fighting the damping and settled at 2.5 rad/s
+    // instead of the 3.6 it was asking for. The chair felt like it was on ice.
+    //
+    // The shape is now: exponential approach (never a step — the first frame is a fraction
+    // of full rate) plus a LEAD term proportional to the remaining gap, which cancels the
+    // lag of the input filter in THPSControls and gives the chair its bite. Steering state
+    // is kept here rather than read back from the body, so the damping no longer decides
+    // the steady rate and the same input always produces the same carve. TURN_MAX_STEP is
+    // the hard guarantee that the original bug cannot come back through any input path
+    // (including an analog stick slammed over): the commanded rate can never move more than
+    // that in one frame, whatever the lead term asks for.
+    const turnSpeed = 2.56;     // rad/s, grounded, and now actually delivered
+    const airTurnSpeed = 2.1;   // rad/s, airborne
+    const TURN_CHASE = 30;      // 1/s, exponential approach while turning in
+    const TURN_SETTLE = 20;     // 1/s, exponential return to straight on release
+    const TURN_LEAD = 2.0;      // gap feed-forward: the bite
+    const TURN_PEAK = 1.15;     // ceiling on the commanded rate, as a multiple of the max
+    const TURN_MAX_STEP = 1.1;  // rad/s, most the command may move in one frame
 
     const maxRate = this.playerState.isGrounded ? turnSpeed : airTurnSpeed;
     const targetRate = -intent.turn * maxRate;
 
-    const currentRate = this.physics.getAngularVelocity(this.chairBody).y;
-    const rateGap = targetRate - currentRate;
-    const accel = Math.abs(targetRate) < 1e-3 ? TURN_DECAY : TURN_ACCEL;
-    const maxDelta = accel * dt;
-    const newRate = currentRate + Math.max(-maxDelta, Math.min(maxDelta, rateGap));
+    const holdingTurn = Math.abs(targetRate) >= Math.abs(this.turnRate);
+    const gap = targetRate - this.turnRate;
+    this.turnRate += gap * (1 - Math.exp(-(holdingTurn ? TURN_CHASE : TURN_SETTLE) * dt));
+    // Lead only into a turn: on release it would command a counter-rotation.
+    const lead = holdingTurn ? TURN_LEAD * (targetRate - this.turnRate) : 0;
+    const ceiling = maxRate * TURN_PEAK;
+    let newRate = Math.max(-ceiling, Math.min(ceiling, this.turnRate + lead));
+    newRate = this.turnCommand
+      + Math.max(-TURN_MAX_STEP, Math.min(TURN_MAX_STEP, newRate - this.turnCommand));
+    this.turnCommand = newRate;
 
     this.physics.setAngularVelocity(
       this.chairBody,
       new THREE.Vector3(0, Math.abs(newRate) < 1e-3 ? 0 : newRate, 0)
     );
 
-    // OLLIE — charged while the button is held, fired on release, scaled by the charge.
-    // Coyote time still applies so leaving a ledge does not eat the pop.
-    const withinCoyoteTime = (this.simTime - this.lastGroundedTime) * 1000 < this.COYOTE_TIME_MS;
-    const canJump = this.playerState.isGrounded || withinCoyoteTime;
+    // OLLIE — fires on the PRESS, then keeps lifting for as long as the button is held.
+    //
+    // The old shape charged on the button and fired on release, which meant the height a
+    // player got was decided by one sampled frame: press a hair after leaving a ledge and
+    // the pop was silently swallowed, release a hair after the wheels lost contact and it
+    // was swallowed again. Same input, different hop — nothing a player can learn. Now the
+    // launch is a fixed floor applied on the press and every extra held FIXED STEP adds a
+    // fixed slice of lift, so height is a smooth, monotonic, exactly repeatable function
+    // of how long you held, capped at OLLIE_LIFT_SECONDS.
+    if (this.playerState.isGrounded) this.ollieCoyoteUsed = false;
 
-    if (intent.olliePopped && canJump) {
-      proceduralSounds.playOllie(intent.ollieCharge || 1);
-      this.lastGroundedTime = -Infinity;
+    const airborneMs = (this.simTime - this.lastGroundedTime) * 1000;
+    const canJump = this.playerState.isGrounded
+      || (airborneMs < this.COYOTE_TIME_MS && !this.ollieCoyoteUsed);
+    // The grind path spends the pop itself when you ollie off a rail; don't fire twice.
+    const popPressed = intent.olliePopped && this.olliePopHandledAt !== this.simTime;
+
+    if (popPressed) {
       this.ollieCharge = Math.max(0.3, intent.ollieCharge || 1);
+      // Pressed with no floor to push off: remember it and fire the instant one arrives,
+      // so a pop asked for a few frames early lands as a pop instead of as nothing.
+      this.ollieBufferedAt = canJump ? -Infinity : this.simTime;
+    }
+    const bufferedPop = this.playerState.isGrounded
+      && (this.simTime - this.ollieBufferedAt) * 1000 < this.OLLIE_BUFFER_MS;
+
+    if ((popPressed && canJump) || bufferedPop) {
+      proceduralSounds.playOllie(this.ollieCharge);
+      this.ollieBufferedAt = -Infinity;
+      if (!this.playerState.isGrounded) this.ollieCoyoteUsed = true;
+      this.ollieLiftLeft = this.OLLIE_LIFT_SECONDS;
 
       // A manual you pop out of ends cleanly; the combo survives.
       if (this.balance.isManualing) this.balance.end();
 
       const v = this.physics.getVelocity(this.chairBody);
       const newVel = v.clone();
-      newVel.y = jumpImpulse * this.ollieCharge;
+      // A floor under the vertical speed, not an overwrite: popping off a ramp lip adds
+      // to what the ramp already gave you instead of clipping it, and any residual sink
+      // from the ground-stick snap is erased so the takeoff is identical every time.
+      newVel.y = Math.max(v.y, jumpImpulse * this.ollieCharge);
       newVel.x += fwdFlat.x * 1.5;
       newVel.z += fwdFlat.z * 1.5;
       this.physics.setVelocity(this.chairBody, newVel);
+    }
+
+    // HOLD FOR HEIGHT — the pop's extra air lives here rather than in a charge sampled at
+    // release. Ends the moment the button goes, the moment you stop rising, or when the
+    // cap runs out, so holding longer is never worse and never unbounded.
+    if (this.ollieLiftLeft > 0) {
+      const v = this.physics.getVelocity(this.chairBody);
+      if (!intent.ollieHeld || v.y <= 0) {
+        this.ollieLiftLeft = 0;
+      } else {
+        const slice = Math.min(dt, this.ollieLiftLeft);
+        this.ollieLiftLeft -= slice;
+        this.physics.setVelocity(
+          this.chairBody, new THREE.Vector3(v.x, v.y + this.OLLIE_LIFT * slice, v.z),
+        );
+      }
     }
 
     // HANG TIME — bleed a third of gravity off around the apex. Without it a 30 m/s^2

@@ -80,6 +80,8 @@ interface Framing {
   yawFollow: number;
   /** Hard cap on how far the boom may trail the chair, radians. */
   yawLag: number;
+  /** How much `yawFollow` is allowed to rise as the boom falls behind. 0 = flat follow. */
+  yawCatch: number;
   /** Damping rate for camera position. */
   posFollow: number;
   /** Degrees added to the speed-derived FOV. */
@@ -102,7 +104,7 @@ const FRAMING: Record<RideState, Framing> = {
   cruise: {
     dist: 3.40, height: 1.70, lateral: 0.50,
     lookHeight: 0.66, lookLateral: 0.16, lookAhead: 0.50,
-    yawFollow: 7.0, yawLag: 0.60, posFollow: 18,
+    yawFollow: 8.0, yawLag: 0.60, yawCatch: 1.0, posFollow: 18,
     fovBias: 0, rollScale: 1.0, speedShape: 1.0,
   },
   // Back and down. The drop is the important half: from below the chair's own height the
@@ -111,7 +113,7 @@ const FRAMING: Record<RideState, Framing> = {
   air: {
     dist: 4.15, height: 1.24, lateral: 0.34,
     lookHeight: 0.98, lookLateral: 0.10, lookAhead: 0.12,
-    yawFollow: 4.0, yawLag: 0.95, posFollow: 13,
+    yawFollow: 4.0, yawLag: 0.95, yawCatch: 0.0, posFollow: 13,
     fovBias: 3.0, rollScale: 0.15, speedShape: 0.35,
   },
   // Swung out and aimed down the line. `lookAhead` is what makes a grind readable: the
@@ -119,7 +121,7 @@ const FRAMING: Record<RideState, Framing> = {
   grind: {
     dist: 3.75, height: 1.46, lateral: 0.98,
     lookHeight: 0.72, lookLateral: 0.34, lookAhead: 1.35,
-    yawFollow: 5.0, yawLag: 0.78, posFollow: 15,
+    yawFollow: 5.0, yawLag: 0.78, yawCatch: 0.6, posFollow: 15,
     fovBias: -1.5, rollScale: 0.7, speedShape: 0.6,
   },
   // In, low, and tight. The balance meter is on the HUD but the read the player actually
@@ -127,14 +129,14 @@ const FRAMING: Record<RideState, Framing> = {
   manual: {
     dist: 2.95, height: 1.22, lateral: 0.42,
     lookHeight: 0.58, lookLateral: 0.14, lookAhead: 0.95,
-    yawFollow: 9.0, yawLag: 0.42, posFollow: 20,
+    yawFollow: 9.0, yawLag: 0.42, yawCatch: 1.0, posFollow: 20,
     fovBias: 1.5, rollScale: 1.1, speedShape: 1.0,
   },
 };
 
 const FRAMING_KEYS: (keyof Framing)[] = [
   'dist', 'height', 'lateral', 'lookHeight', 'lookLateral', 'lookAhead',
-  'yawFollow', 'yawLag', 'posFollow', 'fovBias', 'rollScale', 'speedShape',
+  'yawFollow', 'yawLag', 'yawCatch', 'posFollow', 'fovBias', 'rollScale', 'speedShape',
 ];
 
 function cloneFraming(f: Framing): Framing {
@@ -502,7 +504,18 @@ export class CameraController {
       this.camYaw = targetRotationY;
       this.hasCamYaw = true;
     }
-    this.camYaw += angleDelta(targetRotationY, this.camYaw) * damp(yawFollow, dt);
+    // PROGRESSIVE catch-up. A flat follow rate has to be either loose (a hard carve leaves
+    // the boom pointing at nothing and the player loses the line) or tight (every small
+    // correction is welded to the lens and the trail stops being drama). Now the rate rises
+    // with how far behind the boom actually is, measured against this framing's own lag
+    // budget: a nudge trails freely, a full carve is chased down. The chair reaches its
+    // steering rate in ~5 frames now, so without this the trail would sit permanently at
+    // the `yawLag` clamp and the clamp — a hard limit, not a spring — is what reads as a
+    // snap. Still `1 - exp(-k*dt)`; the rate is what changes, never the form.
+    const behind = Math.abs(angleDelta(targetRotationY, this.camYaw));
+    const catchUp = yawFollow
+      * (1 + this.frame.yawCatch * Math.min(1, behind / Math.max(0.05, yawLag)));
+    this.camYaw += angleDelta(targetRotationY, this.camYaw) * damp(catchUp, dt);
     const lag = angleDelta(targetRotationY, this.camYaw);
     if (lag > yawLag) this.camYaw = targetRotationY - yawLag;
     else if (lag < -yawLag) this.camYaw = targetRotationY + yawLag;
@@ -866,12 +879,16 @@ export class CameraController {
     this.prevTargetYaw = targetRotationY;
     this.hasPrevYaw = true;
 
+    // Lateral accel proxy. The gain below is set so that a FULL carve at cruise is what
+    // reaches `maxRoll`: the old 0.010 saturated the cant at about a third of the steering
+    // rate, so a flick of the stick canted the horizon exactly as far as a committed turn
+    // and the roll stopped carrying any information about how hard you were turning.
     const lateral = yawRate * Math.min(this.lastSpeed, 24);
     // Per-state scale, and killed off entirely while the bail rig owns the frame — a
     // canted horizon there would fight the arc instead of adding to it.
     const scale = this.frame.rollScale * (1 - this.bailBlend);
     const limit = this.maxRoll * Math.max(scale, 0.001);
-    let targetRoll = THREE.MathUtils.clamp(-lateral * 0.010 * scale, -limit, limit);
+    let targetRoll = THREE.MathUtils.clamp(-lateral * 0.0026 * scale, -limit, limit);
     // A single deliberate cant on the wipeout, in the direction the camera is drifting.
     targetRoll += this.bailBlend * 0.085 * Math.sign(this.bailDrift);
 
