@@ -2026,7 +2026,9 @@ export class Game {
     
     // Set player spawn
     const spawn = level.spawnPoint;
-    const spawnPos = new THREE.Vector3(spawn.position[0], spawn.position[1], spawn.position[2]);
+    const spawnPos = this.resolveSpawnHeight(
+      new THREE.Vector3(spawn.position[0], spawn.position[1], spawn.position[2]),
+    );
     if (this.chairBody) {
       this.physics.setPosition(this.chairBody, spawnPos);
       this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
@@ -4362,6 +4364,40 @@ export class Game {
    * Drive the chair from ControlIntent. Analog turn, hold-charge ollie, and spin from the
    * shoulder buttons instead of the old raw-key booleans.
    */
+  /**
+   * Put the chair's body centre where its capsule actually rests on the floor.
+   *
+   * Every level in the game authors its spawn Y as 0.5 or 0.6 — but the capsule bottom
+   * sits CHAIR_FOOT_OFFSET (0.70 m) below the body centre. So every level was loading the
+   * chair 0.10-0.20 m INSIDE the floor, and Rapier's penetration solver did exactly what
+   * it should: it threw the chair out. Measured on ch1_office, the player was ejected
+   * 7.74 m into the air at 13.37 m/s with no input at all, airborne for 110 frames. Every
+   * run in every level began with a launch.
+   *
+   * Authored Y is treated as a hint about WHICH floor is meant (a mezzanine, a rooftop),
+   * not as a body position. Cast down from above it and seat the capsule on whatever we
+   * hit, with a hair of clearance so the solver has nothing to resolve. If the cast finds
+   * nothing, lift the authored value by the foot offset — still strictly better than
+   * burying it.
+   */
+  private resolveSpawnHeight(authored: THREE.Vector3): THREE.Vector3 {
+    const CLEARANCE = 0.02;
+    const out = authored.clone();
+    const probeTop = authored.y + 3.0;
+    const hit = this.physics.raycastGround(
+      new THREE.Vector3(authored.x, probeTop, authored.z),
+      probeTop + 6.0,
+      this.chairBody ?? undefined,
+    );
+    if (hit?.hit) {
+      out.y = hit.point.y + CHAIR_FOOT_OFFSET + CLEARANCE;
+    } else {
+      out.y = authored.y + CHAIR_FOOT_OFFSET + CLEARANCE;
+      console.warn('[Game] spawn ground cast found nothing; lifting authored Y instead');
+    }
+    return out;
+  }
+
   private applyMovement(intent: ControlIntent, dt: number): void {
     // Only allow full movement when mounted on chair
     if (!this.isMounted) {
