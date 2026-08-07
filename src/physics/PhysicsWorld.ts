@@ -18,6 +18,38 @@ export class PhysicsWorld {
   private world!: RAPIER.World;
   private initialized = false;
   private staticBodies: RAPIER.RigidBody[] = [];  // Track static bodies for cleanup
+  /**
+   * The player's chair. `step()` needs it because it is the only body in the world fast
+   * enough for a single fixed step to move it further than its own collider is thick.
+   */
+  private chairBody: RAPIER.RigidBody | null = null;
+  /**
+   * Furthest the chair may FALL inside one solver substep, metres.
+   *
+   * MOMENTUM, NOT SAFETY. A capsule of radius 0.4 that drops further than its own radius
+   * in one step arrives already BURIED in the floor, and a deep overlap does not resolve
+   * along the face you touched — it resolves along whichever face of the slab is now
+   * nearest, which at that depth is a SIDE face. That turns a landing into a sideways
+   * shove. Measured on an 8 m drop before this existed: the chair fell 0.37 m in one step,
+   * penetrated 0.32 m, and lost 74% of its PLANAR speed in a single frame (11.97 -> 3.11
+   * m/s) — a big air, the move that is supposed to pay the most, costing the line instead.
+   * carriedSpeed then papered over it by handing back 93%, so the visible symptom was a
+   * one-frame hitch and a permanent 7% tax on every big landing.
+   *
+   * VERTICAL TRAVEL ONLY, deliberately. Substepping on total speed was measured too, and
+   * it cost the run: median speed 14.6 -> 13.4 and 361 m -> 338 m over the flow benchmark,
+   * because at 15 m/s the chair was tunnelling THROUGH level geometry it is supposed to
+   * hit, and resolving those contacts properly is a change to level collision, not to
+   * landing momentum. Gravity is the only thing in this game that moves the chair faster
+   * than its own collider is thick, so gating on |v.y| fixes the landing and leaves every
+   * horizontal contact resolved exactly as it was.
+   *
+   * 0.30 m is under the capsule radius; the ground snap tops out at 9 m/s (0.15 m/step),
+   * so ordinary rolling never substeps. Only a real fall does.
+   */
+  private readonly MAX_SUBSTEP_FALL = 0.30;
+  /** Ceiling on substeps per fixed update, so a pathological velocity cannot stall a frame. */
+  private readonly MAX_SUBSTEPS = 4;
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -67,10 +99,12 @@ export class PhysicsWorld {
       .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min);
     
     this.world.createCollider(bodyCollider, body);
-    
+
+    this.chairBody = body;   // step() bounds this body's travel per substep
+
     return body;
   }
-  
+
   /**
    * Create ground plane with walls
    */
@@ -405,8 +439,19 @@ export class PhysicsWorld {
    * Step physics simulation
    */
   step(dt: number): void {
-    this.world.timestep = dt;
-    this.world.step();
+    // Split the step so the chair can never tunnel far enough into a surface for the
+    // contact to resolve against the wrong face. See MAX_SUBSTEP_FALL: this is a
+    // momentum fix, not a robustness one, and it is a no-op at ordinary ground speeds.
+    let substeps = 1;
+    if (this.chairBody) {
+      const fall = Math.abs(this.chairBody.linvel().y) * dt;
+      substeps = Math.min(
+        this.MAX_SUBSTEPS,
+        Math.max(1, Math.ceil(fall / this.MAX_SUBSTEP_FALL)),
+      );
+    }
+    this.world.timestep = dt / substeps;
+    for (let i = 0; i < substeps; i++) this.world.step();
   }
   
   /**

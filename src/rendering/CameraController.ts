@@ -82,6 +82,10 @@ interface Framing {
   yawLag: number;
   /** How much `yawFollow` is allowed to rise as the boom falls behind. 0 = flat follow. */
   yawCatch: number;
+  /** Fraction of the chair's own yaw RATE the boom is carried round by, before the spring
+   *  below is applied at all. 0 = pure spring (the boom only ever reacts to a gap that
+   *  has already opened); 1 = welded. See the yaw-trail block in update(). */
+  yawLead: number;
   /** Damping rate for camera position. */
   posFollow: number;
   /** Degrees added to the speed-derived FOV. */
@@ -104,7 +108,7 @@ const FRAMING: Record<RideState, Framing> = {
   cruise: {
     dist: 3.40, height: 1.70, lateral: 0.50,
     lookHeight: 0.66, lookLateral: 0.16, lookAhead: 0.50,
-    yawFollow: 8.0, yawLag: 0.60, yawCatch: 1.0, posFollow: 18,
+    yawFollow: 8.0, yawLag: 0.60, yawCatch: 1.0, yawLead: 0.50, posFollow: 18,
     fovBias: 0, rollScale: 1.0, speedShape: 1.0,
   },
   // Back and down. The drop is the important half: from below the chair's own height the
@@ -113,7 +117,7 @@ const FRAMING: Record<RideState, Framing> = {
   air: {
     dist: 4.15, height: 1.24, lateral: 0.34,
     lookHeight: 0.98, lookLateral: 0.10, lookAhead: 0.12,
-    yawFollow: 4.0, yawLag: 0.95, yawCatch: 0.0, posFollow: 13,
+    yawFollow: 4.0, yawLag: 0.95, yawCatch: 0.0, yawLead: 0.0, posFollow: 13,
     fovBias: 3.0, rollScale: 0.15, speedShape: 0.35,
   },
   // Swung out and aimed down the line. `lookAhead` is what makes a grind readable: the
@@ -121,7 +125,7 @@ const FRAMING: Record<RideState, Framing> = {
   grind: {
     dist: 3.75, height: 1.46, lateral: 0.98,
     lookHeight: 0.72, lookLateral: 0.34, lookAhead: 1.35,
-    yawFollow: 5.0, yawLag: 0.78, yawCatch: 0.6, posFollow: 15,
+    yawFollow: 5.0, yawLag: 0.78, yawCatch: 0.6, yawLead: 0.35, posFollow: 15,
     fovBias: -1.5, rollScale: 0.7, speedShape: 0.6,
   },
   // In, low, and tight. The balance meter is on the HUD but the read the player actually
@@ -129,14 +133,14 @@ const FRAMING: Record<RideState, Framing> = {
   manual: {
     dist: 2.95, height: 1.22, lateral: 0.42,
     lookHeight: 0.58, lookLateral: 0.14, lookAhead: 0.95,
-    yawFollow: 9.0, yawLag: 0.42, yawCatch: 1.0, posFollow: 20,
+    yawFollow: 9.0, yawLag: 0.42, yawCatch: 1.0, yawLead: 0.55, posFollow: 20,
     fovBias: 1.5, rollScale: 1.1, speedShape: 1.0,
   },
 };
 
 const FRAMING_KEYS: (keyof Framing)[] = [
   'dist', 'height', 'lateral', 'lookHeight', 'lookLateral', 'lookAhead',
-  'yawFollow', 'yawLag', 'yawCatch', 'posFollow', 'fovBias', 'rollScale', 'speedShape',
+  'yawFollow', 'yawLag', 'yawCatch', 'yawLead', 'posFollow', 'fovBias', 'rollScale', 'speedShape',
 ];
 
 function cloneFraming(f: Framing): Framing {
@@ -504,6 +508,35 @@ export class CameraController {
       this.camYaw = targetRotationY;
       this.hasCamYaw = true;
     }
+
+    // The chair's angular velocity, measured once per frame and used twice: to lead the
+    // trail (immediately below) and to drive the dutch roll (step 10).
+    const chairYawRate = this.hasPrevYaw
+      ? angleDelta(targetRotationY, this.prevTargetYaw) / dt : 0;
+    this.prevTargetYaw = targetRotationY;
+    this.hasPrevYaw = true;
+
+    // LEAD, then spring. A pure spring can only react to a gap that has ALREADY opened, so
+    // the boom's motion is a smeared, delayed copy of the chair's: a quick flick of the
+    // stick was over before the camera had built up any rate at all, and then the camera
+    // swung through the correction after the fact — the swing that reads as a whip is the
+    // one that arrives when the input is already finished. Measured: a 6-frame flick turned
+    // the chair 10.4 deg and the boom followed only 3.1 of them while it was happening —
+    // and then took another 18 frames to deliver the rest, still turning at 1 rad/s a
+    // quarter of a second after the stick was back at centre.
+    //
+    // Carrying the boom round by a FRACTION of the chair's own yaw rate first makes the
+    // trail a designed offset rather than an accumulating delay: the camera starts moving
+    // on the same frame the chair does (the turn reads), it holds a near-constant angle
+    // behind through the carve (the line stays legible), and the instant the chair stops
+    // rotating the lead term is zero, so all that is left is the residual gap easing
+    // closed instead of a long tail of swing. `yawLead` is per-state and is 0 in the air,
+    // where the chair's yaw is a spin trick and the frame is SUPPOSED to sweep past.
+    //
+    // It cannot overshoot: the term is bounded by the chair's own movement this frame
+    // (yawLead <= 1), and the `yawLag` clamp below bounds the result from both sides.
+    this.camYaw += this.frame.yawLead * chairYawRate * dt;
+
     // PROGRESSIVE catch-up. A flat follow rate has to be either loose (a hard carve leaves
     // the boom pointing at nothing and the player loses the line) or tight (every small
     // correction is welded to the lens and the trail stops being drama). Now the rate rises
@@ -576,7 +609,7 @@ export class CameraController {
 
     // ---- 10. orientation -----------------------------------------------------
     this.camera.lookAt(this.currentLookAt);
-    this.applyRoll(dt, targetRotationY);
+    this.applyRoll(dt, chairYawRate);
 
     // ---- 11. hard anti-clip --------------------------------------------------
     // The damped boom scale is what stops the camera POPPING; this is what stops it ever
@@ -870,15 +903,12 @@ export class CameraController {
    *
    * A quaternion multiply on the local Z axis is an exact camera-space roll with no
    * singularity anywhere. Do not "simplify" this back to an Euler write.
+   *
+   * `yawRate` is the chair's angular velocity, measured once in update() (the yaw trail
+   * needs the same number) and passed in, so the two cannot disagree about what frame
+   * they are on.
    */
-  private applyRoll(dt: number, targetRotationY: number): void {
-    let yawRate = 0;
-    if (this.hasPrevYaw) {
-      yawRate = angleDelta(targetRotationY, this.prevTargetYaw) / dt;
-    }
-    this.prevTargetYaw = targetRotationY;
-    this.hasPrevYaw = true;
-
+  private applyRoll(dt: number, yawRate: number): void {
     // Lateral accel proxy. The gain below is set so that a FULL carve at cruise is what
     // reaches `maxRoll`: the old 0.010 saturated the cant at about a third of the steering
     // rate, so a flick of the stick canted the horizon exactly as far as a committed turn

@@ -96,17 +96,54 @@ export class Game {
   private readonly MAX_FRAME_SKIP = 5;
   // --- ollie feel ------------------------------------------------------------------
   /**
-   * Grace after the wheels leave the floor during which a pop still fires. Nine frames:
-   * enough that rolling off a desk lip a hair early still pops, short enough that the
-   * chair is never visibly jumping out of mid-air.
+   * Grace after the wheels leave the floor during which a pop still fires. Deliberately
+   * NOT a frame multiple: at 150 the window boundary landed exactly on frame 9, so which
+   * side of it a press fell on was decided by float accumulation in simTime and the same
+   * input could pop or not pop. 110ms sits 10ms clear of frame 6 and 6.7ms clear of frame
+   * 7, so the answer is the same every time — five forgiven frames, enough that rolling
+   * off a desk lip a hair early still pops, short enough that the chair is never visibly
+   * jumping out of mid-air.
    */
-  private readonly COYOTE_TIME_MS = 150;
+  private readonly COYOTE_TIME_MS = 110;
+  /**
+   * Contact grace for STARTING a trick (manual/nose-manual) rather than for popping. It
+   * used to be spelled `COYOTE_TIME_MS * 2`, which silently tied the manual entry window
+   * to the ollie's forgiveness; they are different questions and are now tuned apart.
+   */
+  private readonly TRICK_CONTACT_GRACE_MS = 300;
   /** A pop pressed this long before touchdown is remembered and fired on contact. */
   private readonly OLLIE_BUFFER_MS = 170;
   /** Upward acceleration applied while the ollie button stays held after the pop. */
   private readonly OLLIE_LIFT = 11;
   /** How long that lift lasts — the cap beyond which holding buys nothing more. */
   private readonly OLLIE_LIFT_SECONDS = 0.45;
+  /**
+   * The floor of vertical speed a pop guarantees ON TOP of whatever the chair already had.
+   * `Math.max(v.y, impulse)` alone made a pop off a ramp lip, or inside the coyote window
+   * while still rising, a literal no-op: the button was consumed and nothing happened.
+   * Same input, different hop — the one thing an ollie may never be.
+   */
+  private readonly OLLIE_MIN_GAIN = 3;
+  /**
+   * A press this soon after a pop cannot pop again. Longer than COYOTE_TIME_MS, so it
+   * covers the whole window in which a fresh press could have found the wheels still
+   * nominally in contact; a real second ollie needs a landing, which is 700ms away.
+   */
+  private readonly OLLIE_REPOP_LOCKOUT_MS = 120;
+  // --- hang time -------------------------------------------------------------------
+  // Gravity is bled off around the apex so a pop lasts long enough to read a trick. This
+  // was a hard band (|v.y| < 4.5 -> full assist) and the hard edge was a real defect: the
+  // hold-for-height lift and this assist are both +OLLIE_LIFT, so a lift frame that
+  // pushed v.y from just under 4.5 to exactly 4.5 bought the extra speed and lost the
+  // assist in the same step, for a net gain of zero. Holding one frame longer measurably
+  // did nothing at 5, 7, 10, 13 and 15 frames of hold. The assist is now a continuous
+  // ramp — full below FULL, fading to nothing at FADE — and no step for the charge curve
+  // to fall into. Widths chosen so the integrated assist (3.2 full + half of 3.3 fading =
+  // 4.85) is a shade stronger than the old 4.5-wide switch, which holds the airtime of a
+  // pop where it was rather than paying for the smoothing out of the player's hang time.
+  private readonly HANG_ACCEL = 11;
+  private readonly HANG_FULL_SPEED = 3.2;
+  private readonly HANG_FADE_SPEED = 6.5;
   
   // Three.js
   private scene!: THREE.Scene;
@@ -194,6 +231,8 @@ export class Game {
   private ollieBufferedAt = -Infinity;
   /** One coyote-window pop per airborne period, so the grace can never become a double jump. */
   private ollieCoyoteUsed = false;
+  /** simTime of the last pop applyMovement fired, for the re-pop lockout. */
+  private lastOlliePopAt = -Infinity;
   /** Seconds of hold-to-go-higher lift still owed to the current pop. */
   private ollieLiftLeft = 0;
   /** simTime of the step on which the grind path already spent this frame's pop. */
@@ -1018,7 +1057,11 @@ export class Game {
       this.physics.setPosition(this.chairBody, this.checkpointPosition);
       this.physics.setRotationY(this.chairBody, this.checkpointRotation);
       this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
-      
+      // See loadLevel: the speed entitlement has to go with the velocity, or the restore
+      // launches the player out of the checkpoint at the speed they crashed at.
+      this.carriedSpeed = 0;
+      this.pinnedFor = 0;
+
       // Reset player state. A teleport is not a bail: the open position is dropped without
       // banking it and without charging for it.
       this.playerState.isGrounded = true;
@@ -1988,6 +2031,14 @@ export class Game {
       this.physics.setPosition(this.chairBody, spawnPos);
       this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
       this.physics.setRotationY(this.chairBody, spawn.rotation * Math.PI / 180);
+      // Zeroing the body is not enough: carriedSpeed is the speed the player is ENTITLED
+      // to, and applyMovement hands 93% of it back the moment actual speed falls below
+      // 85% of it. Left standing across a level load it fires from a dead stop and shoots
+      // the chair off the spawn at the speed of the run before it. loadCustomLevel()
+      // already clears it; this path did not. Measured: hard stop at 11.99 -> 11.14 one
+      // frame later, out of nothing.
+      this.carriedSpeed = 0;
+      this.pinnedFor = 0;
     }
     this.chair.position.copy(spawnPos);
     this.lastYaw = spawn.rotation * Math.PI / 180;
@@ -3722,7 +3773,7 @@ export class Game {
     // ollie. Requiring the exact frame of contact made it unusable on any surface with a
     // seam in it, and a manual you cannot start is a line you cannot link.
     const contactForTrick = this.playerState.isGrounded
-      || (this.simTime - this.lastGroundedTime) * 1000 < this.COYOTE_TIME_MS * 2;
+      || (this.simTime - this.lastGroundedTime) * 1000 < this.TRICK_CONTACT_GRACE_MS;
 
     if (intent.manualEdge !== 'none' && this.bailRecovery <= 0) {
       const nose = intent.manualEdge === 'noseManual';
@@ -4016,8 +4067,12 @@ export class Game {
         this.isMounted = false;
         this.updatePlayerMountPosition();
         
-        // Stop the chair
+        // Stop the chair. The speed entitlement goes with it — otherwise remounting
+        // hands back 93% of the speed that caused the crash and the chair drives off
+        // on its own. See applyMovement's restore.
         this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+        this.carriedSpeed = 0;
+        this.pinnedFor = 0;
       }
     }, 1500);  // Crash animation duration
   }
@@ -4465,6 +4520,7 @@ export class Game {
     const TURN_CHASE = 30;      // 1/s, exponential approach while turning in
     const TURN_SETTLE = 20;     // 1/s, exponential return to straight on release
     const TURN_LEAD = 2.0;      // gap feed-forward: the bite
+    const TURN_RELEASE_LEAD = 1.25; // the same feed-forward on the way OUT: see below
     const TURN_PEAK = 1.15;     // ceiling on the commanded rate, as a multiple of the max
     const TURN_MAX_STEP = 1.1;  // rad/s, most the command may move in one frame
 
@@ -4474,10 +4530,21 @@ export class Game {
     const holdingTurn = Math.abs(targetRate) >= Math.abs(this.turnRate);
     const gap = targetRate - this.turnRate;
     this.turnRate += gap * (1 - Math.exp(-(holdingTurn ? TURN_CHASE : TURN_SETTLE) * dt));
-    // Lead only into a turn: on release it would command a counter-rotation.
-    const lead = holdingTurn ? TURN_LEAD * (targetRate - this.turnRate) : 0;
+    // The lead used to be dropped entirely on release, for fear of commanding a
+    // counter-rotation. The cost of that was measured: letting go at a full carve left the
+    // chair turning for 13 more frames and swinging a further 19 degrees of heading the
+    // player did not ask for — enough to miss the rail you released the stick to line up.
+    // The release now leads too, and the counter-rotation it was afraid of is prevented
+    // outright by the guard below rather than by refusing to lead at all.
+    const lead = (holdingTurn ? TURN_LEAD : TURN_RELEASE_LEAD) * (targetRate - this.turnRate);
     const ceiling = maxRate * TURN_PEAK;
     let newRate = Math.max(-ceiling, Math.min(ceiling, this.turnRate + lead));
+    // Coming out of a turn the command may reach straight, and stop there. It may not
+    // cross to the other side and carve back — but only while the stick agrees it is
+    // coming out: once the player has pushed the OTHER way (target and current rate on
+    // opposite sides of zero) that is a reversal they asked for, and the lead is what
+    // makes an S through two features quick, so it is left alone.
+    if (!holdingTurn && targetRate * this.turnRate >= 0 && newRate * this.turnRate < 0) newRate = 0;
     newRate = this.turnCommand
       + Math.max(-TURN_MAX_STEP, Math.min(TURN_MAX_STEP, newRate - this.turnCommand));
     this.turnCommand = newRate;
@@ -4499,8 +4566,17 @@ export class Game {
     if (this.playerState.isGrounded) this.ollieCoyoteUsed = false;
 
     const airborneMs = (this.simTime - this.lastGroundedTime) * 1000;
-    const canJump = this.playerState.isGrounded
-      || (airborneMs < this.COYOTE_TIME_MS && !this.ollieCoyoteUsed);
+    // `isGrounded` is still true on the frame of the pop and often on the one after it, so
+    // without a lockout a second press a frame later popped again out of the same contact —
+    // a hidden double jump, and one more way for the same input to give two heights. The
+    // lockout is a CLOCK, deliberately: an earlier version keyed the same guard off
+    // ollieLiftLeft, which applyMovement is the only thing that decrements and which
+    // applyMovement does not run at all during a grind, so it froze mid-grind and started
+    // eating real pops. Anything that can get stuck must not gate the most-used input.
+    const repopLocked = (this.simTime - this.lastOlliePopAt) * 1000 < this.OLLIE_REPOP_LOCKOUT_MS;
+    const canJump = !repopLocked
+      && (this.playerState.isGrounded
+        || (airborneMs < this.COYOTE_TIME_MS && !this.ollieCoyoteUsed));
     // The grind path spends the pop itself when you ollie off a rail; don't fire twice.
     const popPressed = intent.olliePopped && this.olliePopHandledAt !== this.simTime;
 
@@ -4517,6 +4593,7 @@ export class Game {
       proceduralSounds.playOllie(this.ollieCharge);
       this.ollieBufferedAt = -Infinity;
       if (!this.playerState.isGrounded) this.ollieCoyoteUsed = true;
+      this.lastOlliePopAt = this.simTime;
       this.ollieLiftLeft = this.OLLIE_LIFT_SECONDS;
 
       // A manual you pop out of ends cleanly; the combo survives.
@@ -4524,10 +4601,13 @@ export class Game {
 
       const v = this.physics.getVelocity(this.chairBody);
       const newVel = v.clone();
-      // A floor under the vertical speed, not an overwrite: popping off a ramp lip adds
-      // to what the ramp already gave you instead of clipping it, and any residual sink
-      // from the ground-stick snap is erased so the takeoff is identical every time.
-      newVel.y = Math.max(v.y, jumpImpulse * this.ollieCharge);
+      // A floor under the vertical speed, not an overwrite: any residual sink from the
+      // ground-stick snap is erased so the takeoff is identical every time. The second
+      // term is what makes the pop always DO something — a bare Math.max against v.y
+      // silently swallowed the input whenever the chair was already rising faster than
+      // the impulse (off a ramp lip, or inside the coyote window on the way up), which is
+      // the same button producing two different outcomes.
+      newVel.y = Math.max(v.y + this.OLLIE_MIN_GAIN, jumpImpulse * this.ollieCharge);
       newVel.x += fwdFlat.x * 1.5;
       newVel.z += fwdFlat.z * 1.5;
       this.physics.setVelocity(this.chairBody, newVel);
@@ -4551,12 +4631,15 @@ export class Game {
 
     // HANG TIME — bleed a third of gravity off around the apex. Without it a 30 m/s^2
     // world gives a pop that is over before a trick animation can read, and air tricks
-    // are the second half of every line.
+    // are the second half of every line. Ramped, not switched: see HANG_FULL_SPEED.
     if (this.playerState.isAirborne) {
       const v = this.physics.getVelocity(this.chairBody);
-      if (Math.abs(v.y) < 4.5) {
+      const rising = Math.abs(v.y);
+      if (rising < this.HANG_FADE_SPEED) {
+        const k = rising <= this.HANG_FULL_SPEED ? 1
+          : (this.HANG_FADE_SPEED - rising) / (this.HANG_FADE_SPEED - this.HANG_FULL_SPEED);
         this.physics.setVelocity(
-          this.chairBody, new THREE.Vector3(v.x, v.y + 11 * dt, v.z),
+          this.chairBody, new THREE.Vector3(v.x, v.y + this.HANG_ACCEL * k * dt, v.z),
         );
       }
     }
