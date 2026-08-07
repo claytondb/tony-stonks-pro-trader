@@ -395,11 +395,38 @@ CHILD_SLOT[SHO_L] = UARM_L; CHILD_SLOT[UARM_L] = FARM_L; CHILD_SLOT[FARM_L] = HA
 CHILD_SLOT[SHO_R] = UARM_R; CHILD_SLOT[UARM_R] = FARM_R; CHILD_SLOT[FARM_R] = HAND_R;
 CHILD_SLOT[THIGH_L] = SHIN_L; CHILD_SLOT[SHIN_L] = FOOT_L; CHILD_SLOT[FOOT_L] = TOE_L;
 CHILD_SLOT[THIGH_R] = SHIN_R; CHILD_SLOT[SHIN_R] = FOOT_R; CHILD_SLOT[FOOT_R] = TOE_R;
-/** Fallbacks when the preferred child is missing from the rig (no upperChest, no toes, ...). */
-const CHILD_FALLBACK: (number | null)[] = new Array(SLOT_COUNT).fill(null);
-CHILD_FALLBACK[SPINE] = NECK; CHILD_FALLBACK[CHEST] = NECK; CHILD_FALLBACK[UPCHEST] = HEAD;
-CHILD_FALLBACK[HIPS] = CHEST;
-CHILD_FALLBACK[FOOT_L] = null; CHILD_FALLBACK[FOOT_R] = null;
+/**
+ * slot -> every slot that will do as its "child", best first.
+ *
+ * A rig that is missing the middle of its spine (this one has hips / spine / chest / head and
+ * nothing else) must still be able to say which way the chest points, and the honest answer is
+ * "at the next joint that exists further up the chain" — which for this rig is the HEAD. The
+ * chain has to be walked to the end rather than stopping at one fallback, because the two
+ * mid-spine slots that used to be tried are both absent.
+ *
+ * Falling through to the geometry fallback instead is what this list is there to AVOID for the
+ * torso, and the reason is a real defect it caused: `geometryOffset` walks a bone's whole
+ * SUBTREE, and the arms hang off the chest, so the chest's rest direction was an average over
+ * the entire upper body's meshes. Adding a wrist joint — two more small meshes on the ends of
+ * two arms — swung it by 22 degrees and quietly took the head 88 mm backwards. A bone's rest
+ * direction must not be a function of how many meshes its grandchildren happen to be built from.
+ */
+const CHILD_CHAIN: number[][] = [];
+{
+  const chains: Partial<Record<number, number[]>> = {
+    [HIPS]: [SPINE, CHEST, UPCHEST, NECK, HEAD],
+    [SPINE]: [CHEST, UPCHEST, NECK, HEAD],
+    [CHEST]: [UPCHEST, NECK, HEAD],
+    [UPCHEST]: [NECK, HEAD],
+    [NECK]: [HEAD],
+  };
+  for (let s = 0; s < SLOT_COUNT; s++) {
+    const explicit = chains[s];
+    if (explicit) { CHILD_CHAIN.push(explicit); continue; }
+    const c = CHILD_SLOT[s];
+    CHILD_CHAIN.push(c === null ? [] : [c]);
+  }
+}
 /**
  * slot -> the slot to take a direction FROM when this bone has no child at all. Only listed for
  * segments that lie along their parent in a bind pose, where "keep going the way my parent was
@@ -1113,7 +1140,15 @@ export class TrickAnimator {
     // gives the free leg a shape. It is speed-scaled in posePushLeg, so at a standstill (every
     // menu idle, every screenshot of a stopped game) the sole is still flat on the carpet.
     coastLift: 0.150,
-    coastTrail: -0.150,
+    // MEASURED IN from -0.150. This is a PELVIS-relative depth, and the pelvis already sits
+    // 0.28 m behind the seat anchor (that is what kneeling on a seat costs), so -0.150 put the
+    // coasting shoe at chair-frame z -0.412: a whole caster ring astern of the chair, with a
+    // leg at 89% extension reaching down to it. A foot planted that far back is the single
+    // loudest "he is standing behind this chair" cue the pose has, because it is exactly where
+    // a standing man's foot would be. -0.055 brings the shoe to z -0.322 — under his own hips,
+    // just outside the caster ring's 0.306 radius so it never ploughs a spoke, and reading as a
+    // man braced over the chair rather than trailing it.
+    coastTrail: -0.055,
 
     // LEAN. This is not a taste knob — it is what decides the arms, so it is SOLVED, not typed.
     // 0.47 is only the tier-1 answer and only the starting value; solveStance overwrites it from
@@ -1367,9 +1402,11 @@ export class TrickAnimator {
     for (let s = 0; s < SLOT_COUNT; s++) {
       const e = this.slots[s];
       if (!e) continue;
-      let childSlot = CHILD_SLOT[s];
-      if (childSlot === null || !this.slots[childSlot]) childSlot = CHILD_FALLBACK[s];
-      let child = childSlot === null ? null : this.slots[childSlot];
+      let child: BoneEntry | null = null;
+      for (const cs of CHILD_CHAIN[s]) {
+        const cand = this.slots[cs];
+        if (cand) { child = cand; break; }
+      }
       if (!child) {
         // LEAF BONE — no child joint to point at. Two fallbacks, in order:
         //
@@ -1467,6 +1504,13 @@ export class TrickAnimator {
     e.bone.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh || !m.geometry) return;
+      // Only the geometry that belongs to THIS bone. Anything under a further joint belongs to
+      // that joint, and averaging it in makes a bone's rest direction depend on how the rig
+      // downstream of it happens to be subdivided — which is how adding a wrist swung the
+      // chest's rest direction by 22 degrees and moved the rider's head.
+      for (let p = m.parent; p && p !== e.bone; p = p.parent) {
+        if ((p as THREE.Object3D & { isBone?: boolean }).isBone) return;
+      }
       if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
       const bb = m.geometry.boundingBox;
       if (!bb) return;
@@ -1797,15 +1841,27 @@ export class TrickAnimator {
       // the cushion instead of intersecting it, and swung OUTBOARD so the ankle leaves the pan
       // over its trailing outboard corner rather than dead astern.
       //
-      // THE OUTBOARD COMPONENT IS THE WHOLE REASON THE KNEEL IS VISIBLE. The chair is a solid
-      // object the size of the rider's lower body; run the shin straight down the centre line
-      // and the seat and backrest swallow the entire planted leg from every camera the game
-      // actually uses. At 25 degrees the knee sits on the cushion's outer third and the trailing
-      // shoe finishes at x -0.38, z -0.30 — outside the chair's own silhouette (the seat group
-      // reaches x 0.277) and behind it, where the chase camera and both hero angles can see it.
-      // That trailing shoe, hanging in the air well above the floor, is the single clearest
-      // signal in the whole pose that one leg is UP ON THE SEAT and not standing on anything.
-      this.kneelShin[i].set(side * 0.42, -0.07 - c.shinDroop, -0.90).normalize();
+      // THE OUTBOARD COMPONENT IS WHAT MAKES THE KNEEL VISIBLE, and it is a tuned compromise,
+      // not a free parameter. The chair is a solid object the size of the rider's lower body;
+      // run the shin straight down the centre line and the seat and backrest swallow the whole
+      // planted leg from every camera the game uses, so the outboard swing is what carries the
+      // trailing shoe out past the chair's own silhouette (the seat group reaches x 0.277)
+      // where the chase camera can see it.
+      //
+      // MEASURED DOWN from 25 degrees to 15. At 25 the ankle finished at x -0.380 — 100 mm
+      // clear of the chair on one side while the kicking shoe sat 290 mm clear on the other,
+      // and from any camera ahead of the chair (both hero angles, every 3/4 screenshot) that
+      // reads as a SYMMETRIC STRADDLE: two legs splayed either side of a chair nobody is
+      // kneeling on. At 15 degrees the ankle lands at x -0.307, which is 30 mm proud of the
+      // seat — still separated from the chair's silhouette from behind, but tucked back inside
+      // it from the front, so the two legs stop mirroring each other and the asymmetry that
+      // says "one of these is up on the seat" survives.
+      //
+      // The droop is capped by interpenetration, not taste: the shin has to stay ABOVE the pan
+      // until it is past the pan's own rear edge (z -0.227) or it sinks into the cushion. At
+      // this outboard angle and this droop it crosses the pan plane at z -0.261, which is
+      // already behind the seat. Steepen either and the trouser leg dives through the foam.
+      this.kneelShin[i].set(side * 0.24, -0.07 - c.shinDroop, -0.955).normalize();
       // Foot hangs off the trailing outboard corner, toes down and back.
       this.kneelFoot[i].set(side * 0.22, -0.64, -0.74).normalize();
     }

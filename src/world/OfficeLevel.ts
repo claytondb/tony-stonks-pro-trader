@@ -408,7 +408,25 @@ const RING_OUT = 23.0;     // outer face: the building wall's collider face
 const RING_MID = 19.7;     // the racing line, and where the loop's ledges sit
 const RING_LEDGE_D = 3.0;  // ledge depth; its two grind edges sit at +/-1.47
 const RING_LEDGE_HALF = 9; // ledges span +/-9 m of each side's centre
-const CHAMFER = 4.4;       // 45-degree corner cut, measured back from RING_OUT
+// THE CHAMFER MUST SPAN THE WHOLE RACETRACK OR IT IS NOT A CORNER.
+// A 45-degree corner deflects an incoming run only where the corner actually IS. Cut back only
+// CHAMFER metres from RING_OUT, the diagonal face covers |x| + |z| >= RING_OUT + (RING_OUT -
+// CHAMFER); everything inboard of that meets the BUILDING WALL SQUARE and stops dead, because
+// resolveObstacles slides along a face and a head-on hit has no tangential velocity left to
+// slide with. At CHAMFER = 4.4 the face covered |x| + |z| >= 41.6, so the inboard 2.3 m of a
+// 6.7 m wide racetrack — which includes the loop ledge's INNER grind edge at 18.23, i.e. one of
+// the two lines the whole ring is built out of — was a dead end.
+//   MEASURED, benchmark run, before this changed: a lap arrived along the south straight riding
+//   the inner edge at z = 18.23 and hit the west wall at x = -22.6 doing 13.7 m/s. Next sample:
+//   0.00 m/s. The 26 s benchmark scored TWO combos (11 tricks, then 29) instead of one, and the
+//   break was a wall, not a gap — no amount of extra linking geometry fixes a wall.
+// So the cut is not a taste number: it is exactly the width of the lane it has to turn, and
+// every point in the lane now meets a 45-degree face. Two things fall out of it for free:
+//   * the corner lane narrows to 4.54 m clear, so a chair jammed on EITHER side of the corner
+//     is within GrindSystem.SNAP_DISTANCE of a corner-ledge edge (0.63 m inboard, 0.99 m
+//     outboard). Before, an outboard corner was 2.62 m from anything — grind did nothing.
+//   * the corner cap rail grows from 4.98 m to 7.9 m, the longest single grind on the ring.
+const CHAMFER = RING_OUT - RING_IN; // 6.7 — the full width of the loop, so the whole lane turns
 
 // ---------------------------------------------------------------------------
 // Main builder
@@ -983,9 +1001,25 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     });
   }
   // Head-on from the spine. Its toe points -Z, back down the corridor the player arrives along.
+  //
+  // IT IS THE SAME DEPTH AS THE SIDE LIPS, AND FOR THE SAME REASON. makeQuarterPipe approximates
+  // its transition with SIX stacked boxes, so the horizontal spacing between consecutive step
+  // faces is proportional to the ramp's depth, and near the coping — where the curve is almost
+  // vertical — it collapses: at depth 2.4 the top three faces sit 0.234, 0.143 and 0.068 m apart,
+  // all far inside the chair's 0.40 m collision radius, so the capsule straddles three steps at
+  // once and the resolver pushes it back out instead of up.
+  //   MEASURED at depth 2.4: a run up the spine holding W climbed cleanly from y 0.44 to 0.99 —
+  //   and then, one 50 ms sample later at z = 18.45, went from 10.77 m/s to 0.95. It was the ONLY
+  //   sample under 5 m/s in a 45 s lap run, and it is at the north mouth, which is where the
+  //   spawn points you. The first thing the level did to a player was stop them.
+  // At 3.6 the same steps are 0.351, 0.215 and 0.102 m and the ramp launches instead of blocking
+  // — which is exactly why the side lips were already 3.6, so this is the number the mouth was
+  // always supposed to use. The coping stays put against the stair box (the ramp grows backwards
+  // down the empty spine, whose Long Bench ends 2.2 m short of the new toe); only the transition
+  // gets longer, so the Stairwell Gap is the same gap, taken faster.
   place(acc, makeQuarterPipe({
-    width: 3.4, depth: 2.4, height: STAIR_H, seed: 4510,
-  }), 0, 0, STAIR_Z - STAIR_HALF_Z - 1.2 - 0.05, 0, { collide: true, grind: true });
+    width: 3.4, depth: STAIR_QP_D, height: STAIR_H, seed: 4510,
+  }), 0, 0, STAIR_Z - STAIR_HALF_Z - STAIR_QP_D / 2 - 0.05, 0, { collide: true, grind: true });
   // The nose of the flight, both edges, so the hip can be grinded in either loop direction.
   for (const s of [-1, 1]) {
     acc.rails.push({

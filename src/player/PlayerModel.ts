@@ -241,6 +241,7 @@ export class PlayerModel {
       head: 'Head',
       shoulderL: 'LeftArm', shoulderR: 'RightArm',
       elbowL: 'LeftForeArm', elbowR: 'RightForeArm',
+      wristL: 'LeftHand', wristR: 'RightHand',
       hipL: 'LeftUpLeg', hipR: 'RightUpLeg',
       kneeL: 'LeftLeg', kneeR: 'RightLeg',
       ankleL: 'LeftFoot', ankleR: 'RightFoot',

@@ -667,7 +667,11 @@ export class Game {
     // and bail (red, falling), so the outcome is legible without reading the HUD.
     if (this.chair) this.landingParticles?.trickPop(this.chair.position, Math.min(1, def.basePoints / 900));
     this.activeTrick = { id: def.id, kind, name: def.displayName, until: performance.now() + duration };
-    this.trickAnimator?.playTrick(def.id, kind, duration / 1000);
+    // MILLISECONDS. `duration` is already in ms (TrickRegistry's unit) and playTrick converts;
+    // passing `duration / 1000` here converted twice, so a 400 ms trick ran for 0.4 ms — the
+    // envelope finished inside the frame it started and released, which is why not one of the
+    // per-trick pose signatures had ever been seen on screen.
+    this.trickAnimator?.playTrick(def.id, kind, duration);
     this.heldGrabId = held ? def.id : null;
     return true;
   }
@@ -3793,7 +3797,7 @@ export class Game {
       if (this.balance.tryRevert(this.landedFromTransition)) {
         this.score.revert();
         const def = TrickRegistry.get('manual');
-        if (def) this.trickAnimator?.playTrick('revert', 'manual', 0.35);
+        if (def) this.trickAnimator?.playTrick('revert', 'manual', 350);   // ms, not seconds
       }
     }
 

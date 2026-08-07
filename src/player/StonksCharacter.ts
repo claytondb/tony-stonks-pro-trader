@@ -627,19 +627,39 @@ function buildArm(m: Mats, side: number): Arm {
   const fore = chamferBox(0.072, P.foreArm, 0.076, 0.016);
   taper(fore, 'y', 0.78, 1.06);
   eb.add(fore, m.skin, { pos: [0, -P.foreArm * 0.5, 0], tint: { ao: 0.24, back: 0.22 } });
+  eb.flushInto(elbow, 'foreArm');
+
+  // WRIST — a real joint, not a lump on the end of the forearm.
+  //
+  // The fist used to be merged into the forearm mesh, which cost two separate things:
+  //   1. TrickAnimator's `hand` slot bound to nothing, so every authored wrist rotation was
+  //      silently dropped — including poseGrip's own "knuckles over the rail" roll, which is
+  //      the detail that makes the hands read as GRIPPING the backrest rather than as two
+  //      blocks parked next to it, and the wrist ops in coffee_mug / keyboard_clutch /
+  //      monitor_hug / quarterly_report / pink_slip.
+  //   2. the forearm had no child joint, so its length had to be guessed (0.95x the upper arm)
+  //      and its rest direction inferred from mesh centroids rather than measured.
+  // The joint sits exactly where the two-bone grip IK already places its end effector, so the
+  // hands land in the same place as before; only their orientation is now drivable.
+  const wrist = new THREE.Group();
+  wrist.name = side < 0 ? 'wristL' : 'wristR';
+  wrist.position.set(0, -P.foreArm, 0);
+  elbow.add(wrist);
+
+  const wb = new PartBuilder();
   // Fist CLOSED ROUND A RAIL. TrickAnimator solves the wrist onto the backrest's top edge, so
   // the hand has to look like it is wrapped over a bar from any angle: a block for the palm, a
   // knuckle ridge across the far side, and a thumb laid along the inboard face.
-  eb.add(chamferBox(0.076, 0.082, 0.096, 0.018), m.skin, {
-    pos: [0, -P.foreArm - 0.036, -0.006], rot: [0.28, 0, 0], tint: { ao: 0.44, back: 0.2 },
+  wb.add(chamferBox(0.076, 0.082, 0.096, 0.018), m.skin, {
+    pos: [0, -0.036, -0.006], rot: [0.28, 0, 0], tint: { ao: 0.44, back: 0.2 },
   });
-  eb.add(chamferBox(0.078, 0.030, 0.038, 0.010), m.skin, {
-    pos: [0, -P.foreArm - 0.060, -0.044], rot: [0.28, 0, 0], tint: { tint: 0xfff4ea },
+  wb.add(chamferBox(0.078, 0.030, 0.038, 0.010), m.skin, {
+    pos: [0, -0.060, -0.044], rot: [0.28, 0, 0], tint: { tint: 0xfff4ea },
   });
-  eb.add(chamferBox(0.028, 0.050, 0.050, 0.011), m.skin, {
-    pos: [-side * 0.038, -P.foreArm - 0.024, -0.034], rot: [0.38, 0, 0], tint: { tint: 0xf2f2f2 },
+  wb.add(chamferBox(0.028, 0.050, 0.050, 0.011), m.skin, {
+    pos: [-side * 0.038, -0.024, -0.034], rot: [0.38, 0, 0], tint: { tint: 0xf2f2f2 },
   });
-  eb.flushInto(elbow, 'foreArm');
+  wb.flushInto(wrist, 'fist');
 
   return { shoulder, elbow, origin: new THREE.Vector3(side * P.shoulderX, P.shoulderY, 0), side };
 }
