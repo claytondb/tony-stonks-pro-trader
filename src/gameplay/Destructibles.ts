@@ -1043,6 +1043,16 @@ export class DestructibleManager {
   private readonly geoCache = new Map<string, THREE.BufferGeometry>();
   private readonly matCache = new Map<string, THREE.MeshStandardMaterial>();
 
+  // STATIC BATCH — see rebuildBatch(). Every prop that is still standing exactly where it
+  // was authored is drawn out of a handful of consolidated meshes instead of its own; a prop
+  // only gets its own draw call once it has actually been disturbed.
+  private batchRoot: THREE.Group | null = null;
+  private batchDirty = false;
+  /** Props that have left the batch since it was last built. Drives the lazy re-batch. */
+  private evictedSinceRebuild = 0;
+  private lastBatchBuild = -999;
+  private readonly batchSlots = new Map<Instance, OfficeProps.MergeRange[]>();
+
   private time = 0;
   private nextId = 1;
   private awake = 0;
@@ -1180,6 +1190,7 @@ export class DestructibleManager {
     this.instances.push(inst);
     this.byId.set(id, inst);
     this.addToGrid(inst);
+    this.batchDirty = true;
     return id;
   }
 
@@ -1187,6 +1198,113 @@ export class DestructibleManager {
     const out: string[] = new Array(defs.length);
     for (let i = 0; i < defs.length; i++) out[i] = this.spawn(defs[i]);
     return out;
+  }
+
+  // -------------------------------------------------------------------------
+  // Static batch
+  //
+  // A destructible spends nearly all of its life standing exactly where it was authored —
+  // `stepDynamics` deliberately does not even sync its transform until `disturbed` flips. So
+  // paying a draw call per prop for that whole time is waste, and it was the single largest
+  // item in the frame: 35 props were 65 visible meshes, and every visible mesh is drawn three
+  // times (shadow map, GTAO depth/normal prepass, main pass).
+  //
+  // So: consolidate every pristine prop into one mesh per material family, hide the
+  // individual props, and evict a prop from the batch the instant it is disturbed by
+  // collapsing its own vertex span to a point (zero-area triangles rasterise nothing) and
+  // un-hiding its real mesh. Eviction is O(that prop's vertices) and touches no other prop,
+  // so there is no rebuild hitch when a box stack explodes.
+  // -------------------------------------------------------------------------
+
+  /** True if the subtree holds an InstancedMesh, which mergeGroup re-parents rather than merges. */
+  private static hasInstanced(o: THREE.Object3D): boolean {
+    let found = false;
+    o.traverse((c) => {
+      if ((c as THREE.InstancedMesh).isInstancedMesh) found = true;
+    });
+    return found;
+  }
+
+  private rebuildBatch(): void {
+    this.batchDirty = false;
+    this.evictedSinceRebuild = 0;
+    this.lastBatchBuild = this.time;
+    this.disposeBatch();
+
+    const merge = (OfficeProps as unknown as AnyRecord)['mergePropsByMaterialTracked'];
+    if (typeof merge !== 'function') return; // older OfficeProps: props just stay unbatched
+
+    const eligible: Instance[] = [];
+    const wrappers: THREE.Object3D[] = [];
+    for (const inst of this.instances) {
+      if (inst.smashed || inst.inert || inst.dynamic) continue;
+      if (DestructibleManager.hasInstanced(inst.visual)) continue;
+      const w = new THREE.Group();
+      w.position.copy(inst.root.position);
+      w.quaternion.copy(inst.root.quaternion);
+      // clone() shares geometry and materials; mergeGroup clones geometry before it bakes,
+      // so the originals this prop still owns are never touched.
+      w.add(inst.visual.clone());
+      wrappers.push(w);
+      eligible.push(inst);
+    }
+    if (!wrappers.length) return;
+
+    let result: { group: THREE.Group; ranges: OfficeProps.MergeRange[][] };
+    try {
+      result = (merge as (o: readonly THREE.Object3D[]) => typeof result)(wrappers);
+    } catch (err) {
+      console.warn('[Destructibles] static batch merge failed; props stay unbatched', err);
+      return;
+    }
+    if (!(result?.group instanceof THREE.Object3D) || !Array.isArray(result.ranges)) return;
+
+    result.group.name = 'destructibleBatch';
+    this.group.add(result.group);
+    this.batchRoot = result.group;
+
+    eligible.forEach((inst, i) => {
+      const spans = result.ranges[i];
+      if (!spans || !spans.length) return; // not represented in the batch: keep drawing it
+      this.batchSlots.set(inst, spans);
+      inst.root.visible = false;
+    });
+  }
+
+  /** Pull one prop out of the static batch and hand it back its own mesh. Idempotent. */
+  private evictFromBatch(inst: Instance): void {
+    const spans = this.batchSlots.get(inst);
+    if (!spans) return;
+    this.batchSlots.delete(inst);
+    this.evictedSinceRebuild++;
+    for (const span of spans) {
+      const attr = span.mesh.geometry?.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!attr) continue;
+      (attr.array as Float32Array).fill(0, span.start * 3, (span.start + span.count) * 3);
+      attr.needsUpdate = true;
+    }
+    inst.root.visible = true;
+  }
+
+  /** Mark a prop as moved. The one place `disturbed` is raised, so eviction can never be missed. */
+  private disturb(inst: Instance): void {
+    if (!inst.disturbed) {
+      inst.disturbed = true;
+      this.evictFromBatch(inst);
+    }
+  }
+
+  private disposeBatch(): void {
+    if (this.batchRoot) {
+      this.batchRoot.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) m.geometry?.dispose();
+      });
+      this.batchRoot.removeFromParent();
+      this.batchRoot = null;
+    }
+    for (const inst of this.batchSlots.keys()) inst.root.visible = true;
+    this.batchSlots.clear();
   }
 
   private buildVisual(
@@ -1355,11 +1473,24 @@ export class DestructibleManager {
     const step = Math.min(Math.max(dt, 0), 1 / 20);
     this.time += step;
     this.pendingDrag = 0;
+    if (this.batchDirty) this.rebuildBatch();
 
     this.promoteNearby(playerPos);
     this.stepDynamics(step, playerPos, playerVel);
     this.enforceBudget(playerPos);
     this.debrisField.update(step, this.time);
+
+    // Props knocked over during a run leave the batch and never come back, so a long line
+    // would slowly claw back the draw calls we just saved. Once enough have left, and once
+    // they have all settled and dropped out of the dynamic tier, fold the survivors back in.
+    // Guarded by a cooldown so this can never fire twice in quick succession.
+    if (
+      this.evictedSinceRebuild >= 6 &&
+      this.dynamics.length === 0 &&
+      this.time - this.lastBatchBuild > 5
+    ) {
+      this.rebuildBatch();
+    }
   }
 
   /** Tier 1 -> tier 2: anything inside promoteRadius becomes a (sleeping) dynamic body. */
@@ -1423,12 +1554,13 @@ export class DestructibleManager {
         const mx = t.x - inst.homePos.x;
         const my = t.y - inst.homePos.y;
         const mz = t.z - inst.homePos.z;
-        if (mx * mx + my * my + mz * mz > 0.0004) inst.disturbed = true;
+        if (mx * mx + my * my + mz * mz > 0.0004) this.disturb(inst);
       }
 
       // Sync only when it matters: undisturbed props keep their exact authored transform,
       // which also hides the sub-millimetre settle Rapier applies on the first awake step.
       if (inst.disturbed && (!sleeping || inst.wasAwake)) {
+        if (this.batchSlots.size) this.evictFromBatch(inst);
         const r = body.rotation();
         inst.root.position.set(t.x, t.y, t.z);
         inst.root.quaternion.set(r.x, r.y, r.z, r.w);
@@ -1518,7 +1650,7 @@ export class DestructibleManager {
     if (inst.inert) return;
 
     inst.lastHit = this.time;
-    inst.disturbed = true;
+    this.disturb(inst);
     if (!inst.dynamic) this.setDynamic(inst, true);
 
     const p = inst.profile;
@@ -1608,6 +1740,7 @@ export class DestructibleManager {
   /** Destroy a prop: topple it or break it apart, spawn debris, notify listeners. */
   private breakInstance(inst: Instance, dx: number, dz: number, momentum: number): void {
     inst.smashed = true;
+    this.evictFromBatch(inst);
     this.smashedCountInternal++;
     const p = inst.profile;
     // Snapshot: the burst branch below moves root.position, and the debris origin and the
@@ -1690,6 +1823,7 @@ export class DestructibleManager {
   /** Physics-less topple, only reachable when no Rapier world could be resolved. */
   private stepScriptedFall(inst: Instance, dt: number): void {
     if (inst.fallDur <= 0) return;
+    if (this.batchSlots.size) this.evictFromBatch(inst);
     inst.fallT = Math.min(inst.fallDur, inst.fallT + dt);
     const k = inst.fallT / inst.fallDur;
     // ease-out so it accelerates over and then stops dead on the floor
@@ -1912,6 +2046,8 @@ export class DestructibleManager {
 
   /** Put every prop back exactly where it started, unbroken. Call on level restart. */
   reset(): void {
+    this.disposeBatch();
+    this.batchDirty = this.instances.length > 0;
     for (const inst of this.instances) {
       const body = inst.body;
       if (body) {
@@ -1950,6 +2086,7 @@ export class DestructibleManager {
 
   /** Tear everything down: bodies, meshes, geometry and the materials we cloned. */
   dispose(): void {
+    this.disposeBatch();
     if (this.world) {
       for (const inst of this.instances) {
         if (inst.body) {

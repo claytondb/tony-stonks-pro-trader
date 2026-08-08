@@ -254,21 +254,40 @@ export interface ScoreTuning {
    *
    * TUNED FROM MEASUREMENT, not taste, and re-measured with the play harness rather than from the
    * level file. What matters is not the distance between rails but how long the combo clock is
-   * actually RUNNING between features — airtime, grinds and manuals all hold it. Instrumenting a
-   * 24 s ch1_office run (W + grind held, 12 grind episodes, 12 m/s median) gave the real
-   * distribution of clock-ticking gaps between features:
+   * actually RUNNING between features — airtime, grinds and manuals all hold it.
    *
-   *     median 0.45 s   p90 1.30 s   worst 1.35 s
+   * RE-MEASURED against the shipping ch1_office geometry (the loop chamfer now spans the full
+   * width of the racetrack, so a lap is unbroken). Two independent measurements:
    *
-   * and the rail graph itself has a median rail-to-rail hop of 1.14 m (p90 2.48 m, worst 4.70 m).
-   * 2200 ms therefore clears the worst gap that level design actually produces with ~60% headroom
-   * — enough that a missed rail or a wide turn does not end the line — while still being 26 m at
-   * cruise, well under a lap of the 41x43 m floorplate. Standing still ends the combo in 2.2 s,
-   * so the clock is still a real clock.
+   *   THE RAIL GRAPH — from each rail exit to the nearest point of any rail ahead of it, over all
+   *   99 rails and both directions, i.e. 198 exits:
    *
-   * NOTE: this window was NEVER the thing killing lines. Game.ts force-banked the position 0.4 s
-   * after every touchdown (LANDING_GRACE), which is below the MEDIAN gap between features — every
-   * measured combo closed with `viaTimeout: false`, i.e. an explicit land(), never a lapsed clock.
+   *       median 1.13 m   p90 3.03 m   worst 3.61 m      (0.08 / 0.22 / 0.26 s at 14 m/s)
+   *
+   *   THE ACTUAL CLOCK — every stretch in a 45 s no-input lap run (W + grind held, 30 grind
+   *   episodes, 637.9 m) during which the combo was open and NOTHING was holding the clock:
+   *
+   *       median 0.45 s   p90 0.80 s   worst 1.45 s
+   *
+   * The rail-graph number is the floor and the telemetry number is the truth: the worst real gap
+   * is 1.45 s (the spine's north mouth, where the run banks off the stairwell and comes back),
+   * three times the median and nearly twice p90. 2200 ms clears it with 52% headroom — enough
+   * that a missed rail, a wide corner or a bank return does not end the line — and no more than
+   * that. It is 31 m at the measured 14.1 m/s cruise, a fifth of a 145 m lap, so it can never
+   * carry a position round the park on its own. Standing still still ends the combo in 2.2 s.
+   *
+   * IT WAS TEMPTING TO RAISE IT AND IT WOULD HAVE BEEN CHEATING. longestComboSeconds sat at 14.60
+   * against a 15-60 s target and a wider window buys that number directly — but the thing ending
+   * the line was never the clock. It was a wall: the loop's corner chamfer only covered the outer
+   * two thirds of the racetrack, so a lap riding the ring ledge's inner grind edge met the
+   * building wall square and went to 0.00 m/s. Widening the chamfer to the full lane took the
+   * same 26 s benchmark from 14.60 s / 28 tricks to 25.25 s / 40 tricks with this window
+   * untouched, and a 45 s run to a single 44.25 s combo. Fix the level, not the clock.
+   *
+   * NOTE: Game.ts's LANDING_GRACE is this same value (see Game.LANDING_GRACE), so a touchdown
+   * with nothing under it banks on exactly this clock and there is only one number to reason
+   * about. It used to be a separate 0.4 s, below the MEDIAN gap between features, which force-
+   * banked every combo before the clock could ever lapse.
    */
   comboWindowMs: number;
   /** Repeating a trick id multiplies its points by this ^ repeatCount (THPS halves). */

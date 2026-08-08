@@ -248,21 +248,27 @@ export interface AnimatorConfig {
   /** Downward droop of the planted shin as it trails back over the seat, 0..1. */
   shinDroop: number;
   /**
-   * Angle of the planted THIGH below horizontal, radians. This is the single number that decides
-   * whether the pose reads as KNEELING or as SITTING, so it is authored and everything else
-   * bends around it.
-   *
-   * A shallow thigh puts the hip a long way behind the knee, which hangs the whole rider off the
-   * back of the chair — that is what "a man standing behind a chair holding its backrest" looked
-   * like, and it is what three earlier passes shipped. At 1.0 rad (57 deg) the hip sits over the
-   * middle of the pan with the shin lying back underneath it, which is what a person kneeling on
-   * an office chair actually looks like.
-   *
-   * The cost is that the pelvis is then higher than the push leg can reach the floor from; see
-   * `pushDip`, which spends that difference as a weight drop on the kick instead of pretending
-   * the rider has longer legs.
+   * LEGACY, and no longer read by the stance solve. The angle of the planted thigh below
+   * horizontal used to be authored here and everything else bent around it; it is now an OUTPUT
+   * of `solveStance`, which derives the pelvis height from the kicking leg's reach instead (see
+   * `pushExtension`). Authoring the thigh angle by hand is what put the pelvis 263 mm behind the
+   * seat anchor — behind the pan's own rear edge — and made the pose read as a man standing
+   * behind the chair. Kept so external callers and the pose probes still compile.
    */
   thighPitch: number;
+
+  /**
+   * How much of the kicking leg may be spent reaching the floor, as a fraction of
+   * (thigh + shin). THIS IS WHAT SETS THE RIDER'S HEIGHT: the pelvis is placed exactly one
+   * `pushExtension` of a leg above the planted ankle, because that is the highest — and so the
+   * most forward, see solveStance — the hip can be while the shoe still touches the carpet.
+   *
+   * 1.0 is a locked-straight stilt; below about 0.90 the hip drops so far that the thigh's
+   * horizontal run carries the pelvis off the back of the seat. 0.96 keeps a visible break in
+   * the knee and still lands the hip over the cushion, and the push cycle then bends that knee
+   * properly on every kick through `pushDip`.
+   */
+  pushExtension: number;
 
   /** Grip line on the backrest, in the chair root's frame: height above the floor, metres. */
   backTopY: number;
@@ -1095,28 +1101,47 @@ export class TrickAnimator {
     // down the centre line and the seat swallows it completely from every camera angle.
     kneeOutboard: 0.195,
     kneeOutboardMax: 0.205,     // tier-1 cushion is 0.23 half-wide; the bolster crest is 0.204
-    // 0.10, not 0.02: the shin has to visibly SLOPE OFF THE BACK of the pan.
-    // At 0.02 it ran dead level 40 mm above the cushion and the trailing shoe finished at seat
-    // height, which from behind reads as a leg sticking out sideways in mid-air rather than as a
-    // leg lying on a seat. Dropping the far end to just under the pan's own top plane — past its
-    // rear edge, so nothing intersects — gives the planted leg a shape that starts on the chair.
-    shinDroop: 0.10,
-    // 0.50 rad (29 deg) — MEASURED DOWN from 0.85 because 0.85 was reading as "standing".
+    // 0.30. The shin has to visibly SLOPE OFF THE BACK of the pan.
     //
-    // thighPitch is the one number that decides how high the pelvis rides, and every other part
-    // of the silhouette hangs off it:
-    //   0.85 rad put the pelvis 0.359 m over the pan, which is level with the TOP OF THE
-    //   BACKREST. From there the head clears the chair by 330 mm, the grip line is below his
-    //   hips, and — the tell that made four reviewers call this "a man standing behind a chair"
-    //   — the kicking leg has to span 0.756 m of air to reach the carpet on a 0.800 m leg. That
-    //   is 99.4% extension: a dead straight stilt, which is exactly what a standing leg is.
-    //   0.50 rad drops the pelvis to 0.255 m over the pan. The kicking leg then spans 0.685 m,
-    //   or 86% — a clearly bent knee, the single strongest "he is crouched over this thing
-    //   pushing it" cue available — and the hip settles back over the rear of the pan with the
-    //   shin under it, which is what kneeling on a seat actually looks like.
-    // The cost is 88 mm more distance to the rail, which solveLeanForGrip spends as forward
-    // torso lean (0.37 -> 0.49 rad). That is the right way to spend it: it is the scooter fold.
-    thighPitch: 0.50,
+    // 0.10 was still too shallow: measured in game it dropped the ankle 77 mm over a 450 mm
+    // shin, so the trailing shoe finished at y 0.554 against a pan top of 0.559 — dead level
+    // with the seat, hanging in mid-air off the chair's rear outboard corner. From the hero
+    // angles that reads as a leg sticking out sideways, not as a leg folded back over a seat.
+    // At 0.30 the ankle finishes ~85 mm BELOW the pan, so the calf clearly falls away behind the
+    // chair and the silhouette says "folded under him".
+    //
+    // The droop is capped by interpenetration, not taste: the shin must not dive through the
+    // cushion while it is still over it. It does not — the outboard swing carries the leg past
+    // the cushion's own half-width (0.23) before the centreline reaches pan height.
+    shinDroop: 0.30,
+    // thighPitch is no longer an input. solveStance derives the pelvis height from the kicking
+    // leg's reach and the thigh angle falls out of it (on tier 1 with this rig: 0.80 rad). The
+    // value left here is only what that solve produces, so a caller that turns `autoPelvis` off
+    // still gets something close to the shipped pose.
+    thighPitch: 0.80,
+    // 0.88 — the rider rides as high as a leg at 88% extension can still reach the carpet from.
+    //
+    // MEASURED, and the single most load-bearing number in the pose. It sets the pelvis height
+    // directly (`solveStance` step 1), and the pelvis height sets everything else.
+    //
+    // 0.96 was too high, and the probe says so: it put the hip joint 885 mm up, which is 96% of
+    // the leg spent just getting DOWN to a planted ankle before the foot has reached out or back
+    // at all. The consequence was not a visibly straight leg — it was that the leg had nothing
+    // left, so the coasting foot simply hovered (measured: sole 164 mm off the carpet at cruise)
+    // and only touched the floor at the one instant of the kick where the ankle is directly
+    // under the hip. A hovering shoe is the loudest possible "this figure is not pushing
+    // anything" tell, and it is the defect the owner has reported five times.
+    //
+    // At 0.88 the hip lands ~808 mm up: the coasting leg reaches the carpet at about 87%
+    // extension, so it has a visible break in the knee AND its sole is on the floor, and the
+    // kick still has travel left to reach forward and drive back. The depth that costs is bought
+    // back by the shorter thigh in StonksCharacter (see the note on P.thigh there) rather than
+    // by riding higher.
+    //
+    // The knee bend on the kick is bought back where it belongs. `pushDip` drops
+    // the whole body through the contact phase so the shoe can stay on the floor while it
+    // reaches ahead and drives back, which is what a real kick-push does anyway.
+    pushExtension: 0.88,
 
     backTopY: CHAIR_BACK_TOP_Y[1],
     backTopZ: CHAIR_BACK_TOP_Z[1],
@@ -1135,11 +1160,18 @@ export class TrickAnimator {
     pushApart: 0.245,
     pushLift: 0.150,
     pushCycle: 0.62,
-    // TUCKED, not dangling. At 0.045 the coasting leg hung at 94% extension — a straight pale
-    // stilt beside the chair that read as a man standing on it. 0.17 folds the knee to ~80% and
-    // gives the free leg a shape. It is speed-scaled in posePushLeg, so at a standstill (every
-    // menu idle, every screenshot of a stopped game) the sole is still flat on the carpet.
-    coastLift: 0.150,
+    // NEARLY DOWN. This is the difference between a leg that is pushing the chair and a leg
+    // that is folded up next to it, and it was the direct cause of the measured 164 mm of air
+    // under the coasting shoe: the sole sits at `coastLift` off the carpet by construction, so
+    // 0.150 IS 150 mm of hover, every frame the player is not actively kicking — which is most
+    // of the game.
+    //
+    // The old note here worried that a low coast lift straightens the leg into "a pale stilt".
+    // That was true at the old pelvis height and is not the way to fix it: the knee break comes
+    // from `pushExtension`, which now rides the hip low enough that the leg is at ~87% with its
+    // sole ON the floor. So the foot skims the carpet — 20 mm, enough that it never scrapes
+    // through a floor decal — and the knee still has a shape.
+    coastLift: 0.020,
     // MEASURED IN from -0.150. This is a PELVIS-relative depth, and the pelvis already sits
     // 0.28 m behind the seat anchor (that is what kneeling on a seat costs), so -0.150 put the
     // coasting shoe at chair-frame z -0.412: a whole caster ring astern of the chair, with a
@@ -1154,11 +1186,28 @@ export class TrickAnimator {
     // 0.47 is only the tier-1 answer and only the starting value; solveStance overwrites it from
     // the real shoulder-to-rail distance for whatever chair is under him.
     leanBase: 0.470,
-    leanSpeed: 0.300,
+    // 0.150, halved. The lean is not free: the torso is the segment that carries the rider's
+    // whole visible height, and every radian of forward fold is height it loses ON SCREEN. At
+    // 0.300 the total ride lean reached 0.72 rad at cruise and the hips-to-head span measured
+    // 283 mm of world Y on a rig whose own hips-to-head bone chain is 618 mm — the figure was
+    // folded almost in half, which is what "he reads as a squashed blob" actually is. 0.150 is
+    // still a clear, visible tip forward into speed (the brief asks for exactly that) while
+    // leaving the torso reading upright.
+    leanSpeed: 0.100,
     leanSpeedRef: 12,
     autoLean: true,
-    gripExtension: 0.88,
-    leanShoulderGain: 1.13,
+    // 0.93, up from 0.88. This is the only knob that trades ELBOW BEND against TORSO FOLD: the
+    // hands have to arrive on the rail either way, so any reach the arms do not do, the spine
+    // has to. A near-straight arm braced on a handlebar is also what the reference actually
+    // shows, and it buys back ~90 mm of on-screen torso height that the fold was eating.
+    gripExtension: 0.93,
+    // 0.95, down from 1.13. This is the ratio between the `lean` the pose asks for and the
+    // rotation the SHOULDER actually ends up at, and it has to track the per-joint gains in
+    // poseRideBase — which are now 0.45 / 0.85 / 0.95 up the chain rather than 0.45 / 0.95 /
+    // 1.05. It only biases the initial `leanBase` estimate: gripPass() re-solves both arms onto
+    // the rail every frame from wherever the shoulders really are, so an error here costs elbow
+    // bend, never hand contact.
+    leanShoulderGain: 0.95,
 
     fallbackHipHeight: 0.95,
     authority: 1,
@@ -1243,6 +1292,10 @@ export class TrickAnimator {
   private twist = 0;
   /** Extra forward pitch from the push cycle's load/thrust, radians. */
   private leanExtra = 0;
+  /** Torso fold the grip solve should assume if the rig has no measurable shoulder. */
+  private gripLean = 0;
+  /** How much of each hand is still ON the backrest rail this frame. See gripPass(). */
+  private gripK = new Float32Array(2);
   private grabSm = 0;
   private wasGrounded = true;
   private landPop = 0;
@@ -1718,29 +1771,55 @@ export class TrickAnimator {
     if (!Number.isFinite(this.authoredPelvisAbove)) this.authoredPelvisAbove = c.pelvisAboveSeat;
     else c.pelvisAboveSeat = this.authoredPelvisAbove;
 
-    // --- 1. height, from the thigh angle that makes the kneel read ----------------------
-    // The hip goes exactly one thigh-length up-and-back from the knee at `thighPitch`. Capped by
-    // the authored ceiling so a freak rig with enormous legs cannot launch the rider off the
-    // chair, but NOT capped by the push leg any more: see the dip below.
-    const kneeRise = this.lenThigh * Math.sin(c.thighPitch);
-    const h = Math.min(c.pelvisAboveSeat,
-      Math.max(0.10, (this.kneeTopY() + kneeRise) - this.seatLocal.y - this.hipJointRel[i].y));
-    c.pelvisAboveSeat = h;
-    const pelvisY = this.seatLocal.y + h;
-
-    // How far the pelvis has to drop for the kicking foot to actually reach the carpet, out
-    // beside the caster ring. Kneeling upright puts the hip higher than a straight push leg can
-    // span, and the honest way to spend that difference is as a weight drop on the kick — which
-    // is what a real kick-push does anyway — rather than by flattening the kneel all the time or
-    // by letting the shoe hover, which are the two ways this has been got wrong before.
+    // --- 1. height: AS HIGH AS THE KICKING LEG CAN STILL REACH THE FLOOR ------------------
+    //
+    // This is the hinge the whole pose turns on, and it was solved backwards before.
+    //
+    // The pelvis's height and its DEPTH are not independent: the thigh is a fixed 385 mm, so
+    // every centimetre the hip drops below the knee's own height has to be paid for in
+    // horizontal run backwards from that knee. A LOW pelvis therefore does not read as
+    // "crouched", it reads as "standing behind the chair", because the hip physically cannot be
+    // over a seat it is only 200 mm above. Measured on tier 1 with the shipped rider, the
+    // authored 0.50 rad thigh pitch put the pelvis 255 mm over the pan and 263 mm BEHIND the
+    // seat anchor — past the pan's own rear edge at -227 mm, i.e. the man was not on the chair.
+    //
+    // The only hard constraint in the other direction is the kicking leg: the higher the hip,
+    // the straighter that leg has to be to touch the carpet, and once it cannot the shoe hovers
+    // (the other half of the defect). So solve the height directly from that constraint —
+    // hip = ankle height + as much of the leg as `pushExtension` allows — and let the depth fall
+    // out of it. On tier 1 that lands the pelvis 345 mm over the pan and 180 mm back, which is
+    // over the rear third of the cushion with the shin lying under it.
+    //
+    // Two ceilings, both real:
+    //   - `pelvisAboveSeat` as authored, so a freak rig cannot launch the rider off the chair;
+    //   - the planted thigh's own reach, because a hip more than one thigh above the knee cannot
+    //     put that knee on the pan at all and the kneel silently turns into a hover.
     const pi = this.pushIndex();
     const rise = Math.max(c.ankleRise, this.footDrop + 0.006);
     const lateral = Math.abs((pi === 0 ? 1 : -1) * c.pushApart - this.hipJointRel[pi].x);
-    const usable = legLen * 0.965;
+    const usable = legLen * Math.max(0.5, Math.min(1, c.pushExtension));
     const vDrop = Math.sqrt(Math.max(0.01, usable * usable - lateral * lateral));
     // hipJointY = seat.y + h + hipJointRel.y, and it may sit at most vDrop above the ankle.
     const hPush = (rise + vDrop) - this.seatLocal.y - this.hipJointRel[pi].y;
-    this.pushDip = Math.max(0, Math.min(0.14, h - hPush));
+    // Thigh ceiling: |knee - hip| <= thigh, with the knee's outboard offset already spent.
+    const dxK = Math.abs(side * c.kneeOutboard - (c.pelvisLateral + this.hipJointRel[i].x));
+    const maxDrop = Math.sqrt(Math.max(0.0025,
+      this.lenThigh * this.lenThigh * 0.97 - dxK * dxK));
+    const hThigh = (this.kneeTopY() + maxDrop) - this.seatLocal.y - this.hipJointRel[i].y;
+    const h = Math.max(0.10, Math.min(c.pelvisAboveSeat, hPush, hThigh));
+    c.pelvisAboveSeat = h;
+    const pelvisY = this.seatLocal.y + h;
+
+    // How far the pelvis has to DIP for the kicking foot to stay on the carpet through the whole
+    // stroke. Straight down is the cheapest place a foot can be; the moment it reaches forward to
+    // plant or back to finish the drive, the same leg has to span more, and if the body does not
+    // give way the shoe simply lifts off the floor mid-kick. A real kick-push drops its weight
+    // into exactly that, so spend it as a dip rather than as a hovering shoe.
+    const stroke = Math.max(Math.abs(c.pushReach), Math.abs(c.pushDrive));
+    const plan = Math.sqrt(stroke * stroke + lateral * lateral);
+    const vStroke = Math.sqrt(Math.max(0.01, usable * usable - plan * plan));
+    const hipOverAnkle = (this.seatLocal.y + h + this.hipJointRel[pi].y) - rise;
+    this.pushDip = Math.max(0, Math.min(0.14, hipOverAnkle - vStroke));
     // The dip is an ARC ABOUT THE PLANTED KNEE, not a straight drop. Sinking 47 mm on a 385 mm
     // thigh lengthens its horizontal run by 59 mm, and if the pelvis does not give that ground
     // back the knee is shoved 59 mm forward — straight into the backrest. Rocking back over the
@@ -1993,6 +2072,9 @@ export class TrickAnimator {
     this.poseLayers(p);
     this.poseTrick();
     this.writeBones();
+    // The hands go on LAST, onto bones that already hold this frame's torso and this frame's
+    // final hip offset. See gripPass().
+    this.gripPass();
     this.placeModel();
   }
 
@@ -2220,10 +2302,17 @@ export class TrickAnimator {
     this.leanExtra = 0;
 
     // --- torso: a rigid pitch about X, with a little extra curl up the chain ---------------
+    //
+    // The curl used to ACCELERATE up the chain (0.95, then 1.05): each segment leaned further
+    // than the one under it, so the chest ended up folded harder than the hips and the whole
+    // torso hunched. On a long torso that compounds — the top of the chain is where all the
+    // visible height is — and it measured as a 283 mm hips-to-head span on a 618 mm spine. The
+    // curl now DECAYS upward, which is both what a braced rider does (the fold is at the hip,
+    // not the sternum) and what keeps the chest reading as a vertical mass under the head.
     this.setDirPitch(HIPS, lean * 0.45);
-    this.setDirPitch(SPINE, lean * 0.95);
-    this.setDirPitch(CHEST, lean * 1.05);
-    this.setDirPitch(UPCHEST, lean * 1.00);
+    this.setDirPitch(SPINE, lean * 0.85);
+    this.setDirPitch(CHEST, lean * 0.95);
+    this.setDirPitch(UPCHEST, lean * 0.90);
     // Head up and looking down the road, so the lean never buries his face in the backrest.
     //
     // The neck carries most of that counter-rotation, but THIS RIG HAS NO NECK JOINT (the
@@ -2244,7 +2333,11 @@ export class TrickAnimator {
     // Weight goes back as he folds down over the bar — otherwise the shoulders arrive on top of
     // the grip line at speed and the arms crumple into the chest. The knee stays where it is:
     // solvePlantedThigh re-aims against the moved hip joint below.
-    this.hipOff.z -= 0.055 * leanF;
+    // 0.030, halved with `leanSpeed`. The slide is measured in the SAME direction the planted
+    // thigh has to reach, so every millimetre of it is a millimetre the knee cannot get back
+    // onto the pan (solvePlantedThigh then aims and lands short, knee high). At 0.055 that was
+    // 22 mm of daylight under the shin at cruise.
+    this.hipOff.z -= 0.030 * leanF;
 
     // Weight DROPS onto the kicking leg. The upright kneel sits the hip higher than a straight
     // push leg can reach the carpet from (solveStance measures by how much), so he sinks into
@@ -2287,7 +2380,16 @@ export class TrickAnimator {
     this.posePushLeg(push);
 
     // --- both hands on the backrest top edge ----------------------------------------------
-    this.poseGrip(lean + this.leanExtra, 1, 1);
+    // DEFERRED to gripPass(), which runs after every layer AND after the bones are written.
+    //
+    // It used to be solved here, from the shoulder position the PREVIOUS frame's bones happened
+    // to be in and from a hip offset that four later layers were still going to add to. Both
+    // errors point the same way and they measured 58 mm of hand under the rail on a rig whose
+    // fist is 80 mm deep — which is exactly the gap that reads as "his hands are not really on
+    // it". The arms are the last thing in the frame that can be solved exactly, so they are.
+    this.gripLean = lean + this.leanExtra;
+    this.gripK[0] = 1; this.gripK[1] = 1;
+    this.poseGripDressing();
 
     // Landing compression.
     if (this.landPop > 0) {
@@ -2305,29 +2407,55 @@ export class TrickAnimator {
   }
 
   /**
-   * Both hands onto the backrest grip line.
-   *
-   * The shoulder position is derived from the rig's own rest offset carried through the current
-   * torso lean, and the target is the chair's real grip point, so the elbow bend falls out of the
-   * geometry: no hand-tuned rotation that only reads on one chair tier. `kL`/`kR` scale each
-   * hand's authority so a layer (balance wings, a grab, a bail) can take one hand off the rail.
+   * The wrist / shoulder DRESSING for the grip: knuckles rolled over the rail, shoulders rolled
+   * forward. Separate from the IK because it is pure additive rotation and can be accumulated
+   * with everything else, while the IK has to wait until the torso is final.
    */
-  private poseGrip(lean: number, kL: number, kR: number): void {
+  private poseGripDressing(): void {
     for (let i = 0; i < 2; i++) {
-      const k = i === 0 ? kL : kR;
+      const side = i === 0 ? 1 : -1;
+      const hd = i === 0 ? HAND_L : HAND_R;
+      const so = i === 0 ? SHO_L : SHO_R;
+      this.addRot(hd, 0.34, 0, -side * 0.16);                  // knuckles over the rail
+      this.addRot(so, 0.16, side * 0.05, -side * 0.06);        // shoulders rolled forward
+    }
+  }
+
+  /**
+   * BOTH HANDS ONTO THE BACKREST GRIP LINE — the last thing solved in the frame.
+   *
+   * Runs AFTER writeBones(), which means two things that no earlier version of this could have:
+   *   - the shoulder it aims from is measured off bones that already hold THIS frame's torso
+   *     rotations, not last frame's, so the lean, the bank, the push fold and any trick's spine
+   *     ops are all in it;
+   *   - `hipOff` is final, so the pelvis is not going to move out from under the solve after it
+   *     has run (the turn, the air tuck, the landing squash and every trick's hip signature all
+   *     write to it after poseRideBase).
+   * Both errors used to point the same way; together they left the wrists a measured 58 mm below
+   * the rail with the fists hanging in front of the panel instead of over its top edge.
+   *
+   * `gripK` is how much of each hand is still ON the rail. Layers that take a hand off (a grab,
+   * a balance wing, a bail, a trick's arm ops) drive it down, and the solve blends against
+   * whatever they wrote instead of overriding it.
+   */
+  private gripPass(): void {
+    const authority = Math.max(0, Math.min(1, this.config.authority));
+    if (authority <= 0.002) return;
+    for (let i = 0; i < 2; i++) {
+      const k = this.gripK[i] * authority;
       if (k <= 0.002) continue;
       const side = i === 0 ? 1 : -1;
       const ua = i === 0 ? UARM_L : UARM_R;
       const fa = i === 0 ? FARM_L : FARM_R;
-      const hd = i === 0 ? HAND_L : HAND_R;
-      const so = i === 0 ? SHO_L : SHO_R;
 
       // Shoulder, relative to the hips bone. Measured off the rig where we can (exact, and it
       // picks up every torso rotation for free); estimated from the rest offset carried through
       // lean / twist / bank only when the rig is missing one of the two bones.
       const eArm = this.slots[ua];
+      const eFore = this.slots[fa];
       const eHips = this.slots[HIPS];
-      if (eArm && eHips) {
+      if (!eArm || !eFore) continue;
+      if (eHips) {
         this.modelPosOf(eArm, _armPos);
         this.modelPosOf(eHips, _hipsPos);
         _v2.subVectors(_armPos, _hipsPos);
@@ -2335,7 +2463,7 @@ export class TrickAnimator {
         _v2.x *= s; _v2.z *= s;                       // measured -> canonical (+Z forward) frame
       } else {
         _v2.copy(this.armRootRel[i]);
-        rotateAboutX(_v2, lean);
+        rotateAboutX(_v2, this.gripLean);
         rotateAboutY(_v2, this.twist);
         rotateAboutZ(_v2, this.bank);
       }
@@ -2352,13 +2480,43 @@ export class TrickAnimator {
       _v3.set(side * 0.82, -0.50, -0.28).normalize();
       this.solveTwoBone(_v1, this.lenUpArm, this.lenForeArm, _v3, this.ikUpper, this.ikLower);
 
-      this.blendDir(ua, this.ikUpper.x, this.ikUpper.y, this.ikUpper.z, k);
-      this.blendDir(fa, this.ikLower.x, this.ikLower.y, this.ikLower.z, k);
-      this.addRot(hd, 0.34 * k, 0, -side * 0.16 * k);      // knuckles over the rail
-      this.addRot(so, 0.16 * k, side * 0.05 * k, -side * 0.06 * k);   // shoulders rolled forward
-      this.raiseWeight(ua, 0.95 * k);
-      this.raiseWeight(fa, 0.95 * k);
+      this.writeBoneDir(eArm, this.ikUpper, k);
+      this.writeBoneDir(eFore, this.ikLower, k);
     }
+  }
+
+  /**
+   * Aim ONE already-written bone at a model-space direction, keeping whatever additive rotation
+   * the pose accumulated for it, and blend it in by `w`. Same maths as writeBones' per-bone body;
+   * it exists so the grip solve can run after that pass instead of before it.
+   */
+  private writeBoneDir(e: BoneEntry, dirCanonical: THREE.Vector3, w: number): void {
+    if (!e.restDir) return;
+    const s = this.config.rigForward;
+    _dir.set(dirCanonical.x * s, dirCanonical.y, dirCanonical.z * s);
+    if (_dir.lengthSq() < 1e-8) return;
+    _dir.normalize();
+    _q1.setFromUnitVectors(e.restDir, _dir);
+
+    const slot = e.slot;
+    const ax = this.aX[slot], ay = this.aY[slot], az = this.aZ[slot];
+    if (ax !== 0 || ay !== 0 || az !== 0) {
+      _euler.set(ax * s, ay, az * s, 'YXZ');
+      _q3.setFromEuler(_euler);
+      _q1.premultiply(_q3);
+    }
+    _qTarget.copy(_q1).multiply(e.restModelQuat);
+    this.parentModelQuat(e, _qParent);
+    _qLocal.copy(_qParent).invert().multiply(_qTarget);
+    if (w >= 0.999) e.bone.quaternion.copy(_qLocal);
+    else e.bone.quaternion.slerp(_qLocal, w);
+  }
+
+  /** Take one hand (or both) off the rail: a layer's own arm pose wins by this much. */
+  private releaseGrip(i: number, k: number): void {
+    if (k <= 0) return;
+    const j = Math.max(0, Math.min(1, i));
+    this.gripK[j] *= Math.max(0, 1 - Math.min(1, k));
   }
 
   /**
@@ -2550,6 +2708,7 @@ export class TrickAnimator {
       this.blendDir(ua, pushSide * 0.42, -0.86, -0.28, k);
       this.blendDir(fa, pushSide * 0.36, -0.74, -0.57, k);
       this.raiseWeight(ua, 0.9 * k); this.raiseWeight(fa, 0.9 * k);
+      this.releaseGrip(pushIdx, k);
     }
 
     // --- balance: ONE hand off the rail, out as a wing, on the manual / grind axis -------
@@ -2564,6 +2723,7 @@ export class TrickAnimator {
         this.blendDir(ua, pushSide * 0.92, 0.28, 0.26, amp * 0.95);
         this.blendDir(fa, pushSide * 0.84, 0.44, 0.30, amp * 0.85);
         this.raiseWeight(ua, 0.95 * amp); this.raiseWeight(fa, 0.95 * amp);
+        this.releaseGrip(pushIdx, amp * 0.95);
         // The gripping arm only opens up a little — the hand stays on the rail.
         const gua = pushIdx === 0 ? UARM_R : UARM_L;
         this.addRot(gua, 0, 0, -pushSide * 0.20 * amp);
@@ -2594,6 +2754,7 @@ export class TrickAnimator {
         this.blendDir(sh, side * 0.42, -0.42, 0.80, k);
         this.raiseWeight(ua, k); this.raiseWeight(fa, k);
         this.raiseWeight(th, k); this.raiseWeight(sh, k);
+        this.releaseGrip(i, k);
       }
       this.addGroup(G_TORSO, -0.45 * k, 0.25 * k, 0.30 * k);
       this.addRot(HEAD, -0.40 * k, 0.30 * k, 0);
@@ -2646,6 +2807,13 @@ export class TrickAnimator {
       }
       if (o.k > 0) this.blendDir(slot, o.dx * mirror, o.dy, o.dz, o.k * env);
       if (o.w > 0) this.raiseWeight(slot, o.w * env);
+      // A trick that poses an arm has taken that hand OFF the rail; the grip solve must not put
+      // it back on afterwards. (The wrist and shoulder slots are dressing only — they never
+      // fight the two-bone solve — so only the two real arm segments count.)
+      if (o.k > 0) {
+        if (slot === UARM_L || slot === FARM_L) this.releaseGrip(0, o.k * env);
+        else if (slot === UARM_R || slot === FARM_R) this.releaseGrip(1, o.k * env);
+      }
     }
 
     const envBody = a.sustained ? gate : gate * (a.duration > 0 ? envelope(E_HOLD, a.t / a.duration) : 0);

@@ -1002,24 +1002,22 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
   // Head-on from the spine. Its toe points -Z, back down the corridor the player arrives along.
   //
-  // IT IS THE SAME DEPTH AS THE SIDE LIPS, AND FOR THE SAME REASON. makeQuarterPipe approximates
-  // its transition with SIX stacked boxes, so the horizontal spacing between consecutive step
-  // faces is proportional to the ramp's depth, and near the coping — where the curve is almost
-  // vertical — it collapses: at depth 2.4 the top three faces sit 0.234, 0.143 and 0.068 m apart,
-  // all far inside the chair's 0.40 m collision radius, so the capsule straddles three steps at
-  // once and the resolver pushes it back out instead of up.
-  //   MEASURED at depth 2.4: a run up the spine holding W climbed cleanly from y 0.44 to 0.99 —
-  //   and then, one 50 ms sample later at z = 18.45, went from 10.77 m/s to 0.95. It was the ONLY
-  //   sample under 5 m/s in a 45 s lap run, and it is at the north mouth, which is where the
-  //   spawn points you. The first thing the level did to a player was stop them.
-  // At 3.6 the same steps are 0.351, 0.215 and 0.102 m and the ramp launches instead of blocking
-  // — which is exactly why the side lips were already 3.6, so this is the number the mouth was
-  // always supposed to use. The coping stays put against the stair box (the ramp grows backwards
-  // down the empty spine, whose Long Bench ends 2.2 m short of the new toe); only the transition
-  // gets longer, so the Stairwell Gap is the same gap, taken faster.
+  // DO NOT DEEPEN THIS RAMP. It is 2.4 m against the side lips' 3.6, and that asymmetry is
+  // load-bearing. makeQuarterPipe approximates its transition with six stacked boxes whose step
+  // faces bunch up near the coping, so a 2.4 m ramp does NOT launch a run that charges it head
+  // on: it checks the run at the lip and hands it back down the corridor, which is the spine's
+  // whole shape — charge the bench, meet the stairwell, come back on the other side of it. The
+  // Long Bench is 28 m of rail with a chord at each end, and the chord is what makes it a line
+  // rather than a dead end.
+  //   MEASURED, benchmark run, with this at 3.6 to match the side lips: the ramp launched instead
+  //   of returning, the run left the spine sideways at the north mouth and pinballed into the
+  //   west straight, and longestComboSeconds fell 25.25 -> 10.75 with maxTricks 40 -> 16. The
+  //   0.95 m/s sample at the lip that motivated the change is a CHECK, not a stall: the very next
+  //   sample is 10.49 m/s heading back down the bench, and it is the only sample under 5 m/s in
+  //   a 45 s run. Reverted, and left at 2.4 deliberately.
   place(acc, makeQuarterPipe({
-    width: 3.4, depth: STAIR_QP_D, height: STAIR_H, seed: 4510,
-  }), 0, 0, STAIR_Z - STAIR_HALF_Z - STAIR_QP_D / 2 - 0.05, 0, { collide: true, grind: true });
+    width: 3.4, depth: 2.4, height: STAIR_H, seed: 4510,
+  }), 0, 0, STAIR_Z - STAIR_HALF_Z - 1.2 - 0.05, 0, { collide: true, grind: true });
   // The nose of the flight, both edges, so the hip can be grinded in either loop direction.
   for (const s of [-1, 1]) {
     acc.rails.push({

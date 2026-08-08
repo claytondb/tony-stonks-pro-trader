@@ -766,12 +766,84 @@ function bakeVertexColor(g: THREE.BufferGeometry, c: THREE.Color): void {
   g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
 }
 
+/**
+ * `mergeGeometries` refuses a batch whose members disagree about which attributes exist or
+ * about whether they are indexed, and the old fallback then drew that whole bucket unmerged —
+ * nine separate meshes for the office's paper, every one of them costing three draw calls a
+ * frame. Nothing about the disagreement is meaningful: a missing `uv` is (0,0), a missing
+ * `color` is white, and a non-indexed geometry is trivially indexed 0..n-1 at no extra
+ * vertices. So reconcile the bucket instead of giving up on it.
+ *
+ * Only attributes the standard material actually reads are synthesised; anything more exotic
+ * still falls through to the unmerged path, which is correct but slow, and still warns.
+ */
+const MERGE_DEFAULTS: Record<string, { size: number; fill: number }> = {
+  uv: { size: 2, fill: 0 },
+  uv1: { size: 2, fill: 0 },
+  uv2: { size: 2, fill: 0 },
+  color: { size: 3, fill: 1 },
+};
+
+function reconcileAttributes(geos: THREE.BufferGeometry[]): void {
+  const names = new Set<string>();
+  let anyIndexed = false;
+  let allIndexed = true;
+  for (const g of geos) {
+    for (const n of Object.keys(g.attributes)) names.add(n);
+    if (g.index) anyIndexed = true;
+    else allIndexed = false;
+  }
+
+  for (const g of geos) {
+    for (const n of names) {
+      if (g.getAttribute(n)) continue;
+      const spec = MERGE_DEFAULTS[n];
+      if (n === 'normal') {
+        g.computeVertexNormals();
+        continue;
+      }
+      if (!spec) continue; // unknown attribute: leave it, the merge will fall back and warn
+      const count = g.getAttribute('position').count;
+      const arr = new Float32Array(count * spec.size);
+      if (spec.fill !== 0) arr.fill(spec.fill);
+      g.setAttribute(n, new THREE.BufferAttribute(arr, spec.size));
+    }
+    if (anyIndexed && !allIndexed && !g.index) {
+      const count = g.getAttribute('position').count;
+      const idx = count > 65535 ? new Uint32Array(count) : new Uint16Array(count);
+      for (let i = 0; i < count; i++) idx[i] = i;
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+    }
+  }
+}
+
 interface MergeBucket {
   geos: THREE.BufferGeometry[];
   mats: THREE.Material[];
+  /** Index of the top-level source object each geometry came from. Only filled when tracking. */
+  owners: number[];
   cast: boolean;
   receive: boolean;
   family: string | null;
+}
+
+/**
+ * Where one source object's triangles ended up inside a consolidated mesh. `start`/`count`
+ * are VERTEX indices into the merged geometry's position attribute, so a caller that needs
+ * to make one source object vanish from the batch can collapse exactly its own vertices
+ * without rebuilding anything. See `mergePropsByMaterialTracked`.
+ */
+export interface MergeRange {
+  mesh: THREE.Mesh;
+  start: number;
+  count: number;
+}
+
+interface MergeTracker {
+  /** Top-level source index for a mesh, or -1 if it should not be tracked. */
+  ownerOf: (o: THREE.Object3D) => number;
+  /** ranges[sourceIndex] is filled in with every span that source contributed. */
+  ranges: MergeRange[][];
 }
 
 /**
@@ -779,7 +851,7 @@ interface MergeBucket {
  * vertices and per-material tints into vertex colours. InstancedMeshes are re-parented
  * untouched (they are already one draw call).
  */
-function mergeGroup(root: THREE.Group): THREE.Group {
+function mergeGroup(root: THREE.Group, track?: MergeTracker): THREE.Group {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
 
@@ -801,11 +873,12 @@ function mergeGroup(root: THREE.Group): THREE.Group {
     g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld));
     let bucket = buckets.get(key);
     if (!bucket) {
-      bucket = { geos: [], mats: [], cast: false, receive: false, family };
+      bucket = { geos: [], mats: [], owners: [], cast: false, receive: false, family };
       buckets.set(key, bucket);
     }
     bucket.geos.push(g);
     bucket.mats.push(material);
+    bucket.owners.push(track ? track.ownerOf(o) : -1);
     bucket.cast = bucket.cast || m.castShadow;
     bucket.receive = bucket.receive || m.receiveShadow;
   });
@@ -841,6 +914,11 @@ function mergeGroup(root: THREE.Group): THREE.Group {
       material = familyMaterial(key, src);
     }
 
+    if (bucket.geos.length > 1) reconcileAttributes(bucket.geos);
+
+    // Vertex counts must be read BEFORE the sources are disposed below.
+    const vertCounts = track ? bucket.geos.map((g) => g.getAttribute('position').count) : null;
+
     const merged = bucket.geos.length === 1 ? bucket.geos[0] : mergeGeometries(bucket.geos, false);
     if (!merged) {
       // mergeGeometries returns null and logs a one-line complaint that names an ARRAY INDEX
@@ -858,12 +936,16 @@ function mergeGroup(root: THREE.Group): THREE.Group {
           `attribute sets present: ${[...counts].map(([s, n]) => `${s} x${n}`).join(' | ')}`,
         );
       }
-      for (const g of bucket.geos) {
+      bucket.geos.forEach((g, i) => {
         const solo = new THREE.Mesh(g, material);
         solo.castShadow = bucket.cast;
         solo.receiveShadow = bucket.receive;
         out.add(solo);
-      }
+        const owner = bucket.owners[i];
+        if (track && owner >= 0 && vertCounts) {
+          (track.ranges[owner] ??= []).push({ mesh: solo, start: 0, count: vertCounts[i] });
+        }
+      });
       continue;
     }
     if (bucket.geos.length > 1) for (const g of bucket.geos) g.dispose();
@@ -877,6 +959,17 @@ function mergeGroup(root: THREE.Group): THREE.Group {
     me.castShadow = bucket.cast;
     me.receiveShadow = bucket.receive;
     out.add(me);
+
+    if (track && vertCounts) {
+      // mergeGeometries concatenates in array order, so the span each source occupies is
+      // simply the running sum of the vertex counts ahead of it.
+      let cursor = 0;
+      for (let i = 0; i < vertCounts.length; i++) {
+        const owner = bucket.owners[i];
+        if (owner >= 0) (track.ranges[owner] ??= []).push({ mesh: me, start: cursor, count: vertCounts[i] });
+        cursor += vertCounts[i];
+      }
+    }
   }
 
   for (const k of keep) {
@@ -910,6 +1003,45 @@ export function mergePropsByMaterial(objects: readonly THREE.Object3D[]): THREE.
   merged.name = 'mergedProps';
   merged.userData = {};
   return merged;
+}
+
+/**
+ * `mergePropsByMaterial`, but it also reports WHERE each source object's vertices landed.
+ *
+ * This exists for props that are static *most* of the time but not *all* of the time — the
+ * destructibles. Batching thirty-odd knockable props into a handful of meshes is worth ~125
+ * draw calls, but a prop that gets kicked has to leave the batch instantly. With the ranges
+ * in hand the caller can collapse exactly that prop's vertices to a point (zero-area, so it
+ * draws nothing) and show its own mesh instead, without rebuilding the batch mid-frame.
+ *
+ * `ranges[i]` corresponds to `objects[i]`. An entry is absent only if that object contributed
+ * no mergeable mesh at all, so callers must treat a missing entry as "not batchable".
+ */
+export function mergePropsByMaterialTracked(
+  objects: readonly THREE.Object3D[],
+): { group: THREE.Group; ranges: MergeRange[][] } {
+  const holder = new THREE.Group();
+  const index = new Map<THREE.Object3D, number>();
+  objects.forEach((o, i) => {
+    o.updateMatrixWorld(true);
+    holder.add(o);
+    index.set(o, i);
+  });
+  holder.updateMatrixWorld(true);
+  const ranges: MergeRange[][] = objects.map(() => []);
+  const merged = mergeGroup(holder, {
+    ownerOf: (o) => {
+      for (let p: THREE.Object3D | null = o; p; p = p.parent) {
+        const hit = index.get(p);
+        if (hit !== undefined) return hit;
+      }
+      return -1;
+    },
+    ranges,
+  });
+  merged.name = 'mergedProps';
+  merged.userData = {};
+  return { group: merged, ranges };
 }
 
 /** Free every cached geometry. Call alongside `MaterialLibrary.disposeAll()`. */

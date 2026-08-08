@@ -52,29 +52,57 @@ import {
 // Proportions — stylised, not anatomical. Head is ~1.35x life size on purpose.
 // ---------------------------------------------------------------------------
 
+/**
+ * MEASURED, not eyeballed. The previous table built a figure whose hips-to-head-joint span was
+ * 0.363 m on a 1.67 m body — 22% of its own height, where a real human is 33-35%. In the riding
+ * pose, with the torso folded forward over the backrest, that collapsed to 0.283 m of WORLD
+ * height between the hip joint and the base of the skull (probed in game at cruise), and a torso
+ * that short under an oversized head is exactly why every art note said the rider reads as an
+ * undifferentiated blob rather than as a person: there is no chest to see.
+ *
+ * The fix is not "make him bigger" — it is to move length OUT OF THE LEGS AND INTO THE TORSO,
+ * which keeps the overall figure inside the 1.6-1.8 m the chair is scaled for:
+ *
+ *   hip joint above the soles   thigh + shin + shoe drop = 0.315 + 0.450 + 0.131 = 0.896  (52% H)
+ *   hips joint -> head joint    spine + chest + 0.008    = 0.345 + 0.280 + 0.008 = 0.633  (36% H)
+ *   head geometry above that                                                       0.270
+ *                                                                        total ~= 1.78 m
+ *
+ * Both spans now sit where a person's do. Shortening the leg is free for the pose as well: the
+ * kneeling stance's depth is set by the THIGH's horizontal run back from a knee pinned near the
+ * front of the seat pan, so a shorter thigh puts the pelvis further forward, over the cushion
+ * instead of behind it.
+ */
 const P = {
   hipY: 0.085,        // hip pivot above the seat top
-  spine: 0.200,       // hips -> chest pivot
-  chest: 0.155,       // chest pivot -> neck base
+  spine: 0.345,       // hips -> chest pivot
+  chest: 0.280,       // chest pivot -> neck base
   neck: 0.045,
   headH: 0.246,
   headW: 0.228,
   headD: 0.218,
 
   shoulderX: 0.188,
-  shoulderY: 0.082,   // above the chest pivot
-  upperArm: 0.245,
-  foreArm: 0.230,
+  // The shoulder pivot has to ride near the TOP of the ribcage, not halfway up it. At 0.082 on a
+  // 0.265 chest the arms would hang out of the middle of his chest and the collar would sit a
+  // whole head above them.
+  shoulderY: 0.175,   // above the chest pivot
+  // Shoulder-to-wrist 0.515 on a 1.78 m figure (~29% H, which is life). Longer arms also buy the
+  // pose back some uprightness: TrickAnimator solves the ride lean from how far the shoulders
+  // have to fold to reach the backrest rail, so reach spent here is fold it does not have to ask
+  // for, and the fold is what was crushing the torso's on-screen height.
+  upperArm: 0.265,
+  foreArm: 0.250,
 
   hipX: 0.108,
   // THIGH / SHIN RATIO IS A POSE CONSTRAINT, NOT A TASTE CALL.
   // TrickAnimator kneels this figure on a 0.56 m seat pan with the other foot on the floor.
   // The thigh has to span (pelvis -> knee on the pan) and the whole leg has to span
-  // (pelvis -> floor) at the same pelvis height; a 0.42 thigh forces the hip 0.37 m behind the
-  // knee, which hangs the pelvis right off the front lip of the seat. Trading 35 mm from the
-  // thigh to the shin pulls the pelvis back over the pan without costing any leg reach.
-  thigh: 0.385,
-  shin: 0.415,
+  // (pelvis -> floor) at the same pelvis height; a long thigh forces the hip far behind the
+  // knee, which hangs the pelvis right off the back lip of the seat. Spending the leg on the
+  // shin instead pulls the pelvis forward over the pan without costing any reach to the floor.
+  thigh: 0.315,
+  shin: 0.450,
   ankle: 0.070,
   foot: 0.238,
 } as const;
@@ -520,13 +548,28 @@ function buildTorso(m: Mats): { chest: THREE.Group; hips: THREE.Group; tie: THRE
   const cb = new PartBuilder();
   // Shirt: two stacked volumes, the upper one much wider, so the torso tapers to the waist
   // and the shoulder line is a hard horizontal plane the key light can catch.
-  const waist = chamferBox(0.300, 0.150, 0.216, 0.030);
+  //
+  // BOTH VOLUMES ARE SIZED OFF `P.spine` / `P.shoulderY`, not typed in. The chest pivot sits
+  // P.spine above the hip joint and the shoulder pivot P.shoulderY above that, so the shirt has
+  // to span from just under the hip's own shirt hem all the way to the collar or the figure has
+  // a gap where its ribcage should be. Getting this wrong is invisible in a T-pose and glaring
+  // the moment the torso folds forward over the backrest.
+  const waistH = P.spine - 0.115;              // meets the hips' shirt hem, overlapping it
+  const waist = chamferBox(0.300, waistH, 0.216, 0.030);
   taper(waist, 'y', 0.92, 1.06);
-  cb.add(waist, m.shirt, { pos: [0, -0.062, 0.008], tint: { ao: 0.40, back: 0.30 } });
+  cb.add(waist, m.shirt, { pos: [0, -waistH * 0.5, 0.008], tint: { ao: 0.40, back: 0.30 } });
 
-  const upper = chamferBox(0.372, 0.230, 0.248, 0.038);
+  const upperH = P.shoulderY + 0.115;          // waist top up past the shoulder line
+  const upper = chamferBox(0.372, upperH, 0.248, 0.038);
   taper(upper, 'y', 0.90, 1.0);
-  cb.add(upper, m.shirt, { pos: [0, 0.030, 0.004], tint: { ao: 0.26, back: 0.34, aoTop: 0.10 } });
+  cb.add(upper, m.shirt, {
+    pos: [0, upperH * 0.5 - 0.085, 0.004], tint: { ao: 0.26, back: 0.34, aoTop: 0.10 },
+  });
+  // Sternum plane: one more hard horizontal break across the front of a now much taller chest,
+  // so the shirt is not a single flat card from the follow camera.
+  cb.add(chamferBox(0.286, 0.104, 0.212, 0.026), m.shirt, {
+    pos: [0, P.shoulderY * 0.42, -0.030], rot: [0.10, 0, 0], tint: { tint: 0xededed, ao: 0.14 },
+  });
 
   // Deltoid caps: the shoulders in the reference are BROADER than the chair back. Without
   // these the backrest silhouette swallows the character from the follow camera.
@@ -534,7 +577,7 @@ function buildTorso(m: Mats): { chest: THREE.Group; hips: THREE.Group; tie: THRE
     const cap = chamferBox(0.108, 0.150, 0.212, 0.034);
     taper(cap, 'y', 1.0, 0.86);
     cb.add(cap, m.shirt, {
-      pos: [s * 0.170, 0.070, 0.004], rot: [0, 0, s * 0.12], tint: { ao: 0.2, back: 0.32 },
+      pos: [s * 0.170, P.shoulderY - 0.025, 0.004], rot: [0, 0, s * 0.12], tint: { ao: 0.2, back: 0.32 },
     });
   }
 
@@ -544,24 +587,26 @@ function buildTorso(m: Mats): { chest: THREE.Group; hips: THREE.Group; tie: THRE
   // One continuous band round the neck, split at the front into a shallow V. Built as three
   // pieces of the SAME depth and height so it reads as a collar rather than as loose plates
   // stuck to the chest, which is what a set of individually rotated slabs looks like head-on.
+  // Anchored to the top of the shirt volume rather than typed in, so it tracks P.chest.
+  const collarY = P.chest - 0.050;
   for (const s of [-1, 1]) {
     cb.add(chamferBox(0.062, 0.044, 0.104, 0.010), m.shirt, {
-      pos: [s * 0.062, 0.150, -0.036], rot: [0.10, s * 0.30, -s * 0.16], tint: { tint: 0xf0f0f0 },
+      pos: [s * 0.062, collarY, -0.036], rot: [0.10, s * 0.30, -s * 0.16], tint: { tint: 0xf0f0f0 },
     });
   }
   for (const s of [-1, 1]) {
     cb.add(chamferBox(0.070, 0.042, 0.048, 0.009), m.shirt, {
-      pos: [s * 0.036, 0.146, -0.098], rot: [0.16, 0, -s * 0.36], tint: { tint: 0xffffff },
+      pos: [s * 0.036, collarY - 0.004, -0.098], rot: [0.16, 0, -s * 0.36], tint: { tint: 0xffffff },
     });
   }
   cb.add(chamferBox(0.150, 0.048, 0.052, 0.010), m.shirt, {
-    pos: [0, 0.156, 0.056], rot: [-0.16, 0, 0], tint: { tint: 0xffffff },
+    pos: [0, collarY + 0.006, 0.056], rot: [-0.16, 0, 0], tint: { tint: 0xffffff },
   });
 
   // Neck. Deliberately a full value below the shirt and a full value above the hair, so the
   // head is joined to the body by a visible step rather than by a seam.
   cb.add(chamferBox(0.090, P.chest * 0.62, 0.088, 0.014), m.skin, {
-    pos: [0, P.chest - 0.058, 0.010], tint: { ao: 0.70, aoTop: P.chest },
+    pos: [0, P.chest - 0.085, 0.010], tint: { ao: 0.70, aoTop: P.chest },
   });
   cb.flushInto(chest, 'chest');
 
@@ -570,17 +615,23 @@ function buildTorso(m: Mats): { chest: THREE.Group; hips: THREE.Group; tie: THRE
   // is allowed to be this chromatic. It hangs off its own pivot so it can flutter with speed.
   const tie = new THREE.Group();
   tie.name = 'tie';
-  tie.position.set(0, 0.140, -0.112);
+  // Knot under the collar, blade long enough to finish just above the belt. Both are measured
+  // off the chest's real length: a tie authored for a 0.155 chest stops halfway down a 0.265
+  // one and reads as a bib.
+  tie.position.set(0, P.chest - 0.075, -0.118);
+  const bladeLen = P.spine + P.chest - 0.300;
   const tb = new PartBuilder();
   tb.add(chamferBox(0.048, 0.046, 0.030, 0.008), m.tie, {
     pos: [0, -0.012, -0.006], tint: { tint: 0xffffff },
   });
-  const blade = chamferBox(0.056, 0.210, 0.024, 0.008);
+  const blade = chamferBox(0.056, bladeLen, 0.024, 0.008);
   taper(blade, 'y', 0.62, 1.0);
-  tb.add(blade, m.tie, { pos: [0, -0.140, -0.004], tint: { ao: 0.22, aoTop: -0.04 } });
+  tb.add(blade, m.tie, {
+    pos: [0, -0.035 - bladeLen * 0.5, -0.004], tint: { ao: 0.22, aoTop: -0.04 },
+  });
   const tip = chamferBox(0.056, 0.052, 0.024, 0.010);
   taper(tip, 'y', 0.10, 1.0);
-  tb.add(tip, m.tie, { pos: [0, -0.268, -0.004], tint: { tint: 0xd8d8d8 } });
+  tb.add(tip, m.tie, { pos: [0, -0.058 - bladeLen, -0.004], tint: { tint: 0xd8d8d8 } });
   tb.flushInto(tie, 'tie');
 
   return { chest, hips, tie };
