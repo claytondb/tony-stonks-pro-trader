@@ -1044,6 +1044,71 @@ export function mergePropsByMaterialTracked(
   return { group: merged, ranges };
 }
 
+/**
+ * ADDITIVE. BATCHING FOR ALREADY-PLACED LEVEL FURNITURE.
+ *
+ * `mergePropsByMaterial` is written for props the office builder owns and can hand over
+ * wholesale. The level-data path is different: the integrator builds rails, kickers, quarter
+ * pipes, fun boxes and street furniture one at a time, adds each straight to the scene, and
+ * keeps the individual objects for the minimap and for teardown. Measured on ch1_office that
+ * is 28 visible meshes — six grind rails at two materials each, four kickers at two each, and
+ * a scatter of small concrete and steel pieces — and every visible mesh is drawn three times
+ * a frame (shadow map, GTAO depth/normal prepass, main pass). ~84 draw calls for ten props.
+ *
+ * So: take the objects out of the scene, merge them per material family, put ONE batch back.
+ * The sources are left intact and still `visible`, merely detached — `mergeGroup` clones the
+ * geometry before it bakes, so nothing the caller holds is mutated and `Box3.setFromObject`
+ * on a source still reports the same world-space footprint. That is what lets the caller go
+ * on using its own array for the minimap and for `clearLevelObjects` without knowing anything
+ * about the batch beyond "remove this one extra node too".
+ *
+ * WHAT IT REFUSES TO TOUCH, and why this is not the same as `mergePropsByMaterial`:
+ * `mergeGroup` silently drops anything it cannot bucket — multi-material meshes, skinned
+ * meshes, lines, sprites, lights. That is acceptable for procedural props that only ever
+ * contain plain meshes; it is NOT acceptable for level furniture, where some types come out
+ * of a GLB cache and a dropped mesh means a ramp the player can still hit but can no longer
+ * see. So every candidate is vetted first and anything questionable — including anything with
+ * a hidden descendant, since merging would make it visible — is left in the scene, drawn
+ * exactly as before. The batch is an optimisation, never a filter.
+ */
+export function batchStaticLevelObjects(
+  objects: readonly THREE.Object3D[],
+  parent: THREE.Object3D,
+): THREE.Group | null {
+  const safe: THREE.Object3D[] = [];
+  for (const o of objects) {
+    if (!o || o.parent !== parent || !o.visible) continue;
+    if (isMergeSafe(o)) safe.push(o);
+  }
+  // One object merges into itself: all cost, no saving.
+  if (safe.length < 2) return null;
+
+  for (const o of safe) parent.remove(o);
+  const batch = mergePropsByMaterial(safe);
+  batch.name = 'levelFurnitureBatch';
+  parent.add(batch);
+  return batch;
+}
+
+/** Can `mergeGroup` consume this subtree without losing anything the player can see? */
+function isMergeSafe(root: THREE.Object3D): boolean {
+  let ok = true;
+  root.traverse((o) => {
+    if (!ok) return;
+    // A hidden descendant would come back visible on the other side of the merge.
+    if (o !== root && !o.visible) { ok = false; return; }
+    const anyO = o as unknown as Record<string, boolean>;
+    if (anyO.isLight || anyO.isCamera || anyO.isSprite || anyO.isLine || anyO.isPoints ||
+        anyO.isSkinnedMesh || anyO.isBone) { ok = false; return; }
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;                                  // plain Group/Object3D: fine
+    if ((m as THREE.InstancedMesh).isInstancedMesh) return; // re-parented untouched: fine
+    if (!m.geometry || Array.isArray(m.material) || !m.material) { ok = false; return; }
+    if (m.morphTargetInfluences?.length) ok = false;
+  });
+  return ok;
+}
+
 /** Free every cached geometry. Call alongside `MaterialLibrary.disposeAll()`. */
 export function disposePropCache(): void {
   for (const g of geoCache.values()) g.dispose();

@@ -189,7 +189,8 @@ export class SoundManager {
   private pendingLevels = { keys: 0, lead: 0, tension: 0, bass: 1 };
 
   private prevComboOpen = false;
-  private prevHeat = 0;
+  /** True once a chase got properly hot; gates the one "lost them" cadence. */
+  private chaseArmed = false;
 
   // =========================================================================
   // Lifecycle
@@ -352,14 +353,30 @@ export class SoundManager {
     proceduralSounds.updatePolice(s.heat);
 
     // ---- edge events the director owns ------------------------------------
-    if (this.prevHeat > 0.25 && s.heat < 0.06) proceduralSounds.playPoliceLost();
-    this.prevHeat = s.heat;
+    // Latched, not level-triggered. Heat rattles across any fixed threshold as a
+    // pursuit peters out; the probe caught the "lost them" cadence firing seven
+    // times in 26 s. The latch only arms once the chase was genuinely on (0.5)
+    // and only fires once it is genuinely over (0.06).
+    if (s.heat > 0.5) this.chaseArmed = true;
+    if (this.chaseArmed && s.heat < 0.06) {
+      this.chaseArmed = false;
+      proceduralSounds.playPoliceLost();
+    }
     this.prevComboOpen = s.comboOpen;
 
     // ---- musical intensity -------------------------------------------------
-    // Two independent drivers, taken at their max so either one can carry the
-    // arrangement: how big the current line is, and how hot the chase is.
-    const comboDrive = s.comboOpen ? clamp01(0.35 + (s.multiplier - 1) / 8) : 0;
+    // Three independent drivers, taken at their max so any one can carry the
+    // arrangement: how big the current line is, how hot the chase is, how fast
+    // the player is going.
+    //
+    // The combo term used to be 0.35 + (m-1)/8, which saturates at x9. Measured
+    // play reaches x25, so across a whole benchmark run the intensity sat at
+    // 1.000 and keys, lead and tension were all up for 92% of the samples — the
+    // "reactive" score was a static one. Logarithmic over a x28 range means the
+    // arrangement is still opening up on the twentieth trick of a line.
+    const comboDrive = s.comboOpen
+      ? clamp01(0.30 + 0.62 * Math.log(Math.max(1, s.multiplier)) / Math.log(28))
+      : 0;
     const speedDrive = clamp01((s.speed - 4) / 12) * 0.35;
     const target = clamp01(Math.max(comboDrive, s.heat, speedDrive));
 
@@ -375,9 +392,14 @@ export class SoundManager {
     // part never enters in the middle of a beat.
     const i = this.intensity;
     this.pendingLevels.bass = 1;
-    this.pendingLevels.keys = i > 0.28 ? clamp01((i - 0.28) / 0.3) * 0.9 : 0;
-    this.pendingLevels.lead = i > 0.55 ? clamp01((i - 0.55) / 0.3) * 0.8 : 0;
-    this.pendingLevels.tension = s.heat > 0.4 ? clamp01((s.heat - 0.4) / 0.4) * 0.85 : 0;
+    this.pendingLevels.keys = i > 0.30 ? clamp01((i - 0.30) / 0.28) * 0.9 : 0;
+    this.pendingLevels.lead = i > 0.62 ? clamp01((i - 0.62) / 0.26) * 0.8 : 0;
+    // Tension is the chase layer, but a monster line earns it too: a x20 combo
+    // is its own kind of danger and the ride pattern is what makes the top of a
+    // line feel like it is running out of road.
+    const heatTension = s.heat > 0.4 ? clamp01((s.heat - 0.4) / 0.4) * 0.85 : 0;
+    const comboTension = i > 0.86 ? clamp01((i - 0.86) / 0.12) * 0.55 : 0;
+    this.pendingLevels.tension = Math.max(heatTension, comboTension);
   }
 
   /** Was a combo open on the previous director frame. */
@@ -873,3 +895,8 @@ export class SoundManager {
 
 // Singleton instance
 export const soundManager = new SoundManager();
+
+// Debug handle for tools/audio.mjs; see the note in ProceduralSounds.ts.
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).soundManager = soundManager;
+}

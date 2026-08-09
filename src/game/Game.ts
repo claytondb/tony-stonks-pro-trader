@@ -33,7 +33,7 @@ import { PostFX } from '../rendering/PostFX';
 import { MaterialLibrary } from '../materials/MaterialLibrary';
 import { configureFromRenderer, warmup } from '../materials/ProceduralTextures';
 import { buildOfficeInterior, disposeOfficeInterior, type OfficeInterior } from '../world/OfficeLevel';
-import { makeFilingCabinet, makeGrindRail, makeKickerRamp, makePrinter, makeTrashCan, makeWaterCooler } from '../world/OfficeProps';
+import { batchStaticLevelObjects, makeFilingCabinet, makeGrindRail, makeKickerRamp, makePrinter, makeTrashCan, makeWaterCooler } from '../world/OfficeProps';
 import { buildOfficeChair, spinCasters, type ChairParts } from '../world/ChairModel';
 import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } from '../story';
 import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
@@ -195,7 +195,11 @@ export class Game {
   
   // Level objects (can be cleared and reloaded)
   private levelObjects: THREE.Object3D[] = [];
-  
+  // The merged draw-call batch for the static half of `levelObjects`. Held separately because
+  // it must be removed on teardown but must NOT reach `minimapFootprints`, which would draw
+  // one level-wide rectangle over the whole map. See OfficeProps.batchStaticLevelObjects.
+  private levelBatch: THREE.Object3D | null = null;
+
   // Pre-loaded GLB models for level objects
   private modelCache: Map<string, THREE.Object3D> = new Map();
   private gltfLoader!: GLTFLoader;
@@ -2258,6 +2262,14 @@ export class Game {
       this.scene.remove(obj);
     }
     this.levelObjects = [];
+    if (this.levelBatch) {
+      this.scene.remove(this.levelBatch);
+      this.levelBatch.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh && m.geometry) m.geometry.dispose();
+      });
+      this.levelBatch = null;
+    }
 
     this.clearCollectibles();
 
@@ -2327,13 +2339,22 @@ export class Game {
     }
     
     // Create regular objects individually
+    const placed: THREE.Object3D[] = [];
     for (const objData of regularObjects) {
       const mesh = this.createLevelObject(objData);
       if (mesh) {
         this.scene.add(mesh);
         this.levelObjects.push(mesh);
+        placed.push(mesh);
       }
     }
+
+    // ...then collapse the static ones into a single per-material batch. Ten props built one
+    // at a time were 28 visible meshes and ~84 draw calls a frame; they are authored where
+    // they stand and never move, so they have no business costing a draw call each. The
+    // sources stay in `levelObjects` (detached, geometry intact) so the minimap footprints
+    // and teardown below are unaffected.
+    this.levelBatch = batchStaticLevelObjects(placed, this.scene);
   }
   
   /**

@@ -69,6 +69,21 @@ const clamp01 = (v: number) => clamp(v, 0, 1);
 /** Semitones above/below a reference frequency. */
 const semis = (base: number, n: number) => base * Math.pow(2, n / 12);
 
+/**
+ * How close the balance meter is to going over, 0 = safe, 1 = about to bail.
+ * The grind bed, the screech band and the anxiety layer all read from this one
+ * curve so they cannot disagree about how frightened to be.
+ *
+ * The window is measured, not guessed. Across the flow benchmark run the balance
+ * meter's worst excursion from centre was 0.215; the previous window (dead zone
+ * 0.12, full panic at 0.40) therefore never got past danger=0.34, and since the
+ * anxiety level was ALSO squared that layer peaked at 0.013 of its 0.14 budget —
+ * inaudible. A dead zone of 0.05 and full panic at 0.26 puts a real wobble in
+ * the top half of the curve, which is where a cue has to live to be a cue.
+ */
+const balanceDanger = (balance01: number) =>
+  clamp01((Math.abs(balance01 - 0.5) - 0.05) / 0.21);
+
 /** A minor pentatonic on A — every subset of it is consonant, so stacked
  *  trick stings in a combo can never form a sour interval. */
 const PENTATONIC = [0, 3, 5, 7, 10];
@@ -131,6 +146,8 @@ export class ProceduralSounds {
   private grindBodyLP: BiquadFilterNode | null = null;
   private grindSparkHP: BiquadFilterNode | null = null;
   private grindSparkGain: GainNode | null = null;
+  private grindScreechBP: BiquadFilterNode | null = null;
+  private grindScreechGain: GainNode | null = null;
   private grindOut: GainNode | null = null;
   private grindActive = false;
 
@@ -153,7 +170,10 @@ export class ProceduralSounds {
   private droneOut: GainNode | null = null;
   private comboActive = false;
   private comboTrickIndex = 0;
-  private lastMultiplier = 1;
+  /** Integer multiplier "gear" the pip last announced. */
+  private lastGear = 1;
+  /** Peak multiplier reached on the open line, for the bank payoff. */
+  private comboPeakMultiplier = 1;
 
   // ---- continuous: police tension -------------------------------------------
   private heatA: OscillatorNode | null = null;
@@ -164,6 +184,8 @@ export class ProceduralSounds {
   private heatOut: GainNode | null = null;
   private heatActive = false;
   private heatValue = 0;
+  /** Armed once a pursuit got properly hot; gates the single "lost them" cue. */
+  private chaseArmed = false;
 
   // =========================================================================
   // Lifecycle
@@ -675,8 +697,10 @@ export class ProceduralSounds {
     const norm = clamp01(speed / 18);
     const h = clamp01(hardness);
 
-    // Volume: sqrt-ish so the low end of the speed range is still audible.
-    const vol = 0.02 + 0.19 * Math.pow(norm, 0.75);
+    // Volume: still compressive so a standing start is audible, but 0.9 rather
+    // than 0.75 — the roll is the primary speed cue and the flatter curve only
+    // correlated 0.45 with speed across a measured run.
+    const vol = 0.015 + 0.225 * Math.pow(norm, 0.9);
     this.rollOut.gain.setTargetAtTime(vol, t, 0.05);
 
     // Pitch: linear in speed, 0.55x standing-start to 1.65x flat out.
@@ -788,6 +812,22 @@ export class ProceduralSounds {
     this.grindSparkHP.connect(this.grindSparkGain);
     this.grindSparkGain.connect(this.grindOut);
 
+    // --- screech: silent when balanced, a scream when you are about to go ---
+    // A very high-Q band riding on the same scrape source. Because it is fed by
+    // the stick-slip texture rather than an oscillator it reads as the RAIL
+    // complaining, not as a warning beep bolted on top — the difference between
+    // a cue the player believes and a cue they resent. Q 26 is deliberately on
+    // the edge of self-ringing: it picks a near-pitch out of the noise.
+    this.grindScreechBP = ctx.createBiquadFilter();
+    this.grindScreechBP.type = 'bandpass';
+    this.grindScreechBP.frequency.value = 3200;
+    this.grindScreechBP.Q.value = 26;
+    this.grindScreechGain = ctx.createGain();
+    this.grindScreechGain.gain.value = 0;
+    src.connect(this.grindScreechBP);
+    this.grindScreechBP.connect(this.grindScreechGain);
+    this.grindScreechGain.connect(this.grindOut);
+
     src.start();
     this.grindSrc = src;
     this.grindActive = true;
@@ -810,10 +850,16 @@ export class ProceduralSounds {
     if (!this.ctx || !this.grindOut || !this.grindSrc) return;
     const t = this.ctx.currentTime;
     const norm = clamp01(speed / 18);
-    const danger = clamp01((Math.abs(balance01 - 0.5) - 0.12) / 0.28);
+    const danger = balanceDanger(balance01);
 
-    // Volume floor is high: even a slow grind is a loud, present sound.
-    this.grindOut.gain.setTargetAtTime(0.05 + 0.25 * Math.pow(norm, 0.6), t, 0.05);
+    // Volume floor is high: even a slow grind is a loud, present sound. The
+    // exponent used to be 0.6, which compressed the whole 8-16 m/s band the
+    // player actually grinds at into 5 dB and measured as a 0.245 correlation
+    // with speed — i.e. the bed barely reported speed at all. 0.85 spreads the
+    // same band over ~10 dB. Losing balance also pushes the level up: a rail you
+    // are fighting is a rail that is getting louder.
+    this.grindOut.gain.setTargetAtTime(
+      (0.045 + 0.30 * Math.pow(norm, 0.85)) * (1 + 0.20 * danger), t, 0.05);
     this.grindSrc.playbackRate.setTargetAtTime(0.7 + 0.9 * norm, t, 0.06);
 
     // Mode centre rises with speed, and rises further as you lose balance —
@@ -828,6 +874,13 @@ export class ProceduralSounds {
     // The spark band climbs too, so fast grinds fizz rather than hiss.
     this.grindSparkHP?.frequency.setTargetAtTime(4200 + 3000 * norm, t, 0.06);
     this.grindSparkGain?.gain.setTargetAtTime(0.04 + 0.22 * norm * norm, t, 0.06);
+
+    // Screech. Silent below the dead zone, then climbs fast and slides UP in
+    // pitch as well as level — a rising pitch is read as "accelerating towards
+    // something" far more reliably than a rising volume is.
+    this.grindScreechGain?.gain.setTargetAtTime(0.9 * danger * danger, t, 0.05);
+    this.grindScreechBP?.frequency.setTargetAtTime(
+      (2600 + 1400 * norm) * (1 + 0.55 * danger), t, 0.07);
   }
 
   stopGrindLoop(): void {
@@ -839,6 +892,8 @@ export class ProceduralSounds {
     this.grindBodyLP = null;
     this.grindSparkHP = null;
     this.grindSparkGain = null;
+    this.grindScreechBP = null;
+    this.grindScreechGain = null;
     this.grindActive = false;
     if (!this.ctx || !src) return;
     const t = this.ctx.currentTime;
@@ -853,7 +908,17 @@ export class ProceduralSounds {
     try { src.stop(t + 0.14); } catch { /* already stopped */ }
   }
 
-  /** The metal "catch" as the chair frame lands on the rail. */
+  /**
+   * The metal "catch" as the chair frame lands on the rail.
+   *
+   * This is the moment the player is told "you are on it", and it has to be
+   * heard OVER the bed it introduces. Measured through the real limiter, the
+   * grind bed peaks at -7 dBFS while this transient used to peak at -22 dBFS —
+   * 15 dB under the thing it announces, which is inaudible. The Q on the sweep
+   * was the culprit: a Q of 4 at 4.2 kHz throws away nearly all the scrape's
+   * energy. Widened to 1.6, driven harder, and given a low clank so the lock-on
+   * has weight as well as brightness.
+   */
   playGrindStart(): void {
     if (!this.ctx || !this.sfxBus || !this.claim(1, 0.3)) return;
     const ctx = this.ctx;
@@ -864,11 +929,11 @@ export class ProceduralSounds {
     if (!src) return;
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.setValueAtTime(4200, t);
-    bp.frequency.exponentialRampToValueAtTime(1500, t + 0.16);
-    bp.Q.value = 4;
+    bp.frequency.setValueAtTime(4600, t);
+    bp.frequency.exponentialRampToValueAtTime(1400, t + 0.16);
+    bp.Q.value = 1.6;
     const g = ctx.createGain();
-    this.perc(g, t, 1.8, 0.004, 0.2);
+    this.perc(g, t, 3.4, 0.003, 0.2);
     src.connect(bp); bp.connect(g); g.connect(this.sfxBus);
     this.sendReverb(g, 0.2);
     src.start(t);
@@ -880,9 +945,20 @@ export class ProceduralSounds {
     ring.frequency.setValueAtTime(880, t);
     ring.frequency.exponentialRampToValueAtTime(620, t + 0.12);
     const rg = ctx.createGain();
-    this.perc(rg, t, 0.16, 0.003, 0.13);
+    this.perc(rg, t, 0.3, 0.003, 0.13);
     ring.connect(rg); rg.connect(this.sfxBus);
     ring.start(t); ring.stop(t + 0.16);
+
+    // Clank: the chair's steel frame taking the rail. Low, fast, and the reason
+    // the lock-on lands in the chest rather than only in the ears.
+    const clank = ctx.createOscillator();
+    clank.type = 'triangle';
+    clank.frequency.setValueAtTime(210, t);
+    clank.frequency.exponentialRampToValueAtTime(96, t + 0.09);
+    const cg = ctx.createGain();
+    this.perc(cg, t, 0.34, 0.002, 0.13);
+    clank.connect(cg); cg.connect(this.sfxBus);
+    clank.start(t); clank.stop(t + 0.2);
   }
 
   // -------------------------------------------------------------------------
@@ -946,20 +1022,24 @@ export class ProceduralSounds {
         || !this.anxBP || !this.anxTrem || !this.anxTremDepth) return;
     const t = this.ctx.currentTime;
 
-    // Dead zone to 0.12 either side of centre; full panic by 0.40 (i.e. 0.10/0.90).
-    const dist = Math.abs(balance - 0.5);
-    const danger = clamp01((dist - 0.12) / 0.28);
+    // See balanceDanger(): dead zone 0.05, full panic by 0.26 from centre.
+    const danger = balanceDanger(balance);
 
     if (danger <= 0) {
       this.anxOut.gain.setTargetAtTime(0, t, 0.08);
       return;
     }
 
-    // Level curve is convex: barely there at the edge of the dead zone, urgent
-    // at the end. A linear ramp here nags during normal riding.
-    this.anxOut.gain.setTargetAtTime(0.14 * danger * danger, t, 0.04);
+    // Level curve stays convex so it does not nag during normal riding, but at
+    // ^1.5 rather than ^2: squared, combined with the old window, put the layer
+    // at 9% of its own budget for the whole of a measured benchmark run. The
+    // budget also went 0.14 -> 0.17 so the top of the curve can actually cut
+    // through a grind bed that is itself getting louder as you lose it.
+    this.anxOut.gain.setTargetAtTime(0.17 * Math.pow(danger, 1.5), t, 0.04);
     this.anxTremDepth.gain.setTargetAtTime(0.20 + 0.25 * danger, t, 0.06);
-    this.anxTrem.frequency.setTargetAtTime(3 + 11 * danger, t, 0.06);
+    // Rate is the real cue. Starting at 3 Hz wasted the bottom of the range on
+    // a pulse too slow to read as urgency; 4.5 -> 16 Hz is an audible sprint.
+    this.anxTrem.frequency.setTargetAtTime(4.5 + 11.5 * danger, t, 0.06);
 
     const f = 200 + 340 * danger;
     this.anxA.frequency.setTargetAtTime(f, t, 0.05);
@@ -1320,7 +1400,9 @@ export class ProceduralSounds {
     modGain.connect(carrier.frequency);
 
     const g = ctx.createGain();
-    this.perc(g, t, 0.26 + 0.24 * v, 0.003, decay);
+    // Measured at -20.8 dBFS against a grind bed peaking at -7: the sting that
+    // is supposed to confirm every trick was 14 dB under the bed it plays over.
+    this.perc(g, t, 0.34 + 0.30 * v, 0.003, decay);
     carrier.connect(g); g.connect(this.sfxBus);
     this.sendReverb(g, 0.22);
 
@@ -1345,7 +1427,7 @@ export class ProceduralSounds {
       hp.type = 'highpass';
       hp.frequency.value = 3500;
       const cg = ctx.createGain();
-      this.perc(cg, t, 0.10 + 0.08 * v, 0.001, 0.02);
+      this.perc(cg, t, 0.17 + 0.13 * v, 0.001, 0.02);
       click.connect(hp); hp.connect(cg); cg.connect(this.sfxBus);
       click.start(t); click.stop(t + 0.035);
     }
@@ -1370,20 +1452,32 @@ export class ProceduralSounds {
     if (!open && this.comboActive) { this.stopComboRiser(); return; }
     if (!this.comboActive) return;
 
-    const m = clamp(multiplier, 1, 12);
-    const climb = clamp01((m - 1) / 7);          // 0 at x1, 1 at x8+
+    const m = clamp(multiplier, 1, 40);
+    this.comboPeakMultiplier = Math.max(this.comboPeakMultiplier, m);
 
-    // A tick each time the multiplier steps up: a short pip an octave over the
-    // current trick register. This is the "you just went up a gear" cue.
-    if (multiplier > this.lastMultiplier) this.playMultiplierPip(multiplier);
-    this.lastMultiplier = multiplier;
+    // Measured: a good line in this game reaches x25, not x8. The old linear
+    // (m-1)/7 map saturated the entire riser two seconds into a line and then
+    // reported nothing for the remaining twenty — the tension stopped building
+    // exactly when the line got interesting. Logarithmic keeps every doubling of
+    // the multiplier worth the same amount of climb, so x2->x4 and x12->x24 both
+    // audibly move, and the curve still has somewhere to go at x30.
+    const climb = clamp01(Math.log(m) / Math.log(28));
 
-    this.riserBP?.frequency.setTargetAtTime(400 + 2600 * climb, t, 0.4);
-    this.riserBP?.Q.setTargetAtTime(1.5 + 5 * climb, t, 0.4);
-    this.riserOut?.gain.setTargetAtTime(0.012 + 0.045 * climb, t, 0.35);
+    // A tick each time the multiplier crosses an INTEGER: "you went up a gear".
+    // The multiplier is a continuous float, so comparing it raw fired the pip on
+    // 515 frames of a 26 s run — a machine gun that the 120 ms throttle turned
+    // into mush rather than into a cue. Gears are what the player reads off the
+    // HUD, so gears are what the ear should be told about.
+    const gear = Math.floor(m);
+    if (gear > this.lastGear) this.playMultiplierPip(gear);
+    this.lastGear = gear;
+
+    this.riserBP?.frequency.setTargetAtTime(400 + 2900 * climb, t, 0.4);
+    this.riserBP?.Q.setTargetAtTime(1.5 + 6 * climb, t, 0.4);
+    this.riserOut?.gain.setTargetAtTime(0.012 + 0.055 * climb, t, 0.35);
 
     this.droneLP?.frequency.setTargetAtTime(180 + 900 * climb, t, 0.4);
-    this.droneOut?.gain.setTargetAtTime(0.02 + 0.05 * climb, t, 0.35);
+    this.droneOut?.gain.setTargetAtTime(0.02 + 0.055 * climb, t, 0.35);
   }
 
   private startComboRiser(): void {
@@ -1427,27 +1521,40 @@ export class ProceduralSounds {
     this.droneA.start(); this.droneB.start();
 
     this.comboActive = true;
-    this.lastMultiplier = 1;
+    this.lastGear = 1;
+    this.comboPeakMultiplier = 1;
   }
 
   private stopComboRiser(): void {
     const src = this.riserSrc;
+    const bp = this.riserBP;
     const a = this.droneA, b = this.droneB;
     const ro = this.riserOut, dOut = this.droneOut;
     this.riserSrc = null; this.riserBP = null; this.riserOut = null;
     this.droneA = null; this.droneB = null; this.droneLP = null; this.droneOut = null;
     this.comboActive = false;
     this.comboTrickIndex = 0;
-    this.lastMultiplier = 1;
+    this.lastGear = 1;
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
+
+    // The riser LIFTS OFF rather than being switched off: as it fades, its band
+    // sweeps up and out of the top of the spectrum. A tension layer that simply
+    // stops leaves a hole; one that departs upwards resolves. This is the half
+    // of the combo payoff that plays whether the line was banked or dropped —
+    // playChaChing supplies the reward on top of it.
+    if (bp) {
+      bp.frequency.cancelScheduledValues(t);
+      bp.frequency.setValueAtTime(Math.max(80, bp.frequency.value), t);
+      bp.frequency.exponentialRampToValueAtTime(9000, t + 0.22);
+    }
     for (const g of [ro, dOut]) {
       if (!g) continue;
       g.gain.cancelScheduledValues(t);
       g.gain.setValueAtTime(g.gain.value, t);
-      g.gain.linearRampToValueAtTime(0, t + 0.12);
+      g.gain.linearRampToValueAtTime(0, t + (g === ro ? 0.22 : 0.12));
     }
-    for (const n of [src, a, b]) { if (n) { try { n.stop(t + 0.15); } catch { /* ok */ } } }
+    for (const n of [src, a, b]) { if (n) { try { n.stop(t + 0.26); } catch { /* ok */ } } }
   }
 
   /** Short pip on a multiplier step-up. */
@@ -1489,9 +1596,33 @@ export class ProceduralSounds {
     this.claim(2, 1.0);
     const ctx = this.ctx;
     const t = ctx.currentTime;
-    const s = clamp01(score / 25000);
+    // Size the payoff on the score AND on how far the line's multiplier climbed.
+    // A x22 line that banks for a middling number is still the best thing the
+    // player did all run, and it has to sound like it — otherwise the escalation
+    // the riser spent twenty seconds building has no resolution.
+    const s = clamp01(Math.max(score / 25000, (this.comboPeakMultiplier - 1) / 22));
 
-    this.duckMusic(0.28 + 0.22 * s, 0.1);
+    this.duckMusic(0.28 + 0.30 * s, 0.1 + 0.1 * s);
+
+    // --- release whoosh ----------------------------------------------------
+    // Filtered noise sweeping up and away, under the register. This is the
+    // tension leaving the room; it is what turns the cash register from a score
+    // notification into the end of a held breath. Only on lines worth it.
+    if (s > 0.12) {
+      const wh = this.noiseSource(this.pinkBuf, false, 1);
+      if (wh) {
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(600, t);
+        bp.frequency.exponentialRampToValueAtTime(7000, t + 0.3 + 0.15 * s);
+        bp.Q.value = 2.4;
+        const g = ctx.createGain();
+        this.perc(g, t, 0.10 + 0.16 * s, 0.02, 0.3 + 0.15 * s);
+        wh.connect(bp); bp.connect(g); g.connect(this.sfxBus);
+        this.sendReverb(g, 0.3);
+        wh.start(t); wh.stop(t + 0.55);
+      }
+    }
 
     // --- cha ---------------------------------------------------------------
     const drawer = ctx.createOscillator();
@@ -1963,6 +2094,7 @@ export class ProceduralSounds {
     if (!this.ctx || !this.sfxBus) return;
     const h = clamp01(heat);
     this.heatValue = h;
+    if (h > 0.5) this.chaseArmed = true;
 
     if (h > 0.02 && !this.heatActive) this.startHeatBed();
     if (!this.heatActive) return;
@@ -1979,7 +2111,15 @@ export class ProceduralSounds {
   /** Relief: a falling perfect fifth, and the tension bed lets go. */
   playPoliceLost(): void {
     if (!this.ctx || !this.sfxBus) return;
-    if (!this.throttle('policeLost', 0.8)) return;
+    // Two callers own a "lost them" edge (Game.ts and the music director) and
+    // heat rattles across any fixed threshold as a pursuit peters out — the
+    // probe caught this resolving cadence firing seven times in 26 s. Relief you
+    // get every few seconds is not relief. The latch is kept HERE rather than in
+    // either caller so it holds no matter who asks: the cue can only sound once
+    // per pursuit that actually got hot.
+    if (!this.chaseArmed) return;
+    if (!this.throttle('policeLost', 4.0)) return;
+    this.chaseArmed = false;
     const ctx = this.ctx;
     const sfx = this.sfxBus;
     const t = ctx.currentTime;
@@ -2016,6 +2156,7 @@ export class ProceduralSounds {
     this.heatLP = null; this.heatPulseDepth = null; this.heatOut = null;
     this.heatActive = false;
     this.heatValue = 0;
+    this.chaseArmed = false;
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
     if (out) {
@@ -2080,3 +2221,11 @@ export class ProceduralSounds {
 
 // Singleton
 export const proceduralSounds = new ProceduralSounds();
+
+// Debug handle. A browser harness (tools/audio.mjs) has no other way to observe
+// whether a sound actually fired, and "the system is wired but silent" is the
+// failure mode that looks finished from the outside. Read-only, no cost.
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).proceduralSounds = proceduralSounds;
+  (window as unknown as Record<string, unknown>).ProceduralSounds = ProceduralSounds;
+}

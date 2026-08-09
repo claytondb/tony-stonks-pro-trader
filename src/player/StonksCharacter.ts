@@ -45,7 +45,7 @@
 
 import * as THREE from 'three';
 import {
-  PartBuilder, applyRimLight, chamferBox, shear, taper,
+  PartBuilder, applyRimLight, chamferBox, facetedShell, shear, taper,
 } from './LowPolyKit';
 
 // ---------------------------------------------------------------------------
@@ -156,11 +156,28 @@ const SKINS: Record<CharacterSkin, SkinSpec> = {
     // is most of why the figure read as a standing blob. 0x1d2028 is the value the comment
     // always claimed: three clear stops under the chair fabric and under the carpet.
     //
-    // HAIR went the other way. 0x2a1a12 is so close to black that under the office key it is a
-    // hole in the head rather than a shape, and it needed a 0.42 rim to be visible at all, which
-    // then turned the whole cap pale. The concept art's hair is a mid warm brown; 0x4e3423 is
-    // that, and it reads as a distinct mass against both the white shirt and the ceiling.
-    shirt: 0xfbf8f0, skin: 0xcb8a55, hair: 0x4e3423, tie: 0xc4202c,
+    // HAIR. 0x2a1a12 was so close to black that under the office key it was a hole in the head,
+    // and it needed a 0.42 rim to be visible at all, which then turned the whole cap pale. But
+    // 0x4e3423 overshot in the other direction once the head became two clean shells: the crown
+    // is now a LARGE FLAT PLANE facing straight up into a ceiling full of fluorescents, and a
+    // large plane pointed at the key takes several times the light the grazing facets of the old
+    // box-stack did. Measured off shots/head-rear.png, the crown came back at srgb(165,112,68) —
+    // a luminance of 0.194 against the cheek's 0.580. One and a half stops is not hair, it is a
+    // suntan, and at four metres the head read as bald with a dark headband.
+    //
+    // 0x36261a took the crown to srgb(172,140,113) and that was still a tan, not hair. The
+    // office renderer uses NO tone mapping (the harness reports toneMapping 0), so nothing rolls
+    // the highlights off: the face plane near the ceiling banks is already 2x over white and
+    // clips flat, which means the ONLY contrast the player gets on the head is however far the
+    // hair sits below the clip. 0x281c12 lands the lit crown around srgb(140) against a face
+    // pinned at 254 — a full two stops of separation on the brightest hair plane in the game,
+    // and four or more on the nape, which is the plane the chase camera actually stares at.
+    //
+    // This is close to the 0x2a1a12 an earlier pass rejected as "a hole in the head", and the
+    // reason it is safe now is geometric, not chromatic: back then the hair was a stack of
+    // chamfered boxes whose facets nearly all met the key at a grazing angle, so a dark colour
+    // never caught anything. The crown is now one large plane pointed straight at the ceiling.
+    shirt: 0xfbf8f0, skin: 0xcb8a55, hair: 0x281c12, tie: 0xc4202c,
     dark: 0x1d2028, rim: 0xdbe6f7,
   },
   // Second skin reads cooler and older: pale blue shirt, gold tie, iron-grey hair.
@@ -193,7 +210,12 @@ function makeMats(spec: SkinSpec): Mats {
   // Hair carries a rim on purpose: it is a dark shape and the follow camera looks straight at
   // it, so it needs an edge or it becomes a hole. It does NOT need enough rim to turn the whole
   // cap pale, which is what 0.42 did on a chamfered volume whose facets are mostly grazing.
-  const hair = mk(spec.hair, 0.88, 0.24);
+  // 0.24 was still too much once the hair became one continuous shell: a Fresnel term is
+  // strongest exactly on the silhouette bevels, which on a shell are BIG, so it was painting a
+  // pale mauve band right along the crown's outline instead of a thin edge. The rim is additive
+  // in linear space, so on a hair value this low 0.16 was already a fifth of the crown's total
+  // output; 0.11 keeps the silhouette edge and stops the term setting the hair's floor.
+  const hair = mk(spec.hair, 0.88, 0.11);
   const tie = mk(spec.tie, 0.52, 0.18);
   // The slacks are the darkest mass below the waist, and A RIM IS NOT WHAT SEPARATES THEM.
   // A Fresnel term on a chamfered low-poly limb catches nearly every facet — at 0.56 it lifted
@@ -400,118 +422,154 @@ export interface CharacterParts {
 }
 
 /**
+ * TEN DIRECTIONS ROUND THE HEAD, running front (-Z) -> +X -> back (+Z) -> -X.
+ *
+ * Not a circle. Indices 0/1 are a PAIR straddling the centre line at the same depth, which makes
+ * the front of every ring a single flat plane rather than a curve — that flat is the face, and
+ * the forehead, and the front of the fringe. Everything else fans out to a rounded back. Ten is
+ * the smallest count that gives a flat front, a flat back and a distinct cheek plane on each
+ * side; twelve just adds facets nobody can resolve at four metres.
+ */
+const HEAD_DIRS = [
+  [-0.42, -1.00], [0.42, -1.00],            // face plane
+  [0.92, -0.62], [1.00, -0.05], [0.86, 0.58],   // right cheek / temple / back quarter
+  [0.40, 1.00], [-0.40, 1.00],              // back plane
+  [-0.86, 0.58], [-1.00, -0.05], [-0.92, -0.62],
+] as const satisfies readonly (readonly [number, number])[];
+
+/** Head half-depth / half-width. P.headD / P.headW = 0.956; rounded off, and shared by every ring. */
+const HEAD_ASPECT = 0.94;
+
+/**
+ * The hairline: the head's most important silhouette edge, one height per HEAD_DIRS entry.
+ *
+ * It runs high and asymmetric across the brow (0.202 left, 0.220 right — a swept part, and the
+ * only asymmetry the head needs), drops past the temples, and plunges to 0.075 at the nape. That
+ * plunge is what the chase camera sees for the entire game: a 150 mm tall unbroken dark plane
+ * with a hard bottom edge, sitting on a light neck, sitting on a white collar.
+ */
+const HAIRLINE = [
+  0.202, 0.220,
+  0.206, 0.178, 0.120,
+  0.076, 0.074,
+  0.118, 0.172, 0.186,
+];
+
+/**
  * The head.
  *
  * At four metres a head is three shapes and nothing else: a DARK HAIR MASS, a LIGHT FACE PLANE,
- * and the notch between them. The previous build had those the wrong way round — a thin hair
- * strip on top of a big pale cranium — so from the follow camera (which is behind him, looking
- * at the back of his head) the whole head resolved to one undifferentiated warm box.
+ * and the notch between them. Two rebuilds ago it had those the wrong way round — a thin hair
+ * strip on a big pale cranium — and the fix for that stacked EIGHT chamfered boxes on the crown
+ * (a cap, a second crown slab, a back mass, two temples, a sheared fringe, a tuft rotated on all
+ * three axes). Each of those boxes brings its own top face, its own twelve chamfer bevels and its
+ * own silhouette edge, all crowding the same 60 mm of skull, and the review's verdict was exactly
+ * what that predicts: "the crown reads as a jumble of facets at 3/4 angles".
  *
- * So the hair now owns the top 40% of the head AND the whole back of it AND the temples, in a
- * near-black brown, and the skin is dropped two stops. The result is a dark cap sitting on a
- * light neck sitting on a white collar: three hard value steps stacked vertically, which is a
- * silhouette you can still read when the head is thirty pixels tall.
+ * More detail was never the answer. The head is now TWO CONTINUOUS SHELLS swept through rings
+ * (see facetedShell), so the crown is four planes wide instead of forty:
+ *
+ *   skin shell   chin -> jaw -> cheekbone -> eye band -> BROW RIDGE -> forehead. The brow ring
+ *                is the only one that steps forward, so the ring under it falls into its shadow
+ *                and the eyes sit in a band that is darker than the plane above and below — a
+ *                brow you read as a brow without modelling one.
+ *   hair shell   a shaped hairline, a vertical wall up to the widest point, then two bevels into
+ *                one flat crown plane. From behind: wall, bevel, bevel, cap. Four values, four
+ *                hard edges, no noise.
+ *
+ * Every side quad in both shells is planar by construction — see the planarity contract on
+ * facetedShell, because `flatShading` creases anything that is not.
+ *
+ * Only the graphic features (eyes, brows, nose, mouth, ears) are still boxes, because they are
+ * meant to read as applied marks rather than as form. Their depths are set so the front face
+ * clears the shell by 1-2 mm: a dark plate that stands proud catches the key on its own front
+ * and turns grey, and a grey plate is not an eye.
  */
 function buildHead(m: Mats): THREE.Group {
   const g = new THREE.Group();
-  g.name = 'head';
   const b = new PartBuilder();
-  const W = P.headW, H = P.headH, D = P.headD;
-  const cy = H * 0.5;
-  const F = -D * 0.5;              // the face plane (the character faces -Z)
+  g.name = 'head';
 
-  // --- skull ---------------------------------------------------------------------------
-  // Upper cranium: mostly hidden under the hair, so it only has to fill the volume.
-  b.add(chamferBox(W * 0.94, H * 0.40, D * 0.94, 0.022), m.skin, {
-    pos: [0, cy + H * 0.22, 0], tint: { ao: 0.30, back: 0.30, aoTop: cy },
-  });
-  // Face block: the plane that has to read. Sheared so the chin leads and the brow overhangs,
-  // and tapered so the jaw is narrower than the cheekbones — a brick has no face.
-  const face = chamferBox(W * 0.92, H * 0.56, D * 0.90, 0.020);
-  taper(face, 'y', 0.82, 1.02);
-  shear(face, 'z', 'y', 0.15);
-  b.add(face, m.skin, { pos: [0, cy - H * 0.14, -0.004], tint: { ao: 0.38, back: 0.24 } });
-  // Cheek / jaw wedge: one more plane on the lower half so the face is not a single flat card.
-  const jaw = chamferBox(W * 0.74, H * 0.20, D * 0.72, 0.016);
-  taper(jaw, 'y', 0.68, 1.0);
-  b.add(jaw, m.skin, { pos: [0, cy - H * 0.40, -0.012], tint: { ao: 0.34, back: 0.22 } });
-
-  // Ears: small, but they break the head's outline where the hair meets the jaw.
-  for (const s of [-1, 1]) {
-    b.add(chamferBox(0.020, 0.060, 0.042, 0.008), m.skin, {
-      pos: [s * (W * 0.47), cy - 0.004, 0.014], tint: { ao: 0.34, tint: 0xdedede },
-    });
-  }
-  // Nose — a wedge off the face plane, not a bump.
-  const nose = chamferBox(0.036, 0.052, 0.046, 0.010);
-  taper(nose, 'y', 1.0, 0.50);
-  b.add(nose, m.skin, { pos: [0, cy - 0.020, F - 0.012], tint: { tint: 0xfff0e4 } });
-
-  // --- graphic features ----------------------------------------------------------------
-  // Eyes: flat dark rectangles set into the face plane. The reference does exactly this — no
-  // sockets, no whites, two shapes that survive being twelve pixels wide.
-  for (const s of [-1, 1]) {
-    b.add(chamferBox(0.042, 0.026, 0.018, 0.004), m.dark, {
-      pos: [s * 0.052, cy + 0.014, F + 0.005], tint: { tint: 0x1a1a1e },
-    });
-  }
-  // Brows in hair colour, angled in, with a clear band of skin between them and the eyes. Set
-  // them any closer and eye + brow merge into one dark bar across the face and he reads as
-  // wearing sunglasses, which is what the first pass did.
-  for (const s of [-1, 1]) {
-    b.add(chamferBox(0.050, 0.010, 0.020, 0.004), m.hair, {
-      pos: [s * 0.053, cy + 0.074, F + 0.007], rot: [0, 0, -s * 0.20],
-      tint: { tint: 0xd0d0d0 },
-    });
-  }
-  // Mouth: one dark bar, short and set just under the nose. Any lower and it lands in the jaw's
-  // own occlusion gradient and reads as a second chin.
-  b.add(chamferBox(0.046, 0.011, 0.014, 0.003), m.dark, {
-    pos: [0, cy - 0.050, F + 0.008], tint: { tint: 0x141418 },
+  // --- the skin shell -------------------------------------------------------------------
+  // Rings bottom to top. `r` is the half-width; the ring's front plane sits at -r * HEAD_ASPECT
+  // + zOff, which is the number that matters for everything applied to the face below.
+  // THE BROW RIDGE SITS AT 0.178, NOT AT 0.188. The first pass put it 8 mm under a hairline at
+  // 0.196 and the forehead disappeared: brow, brows and fringe all landed in the same 20 mm and
+  // the face lost the one big uninterrupted skin plane that tells you it is a face. 34 mm of
+  // clear forehead on the low side of the part is the cheapest legibility on the whole head.
+  const skull = facetedShell(HEAD_DIRS, [
+    { y: 0.018, r: 0.048, zOff: -0.018 },   // chin, led forward
+    { y: 0.062, r: 0.080, zOff: -0.010 },   // jaw
+    { y: 0.116, r: 0.106, zOff: 0.004 },    // cheekbone — the widest point of the face
+    { y: 0.156, r: 0.108, zOff: 0.002 },    // eye band
+    { y: 0.178, r: 0.110, zOff: -0.002 },   // brow ridge: the one ring that steps forward
+    { y: 0.212, r: 0.108, zOff: 0.004 },    // forehead
+    { y: 0.240, r: 0.092, zOff: 0.008 },    // crown, under the hair
+  ], HEAD_ASPECT);
+  // `front` is doing real work here: the office key is overhead, so the face plane and the
+  // temples either side of it are all vertical and all take the same grazing light. Lifting the
+  // forward-facing facets is what separates the face from the sides of the head. `aoFloor` is
+  // pushed BELOW the chin on purpose — at the default (the chin itself) the underside of the jaw
+  // bottomed the gradient out and read as a painted-on goatee rather than as contact shadow.
+  b.add(skull, m.skin, {
+    tint: { ao: 0.40, aoFloor: -0.05, aoTop: 0.20, back: 0.28, front: 0.11 },
   });
 
-  // --- hair: the dark half of the head --------------------------------------------------
-  // Crown cap. Wider than the skull and tapered in at the top, so the head silhouette has a
-  // shoulder on it rather than ending in a flat lid.
-  const cap = chamferBox(W * 1.07, H * 0.26, D * 1.07, 0.022);
-  taper(cap, 'y', 1.02, 0.78);
-  b.add(cap, m.hair, { pos: [0, H * 0.925, 0.008], tint: { ao: 0.10, back: 0.30 } });
-  // A second, brighter crown plane under the cap. Two tints on the top of the head is the only
-  // thing that stops it being one flat dark rectangle from directly behind — which is the angle
-  // the chase camera holds for the entire game.
-  const crown = chamferBox(W * 1.04, H * 0.13, D * 1.02, 0.020);
-  b.add(crown, m.hair, { pos: [0, H * 0.795, 0.006], tint: { tint: 0xe2e2e2, back: 0.30 } });
-  // Back of the head down to the nape, TAPERED IN at the bottom. The taper is the whole point:
-  // a rectangular back-of-head is a rectangle in silhouette, and a rectangle on top of a
-  // rectangular torso is the "undifferentiated box" the review called out. Narrowing the nape
-  // puts a visible shoulder in the outline where hair meets neck.
-  const backHair = chamferBox(W * 1.00, H * 0.48, D * 0.36, 0.018);
-  taper(backHair, 'y', 0.62, 1.04);
-  b.add(backHair, m.hair, {
-    pos: [0, cy + H * 0.16, D * 0.40], tint: { ao: 0.40, back: 0.34 },
-  });
-  // Hairline step across the nape: one more hard horizontal edge between the dark head mass
-  // and the skin of the neck below it.
-  b.add(chamferBox(W * 0.62, H * 0.10, D * 0.26, 0.012), m.hair, {
-    pos: [0, cy - H * 0.20, D * 0.40], rot: [0.18, 0, 0], tint: { ao: 0.5, tint: 0xc4c4c4 },
-  });
-  // Temples: hair down the sides to just above the ear.
+  // Ears: small, but they break the outline where the hair ends and the jaw begins.
   for (const s of [-1, 1]) {
-    b.add(chamferBox(W * 0.15, H * 0.36, D * 0.72, 0.014), m.hair, {
-      pos: [s * (W * 0.48), cy + H * 0.19, 0.012], tint: { ao: 0.28, back: 0.28 },
+    b.add(chamferBox(0.020, 0.062, 0.044, 0.008), m.skin, {
+      pos: [s * 0.112, 0.118, 0.016], tint: { ao: 0.34, tint: 0xdedede },
     });
   }
-  // Fringe: a wedge overhanging the brow, swept across. This is the notch in the silhouette
-  // that stops the head reading as a cylinder from any angle.
-  const fringe = chamferBox(W * 1.00, H * 0.17, D * 0.42, 0.012);
-  shear(fringe, 'y', 'z', -0.32);
-  b.add(fringe, m.hair, {
-    pos: [0.014, H * 0.775, F * 0.72], rot: [0.10, 0, 0.08], tint: { ao: 0.12, back: 0.20 },
+
+  // --- graphic features -----------------------------------------------------------------
+  // Nose: a wedge, wide at the nostril and narrow at the bridge, leading with its tip. It is
+  // the only thing on the face with a top plane, so it is the only thing the overhead key can
+  // actually catch — which is what puts a shadow on one cheek and makes the face read as 3D.
+  const nose = chamferBox(0.038, 0.056, 0.040, 0.009);
+  taper(nose, 'y', 1.0, 0.48);
+  shear(nose, 'z', 'y', 0.22);
+  b.add(nose, m.skin, { pos: [0, 0.120, -0.106], tint: { tint: 0xfff0e4, front: 0.10 } });
+
+  // Eyes: flat dark rectangles set into the face plane — no sockets, no whites. The face front
+  // at this height is z = -0.098, so a 8 mm plate centred at -0.0954 stands 1.5 mm proud: enough
+  // to never z-fight, little enough that it keeps no lit front face of its own.
+  for (const s of [-1, 1]) {
+    b.add(chamferBox(0.044, 0.026, 0.008, 0.003), m.dark, {
+      pos: [s * 0.050, 0.140, -0.0954], tint: { tint: 0x18181c },
+    });
+  }
+  // Brows in hair colour, angled in, sitting just under the lip of the brow ridge with a clear
+  // 30 mm band of skin between them and the eyes. Set them any closer and brow + eye merge into
+  // one dark bar and he reads as wearing sunglasses, which is what an earlier pass did; set them
+  // any HIGHER and they collide with the fringe, which is what the pass before this one did.
+  for (const s of [-1, 1]) {
+    b.add(chamferBox(0.050, 0.011, 0.012, 0.004), m.hair, {
+      pos: [s * 0.051, 0.170, -0.0993], rot: [0, 0, -s * 0.20], tint: { tint: 0xf0f0f0 },
+    });
+  }
+  // Mouth: one dark bar under the nose. Any lower and it lands in the jaw's own occlusion
+  // gradient and reads as a second chin.
+  b.add(chamferBox(0.046, 0.011, 0.008, 0.003), m.dark, {
+    pos: [0, 0.086, -0.0878], tint: { tint: 0x141418 },
   });
-  // Raised tuft, off centre and rotated, so the crown is asymmetric from every angle.
-  b.add(chamferBox(W * 0.54, H * 0.17, D * 0.44, 0.014), m.hair, {
-    pos: [-0.030, H * 1.00, -D * 0.12], rot: [0.04, 0.26, 0.15], tint: { back: 0.22 },
-  });
+
+  // --- the hair shell -------------------------------------------------------------------
+  // Ring 0 and ring 1 share a footprint, so the band between them is a set of VERTICAL planes
+  // whatever the hairline does — that is the legal way to cut a shaped edge into a shell, and
+  // it is what gives the hair a hard bottom silhouette instead of a bevelled mush.
+  // Rings 2 and 3 shrink and slide (+x, +z) at the same time, so the crown is swept back and to
+  // one side. That is the whole of the head's asymmetry, and it costs four planes.
+  const hair = facetedShell(HEAD_DIRS, [
+    { y: HAIRLINE, r: 0.124 },
+    { y: 0.230, r: 0.124 },
+    { y: 0.256, r: 0.111, xOff: 0.005, zOff: 0.005 },
+    { y: 0.271, r: 0.068, xOff: 0.011, zOff: 0.013 },
+  ], HEAD_ASPECT);
+  // The AO gradient runs the full height of the hair, so the nape is the darkest thing on the
+  // character and the flat crown cap is the brightest hair plane. Overhead key, dark mass, one
+  // lit top: that is a head from any angle, including straight down the chase camera.
+  b.add(hair, m.hair, { tint: { ao: 0.38, back: 0.20 } });
 
   b.flushInto(g, 'head');
   return g;

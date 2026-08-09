@@ -102,6 +102,99 @@ export function chamferBox(w: number, h: number, d: number, chamfer: number): TH
   return finalise(pos);
 }
 
+/**
+ * A ring of a {@link facetedShell}: one horizontal loop of the swept form.
+ *
+ * `r` is the half-width in X; the half-depth in Z is `r * aspect`, where the aspect is shared by
+ * the whole shell. `xOff` / `zOff` slide the ring sideways, which is how a form gets a sweep or
+ * a lean without any rotation.
+ */
+export interface ShellRing {
+  /**
+   * Ring height. A single number for a flat ring, or one value per direction for a shaped edge
+   * (a hairline, a collar line). See the planarity contract on {@link facetedShell}.
+   */
+  y: number | readonly number[];
+  r: number;
+  xOff?: number;
+  zOff?: number;
+}
+
+/**
+ * A closed faceted shell swept through a stack of rings — the "few big confident planes" form.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * chamferBox is the right tool for a limb segment, but a HEAD built by stacking eight boxes has
+ * eight top faces, eight sets of chamfer bevels, and eight silhouette edges all crowding the same
+ * 60 mm of crown. Under flat shading at follow-camera distance that resolves to noise: the art
+ * review's exact words were "the head's crown reads as a jumble of facets at 3/4 angles". A
+ * stylised low-poly head does not need more detail, it needs FEWER, LARGER planes — which means
+ * one continuous surface whose facets are chosen, not one per box corner.
+ *
+ * PLANARITY CONTRACT — READ THIS BEFORE ADDING A RING
+ * --------------------------------------------------
+ * `flatShading` in three does NOT use the normal attribute: it derives the normal per pixel from
+ * screen-space derivatives of the position, so a quad whose four corners are not coplanar shows a
+ * hard crease down its diagonal. That crease is exactly the noise this function exists to avoid,
+ * so the ring API is shaped to make planarity automatic:
+ *
+ *   - every ring shares one `aspect`, and a ring's footprint is `dir * r + offset`. Two rings
+ *     therefore differ by a UNIFORM SCALE PLUS A TRANSLATION, so corresponding edge vectors stay
+ *     parallel and every side quad is planar. Vary `r`, `xOff`, `zOff` freely.
+ *   - a per-direction `y` is only planar against a neighbour with the SAME r/xOff/zOff: the quad
+ *     then spans a vertical plane whatever the two heights are. That is the one legal way to cut
+ *     a shaped edge (the hairline) into the form.
+ *
+ * Rings run bottom to top; the winding assumes `dirs` runs front (-Z) -> +X -> back (+Z) -> -X.
+ */
+export function facetedShell(
+  dirs: readonly (readonly [number, number])[],
+  rings: readonly ShellRing[],
+  aspect: number,
+  opts: { capTop?: boolean; capBottom?: boolean } = {},
+): THREE.BufferGeometry {
+  const n = dirs.length;
+  const loops: THREE.Vector3[][] = rings.map((ring) => {
+    const ys = typeof ring.y === 'number' ? null : ring.y;
+    return dirs.map((d, i) => new THREE.Vector3(
+      d[0] * ring.r + (ring.xOff ?? 0),
+      ys ? ys[i] : (ring.y as number),
+      d[1] * ring.r * aspect + (ring.zOff ?? 0),
+    ));
+  });
+
+  const pos: number[] = [];
+  const tri = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) => {
+    pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  };
+  const mid = (loop: THREE.Vector3[]) => {
+    const c = new THREE.Vector3();
+    for (const p of loop) c.add(p);
+    return c.multiplyScalar(1 / loop.length);
+  };
+
+  for (let l = 0; l < loops.length - 1; l++) {
+    const lo = loops[l], hi = loops[l + 1];
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      tri(lo[i], hi[i], hi[j]);
+      tri(lo[i], hi[j], lo[j]);
+    }
+  }
+  if (opts.capTop !== false) {
+    const top = loops[loops.length - 1];
+    const c = mid(top);
+    for (let i = 0; i < n; i++) tri(c, top[(i + 1) % n], top[i]);
+  }
+  if (opts.capBottom !== false) {
+    const bot = loops[0];
+    const c = mid(bot);
+    for (let i = 0; i < n; i++) tri(c, bot[i], bot[(i + 1) % n]);
+  }
+  return finalise(pos);
+}
+
 /** Build a merge-ready geometry from a flat triangle soup. */
 export function finalise(pos: number[]): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
@@ -200,6 +293,15 @@ export interface TintSpec {
   ao?: number;
   /** Extra darkening applied to backward-facing (+Z) geometry, 0..1. Separates back planes. */
   back?: number;
+  /**
+   * Extra BRIGHTENING applied to forward-facing (-Z) geometry, 0..1.
+   *
+   * The office key is overhead, so under flat shading every vertical plane on the character gets
+   * the same grazing amount of it and the face plane lands at the same value as the temples
+   * either side of it. `back` cannot fix that — it only pushes the far side down, which flattens
+   * the front against the sides from the other direction. This lifts the plane that has to read.
+   */
+  front?: number;
   /** Local Y at which the AO gradient reaches full strength (defaults to the part's own min Y). */
   aoFloor?: number;
   /** Local Y at which the AO gradient has fully released. */
@@ -234,6 +336,7 @@ export function tintGeometry(geo: THREE.BufferGeometry, spec: TintSpec = {}): TH
 
   const aoAmt = spec.ao ?? 0;
   const backAmt = spec.back ?? 0;
+  const frontAmt = spec.front ?? 0;
 
   for (let i = 0; i < p.count; i++) {
     const t = THREE.MathUtils.clamp((p.getY(i) - yLo) / span, 0, 1);
@@ -245,6 +348,7 @@ export function tintGeometry(geo: THREE.BufferGeometry, spec: TintSpec = {}): TH
     // Back planes drop a value so the figure separates from whatever is behind it.
     const nz = n.getZ(i);
     if (nz > 0) k *= 1 - backAmt * nz;
+    else if (nz < 0) k *= 1 + frontAmt * (-nz);
 
     let r = _c.r * k, g = _c.g * k, b = _c.b * k;
     if (existing) {
