@@ -54,6 +54,8 @@ const OUT = String(arg('out', 'shots/play'));
 const FEATURES_ONLY = has('features-only');
 const WANT_JSON = has('json');
 const SAVE = arg('save', null);
+/** Seed for the in-page PRNG so runs are reproducible. --seed 0 restores real Math.random. */
+const SEED = Number(arg('seed', 12345)) === 0 ? null : Number(arg('seed', 12345));
 const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
 
 const KEYMAP = {
@@ -191,9 +193,26 @@ async function main() {
     const stripPlan = [];
     if (STRIP > 0) for (let i = 0; i < STRIP; i++) stripPlan.push((runFor / STRIP) * i);
 
-    await page.evaluate(({ events, runFor, keymap, stripPlan }) => {
+    await page.evaluate(({ events, runFor, keymap, stripPlan, seed }) => {
       const g = window.game;
       const DT = 1 / 60;
+
+      // Determinism. Stepping fixedUpdate at a fixed 1/60 makes the INTEGRATION exact, but the
+      // simulation still reads Math.random in ~130 places — and the ones that matter are in
+      // BalanceSystem, whose random walk decides whether a grind or manual bails. That is the
+      // direct cause of longestComboSeconds swinging between 18.45 and 25.25 on byte-identical
+      // code, which makes the metric useless for telling a real improvement from noise.
+      // Seeding makes a run reproducible; --seed 0 opts out and restores stochastic behaviour.
+      if (seed !== null) {
+        let a = (seed >>> 0) || 0x9e3779b9;
+        Math.random = () => {           // mulberry32
+          a = (a + 0x6d2b79f5) >>> 0;
+          let t = a;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
       window.__tel = { t: 0, samples: [], stripAt: [], done: false };
       const tel = window.__tel;
 
@@ -251,7 +270,7 @@ async function main() {
         } else setTimeout(runChunk, 0);
       };
       runChunk();
-    }, { events, runFor, keymap: KEYMAP, stripPlan });
+    }, { events, runFor, keymap: KEYMAP, stripPlan, seed: SEED });
 
     await page.waitForFunction(() => window.__tel?.done === true, null, { timeout: 600000 });
     const tel = await page.evaluate(() => window.__tel);
