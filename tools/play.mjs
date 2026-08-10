@@ -242,6 +242,11 @@ async function main() {
           grind: !!s.isGrinding, man: !!s.isManualing,
           comboOpen: !!combo?.open, comboTricks: combo?.tricks?.length ?? 0,
           unrealised: Math.round(combo?.unrealised ?? 0),
+          mult: +(combo?.multiplier ?? 1).toFixed(2),
+          bal: (() => { try { return +(g.balance?.state?.value ?? 0).toFixed(3); } catch { return 0; } })(),
+          bmode: (() => { try { return g.balance?.state?.mode ?? 'none'; } catch { return 'none'; } })(),
+          bails: (() => { try { return g.score?.getRunSummary?.().bails ?? 0; } catch { return 0; } })(),
+          landed: (() => { try { return g.score?.getRunSummary?.().landedCombos ?? 0; } catch { return 0; } })(),
           stonks: (() => { try { return Math.round(g.score?.balance ?? 0); } catch { return 0; } })(),
         });
       };
@@ -347,6 +352,12 @@ async function main() {
       distanceTravelled: +distance.toFixed(1),
       finalStonks: S[S.length - 1].stonks,
       peakUnrealised: Math.max(...S.map((s) => s.unrealised)),
+      peakMultiplier: Math.max(...S.map((s) => s.mult ?? 1)),
+      bails: S[S.length - 1].bails ?? 0,
+      landedCombos: S[S.length - 1].landed ?? 0,
+      bailsPerMinute: +(((S[S.length - 1].bails ?? 0) / Math.max(0.001, dur)) * 60).toFixed(2),
+      maxAbsBalance: +Math.max(...S.map((s) => Math.abs(s.bal ?? 0))).toFixed(3),
+      pctTimeBalancing: +(frac((s) => (s.bmode ?? 'none') !== 'none') * 100).toFixed(1),
     };
     // Coarse verdicts against THPS-ish expectations. Deliberately blunt.
     const f = report.flow;

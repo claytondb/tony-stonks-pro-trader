@@ -290,6 +290,28 @@ export interface ScoreTuning {
    * banked every combo before the clock could ever lapse.
    */
   comboWindowMs: number;
+  /**
+   * How much SHORTER the window gets per combo entry, ms. See `comboWindowMinMs`.
+   *
+   * The measured distribution of unheld gaps in ch1_office — combo open, wheels down, not
+   * grinding, not manualing — has a hard ceiling: n=73 over a 70 s lap, median 0.45 s, p90
+   * 0.80 s, max 1.45 s. Against a flat 2.2 s window that is ZERO breaks, and no single constant
+   * fixes it: 1.2 s breaks one gap in 73, 0.8 s breaks sixteen. There is no value that produces
+   * line boundaries, only "never" and "a fifth of everything".
+   *
+   * So the window is not a constant. It starts at the newcomer's forgiving 2.2 s and closes as
+   * the position grows, because the risk should grow with the position. Early in a line a wide
+   * corner or a missed rail costs you nothing; twenty tricks in, the same gap is what ends it.
+   */
+  comboWindowDecayPerEntry: number;
+  /** How much shorter the window gets per second the combo has been open, ms. */
+  comboWindowDecayPerSecond: number;
+  /**
+   * Floor on the shrinking window, ms. 900 sits just above the measured p90 gap of 0.80 s, so
+   * even at its tightest an ordinary rail-to-rail hop still links; it is the WIDE gaps — the
+   * open corners and the plaza — that stop being survivable late in a line.
+   */
+  comboWindowMinMs: number;
   /** Repeating a trick id multiplies its points by this ^ repeatCount (THPS halves). */
   repeatFalloff: number;
   /** Repeats never fall below this fraction of base. */
@@ -383,6 +405,11 @@ export const DEFAULT_SCORE_TUNING: ScoreTuning = {
   stonksPerPoint: 1,
   startingBalance: 0,
   comboWindowMs: 2200,
+  // entries  0, t= 0 s -> 2200 ms      entries 10, t= 7 s -> 1496 ms
+  // entries  4, t= 3 s -> 1914 ms      entries 20, t=14 s ->  900 ms (floor, ~entry 18)
+  comboWindowDecayPerEntry: 55,
+  comboWindowDecayPerSecond: 22,
+  comboWindowMinMs: 900,
   repeatFalloff: 0.5,
   minRepeatFactor: 0.05,
 
@@ -396,10 +423,15 @@ export const DEFAULT_SCORE_TUNING: ScoreTuning = {
   multiplierPerSpecial: 1.0,
   multiplierPerGrindSecond: 0.45,
   multiplierPerManualSecond: 0.35,
-  maxTimeMultiplier: 12,
+  // Grind DURATION paying a multiplier is the least THPS part of this economy — in THPS a long
+  // grind is worth points, but the multiplier comes from how many different things you linked.
+  // A measured competent 60 s run banked 298,601 with this at 12, four times the intended top of
+  // the band, and the fix that keeps variety worth more than spam is to cut the TIME term rather
+  // than `multiplierPerDistinctTrick`.
+  maxTimeMultiplier: 6,
   maxMultiplier: 99,
 
-  grindPointsPerSecond: 120,
+  grindPointsPerSecond: 90,
   manualPointsPerSecond: 60,
   transferBonus: 300,
   transferWindowMs: 1200,
@@ -451,10 +483,19 @@ export const DEFAULT_SCORE_TUNING: ScoreTuning = {
   tickerMaxEntries: 6,
 };
 
+/**
+ * Score tiers, set against a MEASURED competent 60 s run of ch1_office rather than taste.
+ *
+ * With the combo now losable, that run banks ~95,000 session points (it banked 3,100 when the
+ * combo could not end, which is why the old 10k/30k/75k ladder had stopped meaning anything).
+ * HIGH is a quarter of it — a newcomer breaking lines constantly measured 31,700 and clears it.
+ * PRO is three quarters, i.e. a line held on purpose. SICK is half again as much as competent,
+ * so it takes an expert's line: measured expert runs land 90k-140k and reach it on a good one.
+ */
 export const DEFAULT_SCORE_TARGETS: ScoreTargets = {
-  high: 10000,
-  pro: 30000,
-  sick: 75000,
+  high: 24000,
+  pro: 70000,
+  sick: 140000,
 };
 
 // ---------------------------------------------------------------------------
@@ -1106,7 +1147,7 @@ export class ScoreSystem {
       this.manualEntry !== null ||
       this.clockMs < this.revertHoldUntil;
     if (held) {
-      this.timer = this.tuning.comboWindowMs;
+      this.timer = this.currentWindowMs;
       return;
     }
 
@@ -1413,7 +1454,7 @@ export class ScoreSystem {
       comboString: formatComboString(tricks),
       formattedUnrealised: formatStonks(unrealised),
       formattedMultiplier: formatMultiplier(multiplier),
-      timeFraction: clamp(this.timer / this.tuning.comboWindowMs, 0, 1),
+      timeFraction: clamp(this.timer / Math.max(1, this.currentWindowMs), 0, 1),
       atRisk: unrealised + bankAtRisk,
       bankAtRisk,
       formattedAtRisk: formatStonksDelta(-(unrealised + bankAtRisk)),
@@ -1571,7 +1612,7 @@ export class ScoreSystem {
     if (this.open) return;
     this.open = true;
     this.comboStart = this.clockMs;
-    this.timer = this.tuning.comboWindowMs;
+    this.timer = this.currentWindowMs;
     this.revertHoldUntil = -Infinity;
     this.airTime = 0;
   }
@@ -1606,12 +1647,28 @@ export class ScoreSystem {
    * line died on the first landing. There must be exactly one clock.
    */
   get comboWindowSeconds(): number {
-    return this.tuning.comboWindowMs / 1000;
+    return this.currentWindowMs / 1000;
+  }
+
+  /**
+   * The combo clock's length RIGHT NOW, in ms — full when the line is young, tightening as it
+   * grows. Every read of the window goes through here so there is still exactly one clock.
+   */
+  private get currentWindowMs(): number {
+    if (!this.open) return this.tuning.comboWindowMs;
+    const seconds = (this.clockMs - this.comboStart) / 1000;
+    return clamp(
+      this.tuning.comboWindowMs -
+        this.tuning.comboWindowDecayPerEntry * this.entries.length -
+        this.tuning.comboWindowDecayPerSecond * seconds,
+      this.tuning.comboWindowMinMs,
+      this.tuning.comboWindowMs
+    );
   }
 
   private refreshTimer(): void {
     if (!this.open) return;
-    this.timer = this.tuning.comboWindowMs;
+    this.timer = this.currentWindowMs;
   }
 
   private snapshotEntries(): ComboEntry[] {

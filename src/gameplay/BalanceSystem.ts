@@ -42,11 +42,19 @@
  *       not skill decided the outcome — a 150 ms player held a manual indefinitely and a 400 ms
  *       player for 1.2 s. That is a cliff, not a difficulty curve.
  *
- *   Measured behaviour of a manual now, from the offline model (300 trials each, speed 11 m/s,
- *   difficulty 1 unless stated): hands off the stick, 2.1 s to a bail. Direction held down,
- *   1.0 s. A 250 ms-reaction player feathering, 14 s. A sloppy 400 ms player, 8 s. The same
- *   250 ms player on a twenty-trick line (difficulty 2.5), 4.5 s. In-game, an open-loop 150 ms
- *   alternating rhythm sustains individual manuals of 2.7-5.6 s.
+ * ONE BALANCE PER LINE, NOT ONE PER FEATURE
+ *   The balance is not re-seeded when a rail runs out. Game.ts drops the grind — and therefore
+ *   the balance — the instant you leave a ledge, so while a combo is open the creep clock, the
+ *   lean and the velocity are handed to whatever you link into next through the CARRY SLOT (see
+ *   `carryWindow`). Without it a 70 second run re-seeded the pendulum 49 times, each seed mostly
+ *   inside its own grace window, and |value| never got past 0.42 with the player asleep at the
+ *   keys. With it the same run bails four times and the meter reaches 0.998.
+ *
+ *   Measured against the real class (200 trials, a line of 0.5 s rails, difficulty ramping on
+ *   ch1_office's rhythm, speed 12 m/s): hands off the keys, a grind bails in 2.63 s and a manual
+ *   in 2.12 s. A player actually working at it holds 9.5 s (280 ms hands) to 12.9 s (190 ms).
+ *   Twelve seconds into a line those become 0.68 s and 1.1 s — the twentieth trick is roughly
+ *   five times harder to hold than the second, which is the whole point.
  *
  * SELF-CONTAINED BY CONTRACT
  *   Imports nothing. No THREE, no Rapier, no Game.ts, no HUD. Everything it needs — dt, the
@@ -201,6 +209,22 @@ export interface BalanceTuning {
   noseManual: BalanceModeTuning;
   grind: BalanceModeTuning;
   lip: BalanceModeTuning;
+  /**
+   * Seconds after a balance releases during which the NEXT balance inherits it — the "carry".
+   *
+   * THE SINGLE MOST IMPORTANT NUMBER IN THIS FILE. Measured: `Game.endGrind()` calls
+   * `balance.end()` the instant a rail runs out, and ch1_office's median grind episode is 0.50 s
+   * against a 0.45 s grace window, so a 70 second run re-seeded the balance 49 times and every
+   * one of those seeds was mostly invulnerable. The pendulum never got to run: |value| peaked at
+   * 0.42 across 70 s of ZERO player input, and 0.26 with the stick jammed hard over for 30 s.
+   *
+   * One balance problem per LINE, not per feature. While a combo is open, the creep clock, the
+   * lean and the difficulty ramp survive from rail to rail to manual, so a fifteen-rail chain is
+   * one continuous eight-second balance instead of fifteen half-second freebies. The FIRST
+   * balance of a line still gets its full grace and seeds near centre, which is why a newcomer
+   * who rides one rail, hops off and banks can still never bail. Chaining is what costs.
+   */
+  carryWindow: number;
   /** |value| at which `failing` flips true and the meter should go red. */
   warnThreshold: number;
   /** Minimum ground speed needed to pop into a manual, m/s. */
@@ -241,9 +265,9 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     comfortSpeed: 7,
     dropSpeed: 1.8,
     slowPenalty: 2.6,
-    grace: 0.22,
-    creepPerSecond: 0.14,
-    creepCap: 3.6,
+    grace: 0.18,
+    creepPerSecond: 0.05,
+    creepCap: 2.0,
     basePitchDegrees: 18,
     pitchPerValue: 9,
     baseRollDegrees: 0,
@@ -262,8 +286,8 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     dropSpeed: 2.2,
     slowPenalty: 2.8,
     grace: 0.2,
-    creepPerSecond: 0.17,
-    creepCap: 3.4,
+    creepPerSecond: 0.08,
+    creepCap: 2.2,
     basePitchDegrees: -16,
     pitchPerValue: 8,
     baseRollDegrees: 0,
@@ -275,12 +299,25 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     // MEASURED, not guessed. A grind is corrected on the LEFT/RIGHT axis, which is also the steer
     // axis — the player is reading the level and lining up the next feature, not staring at the
     // balance meter. So an uncorrected grind has to survive a whole rail. ch1_office's rails are
-    // 6.85 m at the median and 26.9 m at the longest, i.e. 0.6 s and 2.2 s at a 12 m/s cruise;
-    // these numbers give an untouched grind 4.2 s at the start of a line and 2.6 s deep into a
-    // twenty-trick one. Every rail in the level is therefore free on its own, a long rail late in
-    // a line is not, and a chain of rails (which does NOT re-seed the balance — startGrind() is a
-    // no-op while already grinding) has to be actively held.
-    instability: 2.0,
+    // 6.85 m at the median and 26.9 m at the longest, i.e. 0.6 s and 2.2 s at a 12 m/s cruise.
+    //
+    // MEASURED against the real class, 200 trials, a line of 0.5 s rails re-entered exactly the
+    // way Game.endGrind()/startGrind() do it, difficulty ramping on ch1_office's own rhythm:
+    //
+    //           open loop   newcomer(500ms)  competent(280ms)  expert(190ms)  perfect(150ms)
+    //   grind     2.63 s        6.95 s           9.50 s          12.88 s        18.92 s
+    //   manual    2.12 s        6.15 s           9.53 s          12.13 s        16.45 s
+    //
+    // and the ramp that makes a long line precarious — remaining hold from H seconds in:
+    //   H=0  open 2.63 s  competent  9.5 s      H=6   open 1.08 s  competent 3.8 s
+    //   H=4  open 1.37 s  competent  5.8 s      H=12  open 0.68 s  competent 1.1 s
+    //
+    // So: an untouched grind bails in about two and a half seconds, a player working at it holds
+    // ten or more, and the twentieth trick of a line is five times harder to hold than the second.
+    // A single rail ridden on its own is still free (median episode 0.50 s, and the first balance
+    // of a line keeps its 0.35 s grace); a CHAIN of them is not, because the carry slot makes a
+    // chain one balance problem rather than one per rail.
+    instability: 4.0,
     damping: 4.0,
     torque: 5.6,
     correctionRate: 1.1,
@@ -290,9 +327,9 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     comfortSpeed: 6,
     dropSpeed: 0,
     slowPenalty: 2.2,
-    grace: 0.45,
-    creepPerSecond: 0.12,
-    creepCap: 3.0,
+    grace: 0.35,
+    creepPerSecond: 0.05,
+    creepCap: 2.0,
     basePitchDegrees: 0,
     pitchPerValue: 0,
     baseRollDegrees: 0,
@@ -312,14 +349,20 @@ export const DEFAULT_BALANCE_TUNING: BalanceTuning = {
     dropSpeed: 0,
     slowPenalty: 1,
     grace: 0.25,
-    creepPerSecond: 0.16,
-    creepCap: 2.6,
+    creepPerSecond: 0.08,
+    creepCap: 2.2,
     basePitchDegrees: 14,
     pitchPerValue: 0,
     baseRollDegrees: 0,
     rollPerValue: 22,
   },
-  warnThreshold: 0.72,
+  // The creep clock now runs across a whole LINE rather than resetting per feature, so a warning
+  // fires once per line rather than once per rail and it has to arrive early enough to act on.
+  // Measured time from the meter going red to the bail at 0.72: 0.32 s at line start, 0.17 s
+  // mid-line, 0.11 s deep — all below human reaction time, i.e. decoration. At 0.50 those become
+  // 0.67 s / 0.35 s / 0.23 s: a real prompt to correct or to bank.
+  carryWindow: 1.5,
+  warnThreshold: 0.5,
   minManualStartSpeed: 2.4,
   bailLockout: 0.5,
   revertWindowTransition: 1.4,
@@ -443,6 +486,29 @@ export class BalanceSystem {
    * worth of variety but buys you nothing on the meter.
    */
   private heldTime = 0;
+  /**
+   * Grace window actually in force for the CURRENT entry, seconds. Normally the mode's `grace`;
+   * 0 when this entry inherited a carry, because a carried entry is the middle of a balance the
+   * player is already holding, not the start of a new one.
+   */
+  private entryGrace = 0;
+  /**
+   * THE CARRY SLOT. Survives a mode change — grind to grind, grind to manual, manual to nose —
+   * for `carryWindow` seconds, so one open combo is one continuous balance problem. Cleared by a
+   * bail, by `clearCarry()`, and automatically whenever the game reports no combo pressure (see
+   * `update()`), which is what a bank looks like from in here.
+   */
+  private carry: {
+    heldTime: number;
+    sign: number;
+    /** |value| at the moment the previous feature released. THE LEAN CARRIES, see enter(). */
+    magnitude: number;
+    vel: number;
+    axis: BalanceAxis;
+    at: number;
+  } | null = null;
+  /** Last `difficulty` handed to update(). Game.ts passes 1 + ScoreSystem.comboPressure. */
+  private lastDifficulty = 1;
 
   // --- disturbance oscillators (deterministic between re-seeds, re-seeded per entry) ---
   private phaseA = 0;
@@ -564,6 +630,19 @@ export class BalanceSystem {
   }
 
   /**
+   * Forget the carried balance, so the next grind / manual starts a genuinely fresh problem with
+   * its full grace window and a near-centre seed.
+   *
+   * Call it wherever a LINE ends rather than a feature: on land()/cash-out and on bail(). A bail
+   * already clears it internally, and a bank is detected automatically from `difficulty` in
+   * update(), so this is belt and braces — but it is cheap, idempotent, and it is the honest
+   * place to express "that position is closed".
+   */
+  clearCarry(): void {
+    this.carry = null;
+  }
+
+  /**
    * Stop balancing, cleanly, with no bail. Call on jump, on landing from a manual into the
    * air, when the grind releases, on level reset, on death. Safe to call when idle.
    */
@@ -674,6 +753,13 @@ export class BalanceSystem {
     this.lastSpeed = spd;
     const stick = sanitizeAxis(input);
     const diff = Number.isFinite(difficulty) ? clamp(difficulty, 0, 4) : 1;
+    this.lastDifficulty = diff;
+
+    // A CLOSED position has no carry. `difficulty` is 1 + ScoreSystem.comboPressure, so a value
+    // of exactly 1 with nothing being balanced means the line banked (or never opened) and the
+    // next grind starts a genuinely fresh balance with its full grace. This is the automatic half
+    // of the contract; `clearCarry()` is the explicit half, and calling both is harmless.
+    if (this.mode === 'none' && this.carry !== null && diff <= 1.0001) this.carry = null;
 
     if (this.mode !== 'none' && step > 0) {
       const t = this.tuningFor(this.mode);
@@ -749,6 +835,9 @@ export class BalanceSystem {
     this.vel = 0;
     this.timeInMode = 0;
     this.heldTime = 0;
+    this.entryGrace = 0;
+    this.carry = null;
+    this.lastDifficulty = 1;
     this.visualPitch = 0;
     this.visualRoll = 0;
     this.clock = 0;
@@ -789,9 +878,22 @@ export class BalanceSystem {
       // old entry before the new one opens.
       this.finish('external');
     }
+    // Inherit the line's balance if one released recently enough. `finish()` wrote the carry on
+    // the way out of the previous feature (including the finish() two lines above), so a rail ->
+    // rail hop, a rail -> manual link and a manual <-> nose shuffle all land here with the creep
+    // clock intact and NO fresh grace. That is the whole fix: the difficulty ramp belongs to the
+    // combo, not to the feature.
+    const carry = this.carry;
+    const inherits =
+      carry !== null &&
+      this.clock - carry.at <= this.tuning.carryWindow &&
+      this.lastDifficulty > 1.0001; // i.e. a position really is open, per ScoreSystem
+    const t = this.tuningFor(mode);
+
     this.mode = mode;
     this.timeInMode = 0;
-    this.heldTime = shuffling ? carriedHeldTime : 0;
+    this.heldTime = inherits ? carry!.heldTime : shuffling ? carriedHeldTime : 0;
+    this.entryGrace = inherits ? 0 : t.grace;
 
     // Re-seed the disturbance so no two manuals drift the same way.
     this.phaseA = Math.random() * TAU;
@@ -804,13 +906,34 @@ export class BalanceSystem {
     // would sit there for a beat before departing, which reads as "the manual is free for the
     // first second". Seed a small lean in the direction the drift is already pulling, so the
     // balance starts moving on frame one and the player is on it immediately.
-    if (startValue === 0) {
+    if (startValue !== 0) {
+      // An explicit seed (the manual <-> nose shuffle's flipped lean) always wins.
+      this.value = clamp(startValue, -0.9, 0.9);
+      this.vel = Number.isFinite(startVel) ? clamp(startVel, -2, 2) : 0;
+    } else if (inherits) {
+      // THE LEAN CARRIES, and this is the half of the carry that is easiest to get wrong.
+      //
+      // Re-seeding a carried entry from `heldTime` alone — which is what the first cut of this
+      // did — caps the lean at 0.40, so hopping to a new rail every half second actively RESCUES
+      // a balance that was about to blow. Measured with that version: an uncorrected line of
+      // 0.5 s rails took 12.2 s to bail instead of the intended ~2, because every hop pulled the
+      // meter back from the edge. A rail hop must not be a get-out-of-jail card.
+      //
+      // So the magnitude carries. `floor` is the spec's held-time seed and still applies: deep in
+      // a line you start every rail already leaning even if you had just centred it. Changing
+      // AXIS (grind -> manual) is worth a genuine 35% reprieve, because the player is being asked
+      // a different question with a different key, and only there is the velocity dropped — a
+      // carried velocity across an axis change is unreadable.
+      const sameAxis = axisForMode(mode) === carry!.axis;
+      const floor = 0.06 + 0.34 * clamp01(carry!.heldTime / 8);
+      const mag = clamp(Math.max(carry!.magnitude * (sameAxis ? 1 : 0.65), floor), 0, 0.92);
+      this.value = carry!.sign * mag;
+      this.vel = sameAxis ? clamp(carry!.vel, -2, 2) : 0;
+    } else {
       const dir = this.driftBias >= 0 ? 1 : -1;
       this.value = dir * (0.06 + Math.random() * 0.1);
-    } else {
-      this.value = clamp(startValue, -0.9, 0.9);
+      this.vel = Number.isFinite(startVel) ? clamp(startVel, -2, 2) : 0;
     }
-    this.vel = Number.isFinite(startVel) ? clamp(startVel, -2, 2) : 0;
 
     this.syncState();
   }
@@ -850,8 +973,10 @@ export class BalanceSystem {
       this.timeInMode += h;
 
       // Grace: instability and wobble fade in over the first fraction of a second, so a
-      // manual popped at the wrong moment doesn't die instantly.
-      const graceMix = t.grace > 0 ? smoothstep(this.timeInMode / t.grace) : 1;
+      // manual popped at the wrong moment doesn't die instantly. `entryGrace` is 0 for a carried
+      // entry — the middle of a line is not the start of one.
+      const grace = this.entryGrace;
+      const graceMix = grace > 0 ? smoothstep(this.timeInMode / grace) : 1;
 
       // Creep: the longer you hold it, the harder it gets. This is what stops an infinite
       // manual and makes a 20 second grind an actual achievement.
@@ -889,12 +1014,19 @@ export class BalanceSystem {
       // first manual of the run.
       let rate = this.vel + push * t.correctionRate * auth;
       if (t.maxRate > 0) {
-        const cap = t.maxRate * Math.max(0.5, diffScale * creep * Math.min(speedScale, 1.6));
+        // The upper clamp is what keeps the fall READABLE deep in a line. Difficulty x creep x
+        // slow-speed used to compound to ~4x, and the meter crossed its last third in about
+        // 60 ms — under a frame of reaction time, so the twentieth trick was decided by luck
+        // rather than by hands. 2.2 caps terminal speed at ~1.98 value/s, i.e. the fall always
+        // takes long enough to see and act on, while still being visibly faster than the first
+        // manual of the run.
+        const scale = Math.min(2.2, Math.max(0.5, diffScale * creep * Math.min(speedScale, 1.6)));
+        const cap = t.maxRate * scale;
         rate = clamp(rate, -cap, cap);
       }
       this.value += rate * h;
 
-      if (this.timeInMode < t.grace) {
+      if (this.timeInMode < grace) {
         // Can't bail during the ramp-in, but the value is still pinned so it doesn't get
         // to store up an impossible position while it's invulnerable.
         this.value = clamp(this.value, -0.9, 0.9);
@@ -939,9 +1071,25 @@ export class BalanceSystem {
       reason,
     };
 
+    // Hand the line's balance on to whatever the player links into next. A bail is the one exit
+    // that does NOT carry: the position is gone, so the next entry is a fresh problem.
+    if (reason === 'bail') {
+      this.carry = null;
+    } else if (this.tuning.carryWindow > 0) {
+      this.carry = {
+        heldTime: this.heldTime,
+        sign: Math.sign(this.value) || 1,
+        magnitude: Math.abs(this.value),
+        vel: this.vel,
+        axis: axisForMode(info.mode),
+        at: this.clock,
+      };
+    }
+
     this.mode = 'none';
     this.timeInMode = 0;
     this.heldTime = 0;
+    this.entryGrace = 0;
     this.vel = 0;
     if (reason === 'bail') {
       this.bailLockoutUntil = this.clock + this.tuning.bailLockout;
