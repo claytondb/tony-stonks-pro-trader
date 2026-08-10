@@ -4351,7 +4351,22 @@ export class Game {
       };
       const openRight = probeSide(1);
       const openLeft = probeSide(-1);
-      slide = right.clone().multiplyScalar(openRight >= openLeft ? 1 : -1);
+      // KEEP FORWARD INTENT IN THE ESCAPE.
+      //
+      // This used to be a PURELY perpendicular vector — a flat 90 degree sideways
+      // redirect — and the yaw solve below then turned the chair to face it. One hit
+      // costs you a quarter turn; a few in quick succession leave you travelling
+      // backwards. In a level dense enough that the player is in contact with geometry
+      // most of the time, that fires constantly and reads as "the chair randomly spins
+      // and rolls backwards", which is exactly what it was doing.
+      //
+      // Blending the original heading back in makes the escape a ~50 degree peel-off
+      // instead of a broadside. The chair still gets out of the corner, but it leaves
+      // pointing roughly where the player was already going.
+      slide = right.clone()
+        .multiplyScalar(openRight >= openLeft ? 1 : -1)
+        .addScaledVector(dir, 0.85)
+        .normalize();
       // Lean the escape slightly away from the wall we are actually touching, so a
       // head-on hit peels off rather than scraping along the face forever.
       if (wallNormal) slide.add(wallNormal.clone().multiplyScalar(0.35)).normalize();
@@ -4369,6 +4384,12 @@ export class Game {
     let delta = targetYaw - yaw;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
+    // Hard ceiling on how far an escape may ever swing the chair. Even with a
+    // forward-biased slide, repeated escapes in tight geometry could otherwise walk the
+    // heading round a full turn one clamped step at a time. No single recovery gets to
+    // turn the player more than 60 degrees, so the line always survives recognisably.
+    const ESCAPE_YAW_LIMIT = Math.PI / 3;
+    delta = Math.max(-ESCAPE_YAW_LIMIT, Math.min(ESCAPE_YAW_LIMIT, delta));
     const maxTurn = (pinned ? 9 : 6) * dt;
     this.physics.setRotationY(this.chairBody, yaw + Math.max(-maxTurn, Math.min(maxTurn, delta)));
 
