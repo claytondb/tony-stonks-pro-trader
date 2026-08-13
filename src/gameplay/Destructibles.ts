@@ -1527,6 +1527,16 @@ export class DestructibleManager {
 
     for (let i = this.dynamics.length - 1; i >= 0; i--) {
       const inst = this.dynamics[i];
+      // THE LIST CAN SHRINK UNDER US. setStatic() swap-removes from `dynamics`, and one pass
+      // of this loop can demote MORE THAN ONE prop — the current one, plus any neighbour a
+      // player impact knocks back to a fixed proxy. The loop bound was captured before the
+      // first iteration, so two removals in one step leave `i` past the end of the array.
+      //   Reproduced by tools/stuck.mjs, which teleports the player to ~1,500 points across
+      //   the level and therefore disturbs far more props per second than play ever does:
+      //   "TypeError: Cannot read properties of undefined (reading 'body')" in stepDynamics.
+      // Skipping is correct rather than merely safe: `i` only ever decreases, so every index
+      // still in range is still visited on a later pass.
+      if (!inst) continue;
       const body = inst.body;
 
       if (!body) {

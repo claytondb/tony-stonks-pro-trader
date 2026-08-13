@@ -14,6 +14,15 @@ import * as THREE from 'three';
  */
 export const CHAIR_FOOT_OFFSET = 0.7;
 
+/**
+ * Radius of the chair's capsule. CHAIR_FOOT_OFFSET is this plus the capsule's half-height,
+ * and the two are only interchangeable on level ground: on a surface tilted by θ the
+ * capsule's nearest point to that surface is `cos θ · (verticalGap + RADIUS) − RADIUS`
+ * away, not `verticalGap · cos θ`. Anything that decides "are the wheels touching?" on a
+ * ramp needs the radius separately.
+ */
+export const CHAIR_RADIUS = 0.4;
+
 export class PhysicsWorld {
   private world!: RAPIER.World;
   private initialized = false;
@@ -370,6 +379,48 @@ export class PhysicsWorld {
   }
   
   /**
+   * A static collider built from an arbitrary triangle mesh.
+   *
+   * THE ONLY WAY A CURVED SURFACE CAN BE COLLIDED CORRECTLY. Every other collider in this
+   * file is a primitive, and for desks, walls and ledges that is right. It is not right for
+   * a transition: a quarter pipe used to be collided as a plain axis-aligned CUBOID (a
+   * 5 m box with a curved mesh drawn over it), which is why riding one produced no ramp
+   * normal, no climb and no launch at all — the probe measured surfaceAngle 0 and zero
+   * airtime off every quarter pipe in the game. A box cannot have a tangent.
+   *
+   * Callers pass the SAME vertex/index arrays they built the visual geometry from, so the
+   * thing the player sees and the thing the player rides can never drift apart. Rapier
+   * trimeshes have no interior, so hand it a CLOSED shell: an open sheet is rideable from
+   * both sides and a body that ends up behind it has nothing to push it out.
+   */
+  createStaticTrimesh(
+    position: THREE.Vector3,
+    vertices: Float32Array,
+    indices: Uint32Array,
+    rotation?: THREE.Euler,
+    friction = 0.3,
+  ): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.fixed()
+      .setTranslation(position.x, position.y, position.z);
+
+    if (rotation) {
+      const quat = new THREE.Quaternion().setFromEuler(rotation);
+      bodyDesc.setRotation({ x: quat.x, y: quat.y, z: quat.z, w: quat.w });
+    }
+
+    const body = this.world.createRigidBody(bodyDesc);
+    const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
+      .setFriction(friction)
+      .setRestitution(0.0)
+      .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min);
+
+    this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
+
+    return body;
+  }
+
+  /**
    * Create a curved quarter pipe collider (approximated with segments)
    */
   createQuarterPipeCollider(
@@ -425,6 +476,38 @@ export class PhysicsWorld {
     return body;
   }
   
+  /**
+   * A KINEMATIC platform: a box the level moves and the chair rides.
+   *
+   * Kinematic-POSITION based, not velocity based, because the office lift is authored as a
+   * position curve (see OfficeLevel.officeMoverY) rather than as a speed. Rapier resolves a
+   * kinematic body against a dynamic one by moving the dynamic body out of the way, so a
+   * rising platform carries the chair up; a descending one simply stops falling away from it,
+   * and gravity (-30) keeps the chair in contact all the way down.
+   *
+   * Friction is real here, unlike the level's static boxes: a platform with zero friction
+   * under a zero-friction chair is a sheet of ice, and the chair would slide off the lift the
+   * moment the player touched a direction key.
+   *
+   * Registered in staticBodies so clearStaticBodies() disposes it with the rest of the level.
+   */
+  createKinematicBox(position: THREE.Vector3, halfExtents: THREE.Vector3): RAPIER.RigidBody {
+    const bodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(position.x, position.y, position.z);
+    const body = this.world.createRigidBody(bodyDesc);
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+      .setFriction(0.4)
+      .setRestitution(0.0);
+    this.world.createCollider(colliderDesc, body);
+    this.staticBodies.push(body);
+    return body;
+  }
+
+  /** Move a kinematic body created by createKinematicBox. Call once per fixed step. */
+  setKinematicTarget(body: RAPIER.RigidBody, position: THREE.Vector3): void {
+    body.setNextKinematicTranslation({ x: position.x, y: position.y, z: position.z });
+  }
+
   /**
    * Clear all static bodies (for level reload)
    */
@@ -769,8 +852,8 @@ export class PhysicsWorld {
     
     let closestHit: ReturnType<typeof this.raycastGround> = null;
     let closestDist = Infinity;
-    const normals: THREE.Vector3[] = [];
-    
+    const hits: { distance: number; normal: THREE.Vector3 }[] = [];
+
     for (const offset of offsets) {
       const rayOrigin = origin.clone().add(offset);
       const hit = this.raycastGround(rayOrigin, maxGap, exclude, footOffset);
@@ -780,18 +863,32 @@ export class PhysicsWorld {
         closestHit = hit;
       }
       if (hit) {
-        normals.push(hit.normal);
+        hits.push({ distance: hit.distance, normal: hit.normal });
       }
     }
-    
+
     if (!closestHit) return null;
-    
-    // Average the normals for smoother surface detection
+
+    // Average the normals for smoother surface detection — but ONLY across rays that found
+    // the same surface. The fan is 0.6 m wide, and near the coping of a transition that is
+    // wide enough to straddle the lip: one ray lands on a wall at 80 degrees and another on
+    // the flat deck behind it. Averaging those gave a 45 degree normal for a surface that
+    // is nowhere near 45 degrees, and the movement model then drove the chair diagonally
+    // INTO a vertical wall and held it there — the ramp probe measured six hundred
+    // milliseconds pinned at the lip with 3 m/s of velocity going nowhere.
+    //
+    // Rays whose hit is much further away than the nearest one are looking at something
+    // else (the floor beyond a lip, the step below an edge) and are dropped. On any
+    // ordinary surface every ray agrees to within a centimetre and nothing is dropped, so
+    // this is exactly the old behaviour everywhere except the case it was wrong.
+    const SAME_SURFACE = 0.35;
     const avgNormal = new THREE.Vector3();
-    for (const n of normals) {
-      avgNormal.add(n);
+    let used = 0;
+    for (const h of hits) {
+      if (h.distance <= closestDist + SAME_SURFACE) { avgNormal.add(h.normal); used++; }
     }
-    avgNormal.divideScalar(normals.length).normalize();
+    if (used === 0) avgNormal.copy(closestHit.normal); else avgNormal.divideScalar(used);
+    avgNormal.normalize();
     
     // Calculate surface angle from horizontal
     const up = new THREE.Vector3(0, 1, 0);

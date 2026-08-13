@@ -8,7 +8,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { InputManager } from '../input/InputManager';
 import { THPSControls, type ControlIntent } from '../input/THPSControls';
-import { PhysicsWorld, CHAIR_FOOT_OFFSET } from '../physics/PhysicsWorld';
+import { PhysicsWorld, CHAIR_FOOT_OFFSET, CHAIR_RADIUS } from '../physics/PhysicsWorld';
 import { GrindSystem } from '../physics/GrindSystem';
 import { CameraController } from '../rendering/CameraController';
 import { TrickDetector, PlayerTrickState } from '../tricks/TrickDetector';
@@ -32,7 +32,7 @@ import { EnvironmentRig, type EnvPreset } from '../rendering/Environment';
 import { PostFX } from '../rendering/PostFX';
 import { MaterialLibrary } from '../materials/MaterialLibrary';
 import { configureFromRenderer, warmup } from '../materials/ProceduralTextures';
-import { buildOfficeInterior, disposeOfficeInterior, type OfficeInterior } from '../world/OfficeLevel';
+import { buildOfficeInterior, disposeOfficeInterior, officeMoverY, type OfficeInterior, type OfficeMover } from '../world/OfficeLevel';
 import { batchStaticLevelObjects, makeFilingCabinet, makeGrindRail, makeKickerRamp, makePrinter, makeTrashCan, makeWaterCooler } from '../world/OfficeProps';
 import { buildOfficeChair, spinCasters, type ChairParts } from '../world/ChairModel';
 import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } from '../story';
@@ -180,6 +180,9 @@ export class Game {
   private postFX!: PostFX;
   private lastDelta = 1 / 60;
   private officeInterior: OfficeInterior | null = null;
+  /** Moving platforms published by the office floorplate (the lift). Rebuilt per level load. */
+  private officeMovers: { spec: OfficeMover; body: RAPIER.RigidBody }[] = [];
+  private officeMoverTime = 0;
   private chairParts: ChairParts | null = null;
 
   // Systems
@@ -305,6 +308,43 @@ export class Game {
   /** Gap under the wheels beyond which we stop looking for a surface at all. */
   private readonly GROUND_SNAP_DISTANCE = 0.9;
   private readonly LAUNCH_ANGLE = 45;  // Surface angle that triggers launch
+
+  // ---- TRANSITIONS ------------------------------------------------------------------
+  //
+  // A transition is a surface steep enough that riding it is CLIMBING rather than rolling.
+  // Everything below exists because a quarter pipe used to do none of the four things a
+  // quarter pipe is for: it did not turn the chair to face up the wall, it did not let go
+  // at the lip along the exit tangent, it gave no float at the apex, and dropping back in
+  // cost you the run instead of paying you speed.
+  /** Surface angle, degrees, above which a slope is treated as a transition. */
+  private readonly TRANSITION_ANGLE = 12;
+  /**
+   * Effective gravity ALONG a slope, m/s^2, against the world's 30. Skate games are
+   * generous here on purpose: at the real figure a 13.5 m/s cruise cannot clear a 3 m
+   * transition at all, and every quarter pipe becomes a wall you stall on.
+   */
+  private readonly SLOPE_GRAVITY = 18;
+  /**
+   * Ceiling on the launch angle off a lip. The exit tangent at the coping is 90 degrees —
+   * dead vertical — and honouring that exactly gives a pogo stick: you go straight up, come
+   * straight back down the same line, and nothing you do in the air can change where you
+   * land. Holding a little forward speed back is what makes air control mean something and
+   * what lets a big one clear the deck instead of falling back in.
+   */
+  private readonly TRANSITION_MAX_LAUNCH = 74;
+  /** How much of a transition launch survives as float. Ramped like the ollie's hang. */
+  private readonly TRANSITION_HANG_ACCEL = 10;
+  private readonly TRANSITION_HANG_FADE = 10;
+  /** Fraction of the speed a drop-in carries into the transition. Under 1: not a trampoline. */
+  private readonly TRANSITION_LANDING_KEEP = 0.94;
+  /** Surface angle on the frame BEFORE this one — the take-off frame has already lost it. */
+  private lastSurfaceAngle = 0;
+  /** 0..1, how much of a transition the last take-off was. Drives the extra hang time. */
+  private transitionLaunch = 0;
+  /** sin(slope along travel) while grounded: + climbing, - descending. Visual pitch source. */
+  private surfaceClimb = 0;
+  /** Smoothed visual pitch of the chair on a transition and in the air, radians. */
+  private ridePitch = 0;
 
   // ---- THPS ground feel -------------------------------------------------------------
   /** Monotonic simulated seconds. The only clock gameplay is allowed to read. */
@@ -2321,6 +2361,8 @@ export class Game {
     this.clearCollectibles();
 
     // The office floorplate owns real geometry; free it rather than leaking it.
+    this.officeMovers = [];
+    this.officeMoverTime = 0;
     if (this.officeInterior) {
       this.scene.remove(this.officeInterior.root);
       disposeOfficeInterior(this.officeInterior);
@@ -2535,22 +2577,27 @@ export class Game {
   }
   
   /**
-   * Build the enclosed open-plan office: carpet, four walls, a suspended ceiling
-   * with recessed troffers, and a cubicle farm around a cross-shaped skate runway.
+   * Build the office floor plan: hallways, break room, boardroom, cubicle farm, server room,
+   * corner offices, a stair set and a working lift up to a mezzanine deck over the north half.
    * Static geometry is merged per material by OfficeLevel, so this is ~30 draw calls.
+   *
+   * `height` is the UPPER ceiling now — the south half of the plate is a double-height atrium
+   * and the mezzanine deck sits at 4.20 m inside it. See src/world/OfficeLevel.ts.
    */
   private buildOfficeFloorplate(): void {
     const interior = buildOfficeInterior({
-      width: 50,
-      depth: 50,
-      height: 3.1,
-      seed: 20260730,
+      width: 46,
+      depth: 46,
+      height: 8.0,
+      seed: 20260813,
       lightBudget: 8,
-      // The level data owns the main aisle props; keep pods and aisle clutter
-      // out of the stair landing and the conference-table fun box.
+      // The level data owns the spine and cross-arm props (floor rails, kickers, fun box);
+      // keep the floorplate's own perimeter dressing off them.
       keepClear: [
-        { minX: -5.0, maxX: 5.0, minZ: 16.5, maxZ: 23.5 },
-        { minX: -5.0, maxX: 5.0, minZ: -21.5, maxZ: -14.5 },
+        { minX: -6.0, maxX: 6.0, minZ: -21.5, maxZ: -5.0 },
+        { minX: -6.0, maxX: 6.0, minZ: 5.0, maxZ: 21.5 },
+        { minX: 6.5, maxX: 19.0, minZ: -4.6, maxZ: -0.6 },
+        { minX: -19.0, maxX: -6.5, minZ: 0.6, maxZ: 4.6 },
       ],
     });
 
@@ -2570,13 +2617,38 @@ export class Game {
       this.grindSystem.addRail(r.start, r.end, `cube_${railId++}`);
     }
 
+    // The lift. One kinematic-position body per mover; OfficeLevel owns the motion curve
+    // (officeMoverY) so the whole animation lives with the level that authored it.
+    this.officeMovers = interior.movers.map((spec) => ({
+      spec,
+      body: this.physics.createKinematicBox(
+        new THREE.Vector3(spec.x + spec.offset.x, officeMoverY(spec, 0) + spec.offset.y, spec.z + spec.offset.z),
+        spec.halfExtents,
+      ),
+    }));
+
     // Floor collider + out-of-bounds walls.
     this.physics.createGround(interior.size.width / 2);
 
     console.log(
       `[OfficeLevel] ${interior.triangles} tris, ${interior.colliders.length} colliders, ` +
-      `${interior.rails.length} grind edges, ${interior.lights.length} point lights`
+      `${interior.rails.length} grind edges, ${interior.lights.length} point lights, ` +
+      `${interior.movers.length} movers`
     );
+  }
+
+  /** Drive the office lift. Called from fixedUpdate so the platform is reproducible. */
+  private updateOfficeMovers(dt: number): void {
+    if (!this.officeMovers.length) return;
+    this.officeMoverTime += dt;
+    for (const m of this.officeMovers) {
+      const y = officeMoverY(m.spec, this.officeMoverTime);
+      m.spec.object.position.y = y;
+      this.physics.setKinematicTarget(
+        m.body,
+        new THREE.Vector3(m.spec.x + m.spec.offset.x, y + m.spec.offset.y, m.spec.z + m.spec.offset.z),
+      );
+    }
   }
 
   /**
@@ -2678,30 +2750,29 @@ export class Game {
       case 'quarter_pipe_small':
       case 'quarter_pipe_med':
       case 'quarter_pipe_large': {
-        // Try to use GLB model
-        const qpCacheKey = data.type === 'quarter_pipe' ? 'quarter_pipe_med' : data.type;
-        const qpCached = this.modelCache.get(qpCacheKey);
-        if (qpCached) {
-          mesh = qpCached.clone();
-        } else {
-          // Fallback to procedural mesh
-          mesh = this.createQuarterPipeMesh(concreteMaterial);
-        }
-        // Physics collider
-        const qpSize = data.type === 'quarter_pipe_small' ? 3 : 
-                       data.type === 'quarter_pipe_large' ? 7 : 5;
-        this.physics.createStaticBox(
-          new THREE.Vector3(data.position[0], qpSize / 3, data.position[2]),
-          new THREE.Vector3(qpSize, qpSize / 2, qpSize),
-          new THREE.Euler(0, (data.rotation?.[1] || 0) * Math.PI / 180, 0)
-        );
+        // DELIBERATELY PROCEDURAL, and deliberately not the qtr-pipe-*.glb models. The
+        // collider is generated from this mesh's own vertices; an art asset whose curve we
+        // cannot read would put us straight back to a mesh that disagrees with what the
+        // player rides, which is the whole defect being fixed here.
+        const qpRadius = data.type === 'quarter_pipe_small' ? 2.0
+          : data.type === 'quarter_pipe_large' ? 4.2 : 3.0;
+        const qpWidth = data.type === 'quarter_pipe_small' ? 5
+          : data.type === 'quarter_pipe_large' ? 9 : 7;
+        const qpWorld = {
+          x: data.position[0], z: data.position[2],
+          yaw: (data.rotation?.[1] || 0) * Math.PI / 180,
+        };
+        mesh = this.createQuarterPipeMesh(concreteMaterial, qpRadius, qpWidth, 1.4, qpWorld);
         break;
       }
-        
+
       case 'half_pipe': {
         const width = (data.params?.width as number) || 15;
         const length = (data.params?.length as number) || 20;
-        mesh = this.createHalfPipeMesh(concreteMaterial, width, length);
+        mesh = this.createHalfPipeMesh(concreteMaterial, width, length, {
+          x: data.position[0], z: data.position[2],
+          yaw: (data.rotation?.[1] || 0) * Math.PI / 180,
+        });
         break;
       }
       
@@ -3005,68 +3076,213 @@ export class Game {
     });
   }
   
-  private createQuarterPipeMesh(material: THREE.Material): THREE.Mesh {
+  // ---- TRANSITIONS ------------------------------------------------------------------
+  //
+  // THE ARC WAS UPSIDE DOWN. Every quarter pipe and half pipe in this game was cut from
+  // the profile `(x, y) = (r - r·cos a, r·sin a)`. At a = 0 that curve is VERTICAL and at
+  // a = π/2 it is HORIZONTAL — it is a hump, the convex outside of a roll, not a
+  // transition. You could not ride up it because it started as a wall.
+  //
+  // A transition is the other half of the circle: flat where it meets the floor, vertical
+  // at the coping. Centre the circle at (z = 0, y = r) and walk it:
+  //
+  //     z = r·sin a          a = 0    -> (0, 0)   tangent horizontal, meets the floor
+  //     y = r·(1 - cos a)    a = π/2  -> (r, r)   tangent vertical, this is the coping
+  //
+  // The solid is the material OUTSIDE that circle: the corner under the curve, plus a flat
+  // deck behind the coping to land on and roll out over. Local +Z is up the transition and
+  // local X is the width, so a transition uses the same yaw convention as everything else.
+  //
+  // Both the visual geometry and the physics collider come out of this one function, and
+  // the collider is fed the mesh's OWN vertices — the two cannot drift apart, which is the
+  // failure the old quarter pipe embodied (curved mesh, cuboid collider).
+  private static readonly QP_SEGMENTS = 14;
+
+  /**
+   * The extruded solid for one transition. Returns geometry in local space (ride direction
+   * +Z, width centred on X, floor at y = 0) plus the numbers the caller needs to dress it:
+   * where the coping sits and how deep the whole footprint is.
+   */
+  private buildTransitionSolid(radius: number, width: number, deck: number): {
+    geometry: THREE.BufferGeometry;
+    vertices: Float32Array;
+    indices: Uint32Array;
+    copingZ: number;
+    copingY: number;
+    footprint: number;
+  } {
+    const seg = Game.QP_SEGMENTS;
     const shape = new THREE.Shape();
-    const radius = 4;
-    const segments = 16;
-    
     shape.moveTo(0, 0);
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * Math.PI / 2;
-      shape.lineTo(radius - Math.cos(angle) * radius, Math.sin(angle) * radius);
+    for (let i = 1; i <= seg; i++) {
+      const a = (i / seg) * Math.PI / 2;
+      shape.lineTo(radius * Math.sin(a), radius * (1 - Math.cos(a)));
     }
-    shape.lineTo(radius, 0);
-    shape.lineTo(0, 0);
-    
-    const geometry = new THREE.ExtrudeGeometry(shape, {
-      steps: 1,
-      depth: 10,
-      bevelEnabled: false
-    });
-    
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    
-    return mesh;
+    shape.lineTo(radius + deck, radius);   // deck, flat, behind the coping
+    shape.lineTo(radius + deck, 0);        // back wall
+    shape.lineTo(0, 0);                    // floor
+
+    const geometry = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: width, bevelEnabled: false });
+    // ExtrudeGeometry lays the profile in XY and extrudes along +Z. Put the width on X and
+    // the profile on Z instead, centred across the width and with the toe of the
+    // transition at the local origin.
+    geometry.translate(0, 0, -width / 2);
+    geometry.rotateY(-Math.PI / 2);
+    geometry.computeVertexNormals();
+
+    const posAttr = geometry.getAttribute('position');
+    const vertices = new Float32Array(posAttr.array as ArrayLike<number>);
+    const idx = geometry.getIndex();
+    const indices = idx
+      ? new Uint32Array(idx.array as ArrayLike<number>)
+      : new Uint32Array(Array.from({ length: posAttr.count }, (_, i) => i));
+
+    return {
+      geometry, vertices, indices,
+      copingZ: radius, copingY: radius, footprint: radius + deck,
+    };
   }
-  
-  private createHalfPipeMesh(material: THREE.Material, width: number, length: number): THREE.Group {
+
+  /**
+   * A dressed transition: the solid, a steel coping tube along the lip, and a scuff line
+   * where every caster in the building has hit the same spot on the curve.
+   */
+  private createTransitionMesh(
+    material: THREE.Material, radius: number, width: number, deck: number,
+  ): { group: THREE.Group; vertices: Float32Array; indices: Uint32Array; copingZ: number; copingY: number } {
+    const solid = this.buildTransitionSolid(radius, width, deck);
     const group = new THREE.Group();
-    
-    const shape = new THREE.Shape();
-    const radius = 4;
-    const segments = 16;
-    
-    shape.moveTo(0, 0);
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * Math.PI / 2;
-      shape.lineTo(radius - Math.cos(angle) * radius, Math.sin(angle) * radius);
-    }
-    shape.lineTo(radius, 0);
-    shape.lineTo(0, 0);
-    
-    const geometry = new THREE.ExtrudeGeometry(shape, {
-      steps: 1,
-      depth: length,
-      bevelEnabled: false
-    });
-    
-    const left = new THREE.Mesh(geometry, material);
-    left.position.set(-width / 2, 0, -length / 2);
-    left.rotation.y = Math.PI / 2;
-    group.add(left);
-    
-    const right = new THREE.Mesh(geometry, material);
-    right.position.set(width / 2, 0, length / 2);
-    right.rotation.y = -Math.PI / 2;
-    group.add(right);
-    
-    const bottomGeom = new THREE.BoxGeometry(width - 8, 0.1, length);
-    const bottom = new THREE.Mesh(bottomGeom, material);
-    bottom.position.set(0, 0.05, 0);
-    group.add(bottom);
-    
+
+    const body = new THREE.Mesh(solid.geometry, material);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+
+    // Coping. Sits proud of the lip like real coping does, so the eye can find the launch
+    // point from across the room — you cannot aim at a transition whose top edge you
+    // cannot see.
+    const coping = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.06, 0.06, width, 10),
+      MaterialLibrary.get('grindMetal'),
+    );
+    coping.rotation.z = Math.PI / 2;
+    coping.position.set(0, solid.copingY + 0.03, solid.copingZ - 0.02);
+    coping.castShadow = true;
+    group.add(coping);
+
+    return {
+      group,
+      vertices: solid.vertices,
+      indices: solid.indices,
+      copingZ: solid.copingZ,
+      copingY: solid.copingY,
+    };
+  }
+
+  /**
+   * Spawn one transition. The MESH goes into `parent` at a local offset (createLevelObject
+   * applies the object's own position and yaw to the parent afterwards); the COLLIDER and
+   * the coping grind edge have to be placed in world space themselves, so `world` carries
+   * the object's authored placement.
+   *
+   * `localYaw` is the direction the transition RISES in, in the parent's frame.
+   */
+  private addTransition(
+    parent: THREE.Object3D, material: THREE.Material,
+    localOrigin: THREE.Vector3, localYaw: number,
+    world: { x: number; z: number; yaw: number },
+    radius: number, width: number, deck: number,
+  ): void {
+    const t = this.createTransitionMesh(material, radius, width, deck);
+    t.group.position.copy(localOrigin);
+    t.group.rotation.y = localYaw;
+    parent.add(t.group);
+
+    // Local -> world. A yaw of θ about +Y maps local (x, z) to
+    // (x·cosθ + z·sinθ, −x·sinθ + z·cosθ); the same mapping puts the coping where the
+    // player will actually meet it.
+    const cw = Math.cos(world.yaw);
+    const sw = Math.sin(world.yaw);
+    const toWorld = (lx: number, ly: number, lz: number) => new THREE.Vector3(
+      world.x + lx * cw + lz * sw,
+      ly,
+      world.z - lx * sw + lz * cw,
+    );
+    const worldYaw = world.yaw + localYaw;
+    this.physics.createStaticTrimesh(
+      toWorld(localOrigin.x, localOrigin.y, localOrigin.z), t.vertices, t.indices,
+      new THREE.Euler(0, worldYaw, 0),
+    );
+
+    // Coping grind edge. Runs across the width at the lip, in world space.
+    const cy = Math.cos(worldYaw);
+    const sy = Math.sin(worldYaw);
+    const lipWorld = (lx: number) => {
+      const px = localOrigin.x + (lx * cy + t.copingZ * sy);
+      const pz = localOrigin.z + (-lx * sy + t.copingZ * cy);
+      return toWorld(px, localOrigin.y + t.copingY + 0.06, pz);
+    };
+    this.grindSystem.addRail(
+      lipWorld(-width / 2), lipWorld(width / 2),
+      `coping_${world.x.toFixed(1)}_${world.z.toFixed(1)}_${worldYaw.toFixed(2)}`,
+      t.group,
+    );
+  }
+
+  /**
+   * A free-standing quarter pipe, centred on its authored position.
+   *
+   * `rotation` is the direction the transition FACES — the side you ride in from — which
+   * is the convention the existing levels were authored against (the garage's pipes sit at
+   * x = ±40 facing the middle of the room, and now actually work that way).
+   */
+  private createQuarterPipeMesh(
+    material: THREE.Material, radius: number, width: number, deck: number,
+    world: { x: number; z: number; yaw: number },
+  ): THREE.Group {
+    const group = new THREE.Group();
+    // Rises AWAY from the side it faces, and centred so the authored position is the
+    // middle of the footprint rather than the toe.
+    const half = (radius + deck) / 2;
+    const localOrigin = new THREE.Vector3(0, 0, half);
+    this.addTransition(group, material, localOrigin, Math.PI, world, radius, width, deck);
+    return group;
+  }
+
+  /**
+   * A half pipe: two transitions facing each other across a flat, with the flat wide enough
+   * to build speed on and pump across. `width` is the whole span wall to wall (so the flat
+   * is what is left after two footprints), `length` is how far it runs.
+   *
+   * The old version had NO COLLIDER AT ALL — the two curved meshes were decoration and the
+   * player rolled straight through them across bare floor. That is the literal reason
+   * "halfpipes don't work how halfpipes should": there was no halfpipe, only a picture of
+   * one.
+   */
+  private createHalfPipeMesh(
+    material: THREE.Material, width: number, length: number,
+    world: { x: number; z: number; yaw: number },
+  ): THREE.Group {
+    const group = new THREE.Group();
+    const deck = 1.4;
+    // Keep at least 5 m of flat between the toes whatever the authored width, and never a
+    // wall taller than the span can carry.
+    const radius = Math.max(1.4, Math.min(3.2, (width - 5) / 2 - deck));
+    const flat = Math.max(1, width - 2 * (radius + deck));
+    const toe = flat / 2;
+
+    // Ride direction is across the width (local X), so each transition rises outward from
+    // the edge of the flat and the whole thing still spans exactly `width`.
+    this.addTransition(group, material, new THREE.Vector3(-toe, 0, 0), -Math.PI / 2,
+      world, radius, length, deck);
+    this.addTransition(group, material, new THREE.Vector3(toe, 0, 0), Math.PI / 2,
+      world, radius, length, deck);
+
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(flat, 0.1, length), material);
+    floor.position.set(0, 0.05, 0);
+    floor.receiveShadow = true;
+    group.add(floor);
+
     return group;
   }
   
@@ -3555,6 +3771,10 @@ export class Game {
 
     if (this.bailRecovery > 0) this.bailRecovery = Math.max(0, this.bailRecovery - dt);
 
+    // Moving platforms step BEFORE the player's ground test, so a rider on the lift is
+    // resolved against where the platform is this frame, not where it was last frame.
+    this.updateOfficeMovers(dt);
+
     // ---- 2. GROUND / AIR STATE, LAND + TAKEOFF EVENTS ----------------------------------
     this.updatePlayerState(dt);
 
@@ -3619,7 +3839,35 @@ export class Game {
     if (this.chairTilt) {
       const pitchRad = bal ? bal.pitchDegrees * DEG2RAD : 0;
       const rollRad = bal ? bal.rollDegrees * DEG2RAD : 0;
-      this.chairTilt.rotation.x = pitchRad;
+
+      // ---- TRANSITION PITCH -----------------------------------------------------------
+      // "The player should rotate as they go up the ramp." The chair used to ride a
+      // transition perfectly level, sliding up a wall like a fridge magnet, because the
+      // rigid body is Y-locked and nothing else ever wrote a pitch. So the pitch is driven
+      // here, off the same two things the physics is using:
+      //
+      //   GROUNDED  the slope along travel. Nose follows the surface up the curve, and
+      //             follows it back down on the way in.
+      //   AIRBORNE  the velocity vector. Leave the lip pointing up, rotate through level at
+      //             the apex, and be pointing down the way you are going to land — which is
+      //             both what a skater does and what tells the player where they will land.
+      //
+      // Rotating +X pitches the nose (+Z) DOWN, hence the negation. Smoothed with an
+      // exponential approach so the seams between collider triangles never show, and
+      // capped so the chair never reads as somersaulting.
+      let target = 0;
+      if (this.playerState.isGrounded) {
+        target = -Math.asin(Math.max(-1, Math.min(1, this.surfaceClimb)));
+      } else {
+        const av = this.physics.getVelocity(this.chairBody);
+        const planarV = Math.hypot(av.x, av.z);
+        target = -Math.atan2(av.y, Math.max(2.5, planarV)) * 0.7;
+      }
+      const CAP = 1.15;   // ~66 degrees
+      target = Math.max(-CAP, Math.min(CAP, target));
+      this.ridePitch += (target - this.ridePitch) * (1 - Math.exp(-11 * dt));
+
+      this.chairTilt.rotation.x = pitchRad + this.ridePitch;
       this.chairTilt.rotation.z = rollRad;
     }
 
@@ -4169,29 +4417,61 @@ export class Game {
     // ray starting inside the capsule reports toi 0, which used to make the player
     // "grounded" at any altitude, so airborne never happened and no ramp normal was ever
     // seen. `distance` is now the GAP UNDER THE WHEELS, not the distance from body centre.
+    //
+    // THE RAY GOES STRAIGHT DOWN, AND A TRANSITION IS NOT UNDER YOU — it is beside you. A
+    // chair sitting on a surface tilted by θ has its wheels a perpendicular 0 m from that
+    // surface but 0.70/cos θ VERTICALLY above it, so at 60 degrees a straight-down cast
+    // reports a 0.7 m gap and at 75 degrees it does not reach the surface at all. That is
+    // the mechanism by which the player let go of a wall a third of the way up it. The cast
+    // is lengthened by 1/cos θ while the last surface was a transition, and every decision
+    // below is taken on the PERPENDICULAR gap, which is the one that means "touching".
+    const lastCos = Math.cos(this.lastSurfaceAngle * DEG2RAD);
+    const reach = this.lastSurfaceAngle > this.TRANSITION_ANGLE
+      ? Math.min(4.0, this.GROUND_SNAP_DISTANCE / Math.max(0.2, lastCos))
+      : this.GROUND_SNAP_DISTANCE;
     const groundCheck = this.physics.raycastGroundMulti(
-      pos, 0.3, this.GROUND_SNAP_DISTANCE, this.chairBody, CHAIR_FOOT_OFFSET,
+      pos, 0.3, reach, this.chairBody, CHAIR_FOOT_OFFSET,
     );
+    // Exact perpendicular gap between the capsule and the surface. `distance` is a VERTICAL
+    // gap under the wheels; multiplying it by cos θ is not the perpendicular distance,
+    // because the capsule's nearest point to a tilted surface is not its lowest point.
+    // Getting this wrong by the 13 cm it is wrong by at 48 degrees was enough to make the
+    // stick below drive the chair 8 m/s INTO a quarter pipe every frame: the geometry said
+    // "still 13 cm of air", the solver said "you are inside me", and the chair crawled down
+    // the transition at 1 m/s with the two of them fighting.
+    const perpGap = groundCheck
+      ? Math.max(0, Math.cos(groundCheck.surfaceAngle * DEG2RAD)
+        * (groundCheck.distance + CHAIR_RADIUS) - CHAIR_RADIUS)
+      : Infinity;
 
-    if (groundCheck && groundCheck.distance < this.GROUND_SNAP_DISTANCE) {
+    if (groundCheck && perpGap < this.GROUND_SNAP_DISTANCE) {
       // We're near a surface
       this.surfaceNormal.copy(groundCheck.normal);
       this.surfaceAngle = groundCheck.surfaceAngle;
+
+      // Speed INTO the surface. On flat ground this is exactly v.y, which is what the two
+      // rules below used to read; on a transition it is the component that decides whether
+      // the wheels are settling onto the curve or leaving it, and v.y is not — riding up a
+      // wall v.y is hugely positive while the chair is glued to the surface.
+      const vNormal = vel.x * this.surfaceNormal.x + vel.y * this.surfaceNormal.y
+        + vel.z * this.surfaceNormal.z;
 
       // Grounded if the wheels are within a hair of the floor and we are not launching.
       // Rolling off a curb, a stair edge or a desk lip must NOT read as air: a chair that
       // goes weightless every time the floor steps down by 20 cm spends a fifth of the run
       // airborne, scores no manuals (they need contact) and never links anything. So once
       // you are on the ground the contact window opens up, and only a real pop closes it.
-      const stickGap = wasGrounded && vel.y <= 0.5 ? this.GROUND_STICK_GAP : this.GROUND_CONTACT_GAP;
-      const closeEnough = groundCheck.distance < stickGap;
-      const notLaunching = vel.y < 4; // Not actively jumping up
+      const stickGap = wasGrounded && vNormal <= 0.5 ? this.GROUND_STICK_GAP : this.GROUND_CONTACT_GAP;
+      const closeEnough = perpGap < stickGap;
+      const notLaunching = vNormal < 4; // Not actively jumping off this surface
 
       // On steep surfaces (ramps), check if we're moving up or down
       if (this.surfaceAngle > this.LAUNCH_ANGLE) {
-        // On a steep ramp - check if we should launch
-        // Launch if moving fast and going up the ramp
-        const movingUpRamp = vel.y > 2 && this.surfaceAngle > 60;
+        // Past vertical there is no surface left to hold: let go. This used to fire at 60
+        // degrees, which on a real transition is barely two thirds of the way up the curve
+        // — the chair let go mid-wall, so it never reached the tangent that makes a lip
+        // launch a launch. Geometry decides now; this is only the backstop.
+        const movingUpRamp = vel.y > 2 && this.surfaceAngle > 86;
         if (movingUpRamp) {
           this.playerState.isGrounded = false;
         } else {
@@ -4201,12 +4481,21 @@ export class Game {
         this.playerState.isGrounded = closeEnough && notLaunching;
       }
 
-      // THPS-style: stick to the surface across the crest of a ramp or a stair edge, so a
-      // roll-off does not read as a launch. Only while descending — never fight a pop.
-      if (this.playerState.isGrounded && groundCheck.distance > 0.06 && vel.y <= 0.5) {
-        const snapSpeed = Math.min(9, groundCheck.distance / Math.max(dt, 1e-4));
-        if (vel.y > -snapSpeed) {
-          this.physics.setVelocity(this.chairBody, new THREE.Vector3(vel.x, -snapSpeed, vel.z));
+      // Stick to the surface across the crest of a ramp, a stair edge or the curve of a
+      // transition, so a roll-off does not read as a launch. Pulled along the SURFACE
+      // NORMAL, not straight down: a transition curves away underneath a chair that is
+      // travelling in a straight line, and without this the chord always leaves the arc and
+      // the player pops off the middle of the wall. On flat ground the normal is up and
+      // this is bit-for-bit the behaviour it replaced.
+      if (this.playerState.isGrounded && perpGap > 0.06 && vNormal <= 0.5) {
+        const snapSpeed = Math.min(9, perpGap / Math.max(dt, 1e-4));
+        if (vNormal > -snapSpeed) {
+          const pull = -snapSpeed - vNormal;
+          this.physics.setVelocity(this.chairBody, new THREE.Vector3(
+            vel.x + this.surfaceNormal.x * pull,
+            vel.y + this.surfaceNormal.y * pull,
+            vel.z + this.surfaceNormal.z * pull,
+          ));
         }
       }
     } else {
@@ -4253,11 +4542,94 @@ export class Game {
       // A manual cannot survive the wheels leaving the floor.
       if (this.balance.isManualing) this.balance.end();
       // Remember whether the take-off was a transition, for the revert window on landing.
-      this.landedFromTransition = this.surfaceAngle > 18;
+      // `surfaceAngle` has already been reset to 0 by the branch above — the frame you
+      // leave a lip is by definition the frame there is no surface — so the take-off has to
+      // be judged on the angle of the surface you were on LAST frame.
+      this.landedFromTransition = this.lastSurfaceAngle > 18;
+
+      // ---- LAUNCH OFF THE LIP ---------------------------------------------------------
+      // Leaving a transition sends you up its EXIT TANGENT with the speed you arrived with,
+      // rather than off the end of it along the floor. The ground model has already been
+      // writing velocity along the surface each frame, but the frame you actually let go is
+      // the one that decides the whole arc, and it is the one most likely to have been
+      // eaten by a solver contact at the coping — so the angle is asserted here rather than
+      // left to whatever survived. Magnitude is preserved exactly: this trades horizontal
+      // speed for height, it never manufactures either.
+      // 0 at TRANSITION_ANGLE, 1 by 42 degrees. The span is deliberately short enough that
+      // the game's own 25 degree kickers get a real share of it: fixing the slope sign
+      // above (correctly) made climbing a kicker cost speed where it used to pay, and the
+      // pop off one dropped from 0.69 m to 0.49. Widening the hang here puts the height
+      // back without putting the physics error back.
+      this.transitionLaunch = Math.max(0, Math.min(1,
+        (this.lastSurfaceAngle - this.TRANSITION_ANGLE) / 30));
+      if (this.transitionLaunch > 0) {
+        const speed3 = Math.hypot(vel.x, vel.y, vel.z);
+        const planarSpeed = Math.hypot(vel.x, vel.z);
+        const launchRad = Math.min(this.lastSurfaceAngle, this.TRANSITION_MAX_LAUNCH) * DEG2RAD;
+        const wantY = speed3 * Math.sin(launchRad);
+        // A CAP AS WELL AS A FLOOR. The ground model has already written velocity along the
+        // surface, and at the coping that surface is vertical — left alone it fires the
+        // player dead-straight up, which is a pogo stick and not a launch.
+        if (speed3 > 1 && Math.abs(wantY - vel.y) > 0.05) {
+          const wantPlanar = speed3 * Math.cos(launchRad);
+          const k = planarSpeed > 0.05 ? wantPlanar / planarSpeed : 0;
+          const yaw = yawOf(this.chair.quaternion);
+          this.physics.setVelocity(this.chairBody, new THREE.Vector3(
+            planarSpeed > 0.05 ? vel.x * k : Math.sin(yaw) * wantPlanar,
+            wantY,
+            planarSpeed > 0.05 ? vel.z * k : Math.cos(yaw) * wantPlanar,
+          ));
+        }
+      }
     }
 
     // Landing detection
     if (!wasGrounded && this.playerState.isGrounded) {
+      // ---- LANDING BACK INTO A TRANSITION ---------------------------------------------
+      // Dropping in should PAY you. Land on the curve and the fall becomes speed down the
+      // wall: the whole velocity vector is laid flat onto the surface and its magnitude
+      // kept (bar a few per cent), instead of the vertical part being thrown away and the
+      // chair arriving at the bottom of a 3 m transition slower than it left the top. This
+      // is what a pump is, and it is why a half pipe can be ridden more than once.
+      //
+      // Flat ground is deliberately excluded — there the same arithmetic would hand out
+      // free speed for every hop, which is a very different game.
+      if (this.surfaceAngle > this.TRANSITION_ANGLE) {
+        const speed3 = Math.hypot(vel.x, vel.y, vel.z);
+        const n = this.surfaceNormal;
+        const dot = vel.x * n.x + vel.y * n.y + vel.z * n.z;
+        const flat = new THREE.Vector3(vel.x - n.x * dot, vel.y - n.y * dot, vel.z - n.z * dot);
+        // A GLANCING LANDING IS A DROP-IN; A PERPENDICULAR ONE IS A SLAM. The rule below
+        // rescales whatever survives the projection back up to (nearly) the full incoming
+        // speed, and when the velocity is almost parallel to the surface normal what
+        // survives is numerical dust pointing in an arbitrary direction. Amplifying that to
+        // 7.5 m/s is exactly what happened at the lip of the probe's half pipe: the chair
+        // arrived travelling straight up, was handed 7.5 m/s ACROSS the wall, and traversed
+        // it sideways for a second and a half without gaining or losing a centimetre of
+        // height. Below a third of the incoming speed there is no line left to preserve, so
+        // the landing is left exactly as the world made it.
+        if (flat.length() > 0.30 * speed3 && speed3 > 1) {
+          flat.setLength(Math.min(this.MAX_SPEED, speed3 * this.TRANSITION_LANDING_KEEP));
+          this.physics.setVelocity(this.chairBody, flat);
+          // The speed entitlement has to be told, or the restore below spends the next few
+          // frames trying to drag the line back to what it was before the drop.
+          this.carriedSpeed = Math.max(this.carriedSpeed, Math.hypot(flat.x, flat.z));
+
+          // FAKIE. You went up the wall forwards, so you are coming down it backwards, and
+          // every rule in applyMovement treats travel that opposes the facing as damage the
+          // world did — it would scrub the speed off and crab the chair sideways out of the
+          // transition. Coming back down the thing you just rode up is not damage. Turn the
+          // chair to face its line on the touchdown frame, before the movement model ever
+          // sees a reversal.
+          const travel = Math.atan2(flat.x, flat.z);
+          const face = yawOf(this.chair.quaternion);
+          if (Math.abs(wrapPi(travel - face)) > 1.9) {
+            this.physics.setRotationY(this.chairBody, travel);
+          }
+        }
+      }
+      this.transitionLaunch = 0;
+
       const landingIntensity = Math.min(1, this.playerState.airTime / 1500);
       proceduralSounds.playLand(landingIntensity);
       if (landingIntensity > 0.1) {
@@ -4321,8 +4693,13 @@ export class Game {
     // holds once full and is spent — either by firing a special, or by bailing.
     this.playerState.hasSpecial = this.specialMeter >= Game.SPECIAL_COST;
     this.controls?.setSpecialReady(this.playerState.hasSpecial);
+
+    // The angle of the surface we were ON this frame, for the next one. Both the extended
+    // transition cast above and the lip launch need it, and by the time either fires the
+    // live value has already been cleared.
+    this.lastSurfaceAngle = this.playerState.isGrounded ? this.surfaceAngle : 0;
   }
-  
+
   /**
    * Curbs, ramp lips, stair edges and walls.
    *
@@ -4335,6 +4712,19 @@ export class Game {
   private resolveObstacles(dt: number, dir: THREE.Vector3, speed: number, pushing: boolean): boolean {
     const pos = this.physics.getPosition(this.chairBody);
     const wheelY = pos.y - CHAIR_FOOT_OFFSET;
+
+    // A TRANSITION IS NOT A WALL, and this function cannot tell the difference on its own.
+    // It fires a feeler forward at wheel height, measures how far the thing in front rises
+    // over the next 12 cm, and calls anything taller than a caster a wall to bank off. On a
+    // quarter pipe the thing in front IS the floor, and it rises faster the higher you get —
+    // so halfway up the curve the escape fired, rotated the line 90 degrees across the face
+    // and slid the chair sideways along the wall at full speed instead of up it. Measured on
+    // the ramp probe: z frozen at 0.36 m for six frames with 18 m/s of planar speed pointing
+    // the wrong way. While the wheels are ON a transition, the surface ahead is the ride.
+    if (this.playerState.isGrounded && this.surfaceAngle > this.TRANSITION_ANGLE) {
+      this.pinnedFor = 0;
+      return false;
+    }
 
     // Feeler starts a few centimetres above the floor so the floor itself is never a wall,
     // and reaches well past the capsule so contact is seen before the solver reaches it.
@@ -4519,7 +4909,29 @@ export class Game {
 
     const velocity = this.physics.getVelocity(this.chairBody);
     const planar = new THREE.Vector3(velocity.x, 0, velocity.z);
-    const currentSpeed = planar.length();
+    // SPEED IS MEASURED ALONG THE SURFACE, NOT ACROSS THE FLOORPLAN.
+    //
+    // The model writes `alongSurface * speed` and then reads its own work back as the
+    // FLAT length of that vector, which on a slope of θ is speed·cos θ — so every frame on
+    // a ramp threw away (1 − cos θ) of the line, 9% a frame on a kicker and half of it a
+    // frame on the steep part of a transition. It only ever looked like it worked because
+    // the carriedSpeed restore quietly re-inflated the loss a frame later.
+    //
+    // In the other direction, the ground stick pushes the chair INTO the surface, and on a
+    // tilted surface part of that push is horizontal — so the flat reading also counted the
+    // stick as forward speed, and the two errors together had a chair ACCELERATE from 12.6
+    // to 15.3 m/s while climbing a quarter pipe. Reading the tangential component is right
+    // on both counts: it is the speed the chair actually has along the thing it is riding,
+    // and it cannot see the stick at all. Flat ground is untouched (the normal is up, and
+    // the tangential magnitude is exactly the planar one).
+    let currentSpeed = planar.length();
+    if (this.playerState.isGrounded && this.surfaceAngle > 3) {
+      const n = this.surfaceNormal;
+      const vn = velocity.x * n.x + velocity.y * n.y + velocity.z * n.z;
+      currentSpeed = Math.hypot(
+        velocity.x - n.x * vn, velocity.y - n.y * vn, velocity.z - n.z * vn,
+      );
+    }
 
     if (this.playerState.isGrounded) {
       // ---- GROUND MOVEMENT MODEL --------------------------------------------------
@@ -4528,7 +4940,12 @@ export class Game {
       // speed), the push eases you up to a cruise rather than to the hard ceiling, and
       // coasting bleeds off slowly enough that the gaps between features stay alive.
       let speed = currentSpeed;
-      const rolling = currentSpeed > 0.05 ? planar.clone().divideScalar(currentSpeed) : fwdFlat.clone();
+      // Unit direction of travel across the floorplan. Normalised by the PLANAR length, not
+      // by `currentSpeed` — on a transition those are no longer the same number, and a
+      // "unit" vector two thirds shorter than it claims is a trap for anything downstream
+      // that trusts it.
+      const planarLen = planar.length();
+      const rolling = planarLen > 0.05 ? planar.clone().divideScalar(planarLen) : fwdFlat.clone();
 
       // ---- THE CHAIR HAS NO REVERSE GEAR ------------------------------------------
       //
@@ -4552,7 +4969,27 @@ export class Game {
       // trajectory the player earned survives; the chair ends up pointing along it.
       const faceAngle = Math.atan2(fwdFlat.x, fwdFlat.z);
       const travelAngle = Math.atan2(rolling.x, rolling.z);
-      const misalign = wrapPi(travelAngle - faceAngle);
+      let misalign = wrapPi(travelAngle - faceAngle);
+
+      // ---- ...EXCEPT ON A TRANSITION, WHERE GOING BACKWARDS IS THE POINT ---------------
+      //
+      // Everything below treats travel that opposes the facing as damage, and it is right
+      // to, on a floor. On a quarter pipe it is the feature working: you ride up the wall
+      // forwards and you come back down it backwards, every time, and that is a fakie and
+      // not a spin-out. Handing that to the rules below was measured on the ramp probe and
+      // it was ugly — the reversal invariant cannot keep any part of a dead-astern line, so
+      // it peeled the chair off at exactly 90 degrees and sent it TRAVERSING THE WALL
+      // sideways at 7.5 m/s, frozen at the same height, for a second and a half.
+      //
+      // So on a transition the chair simply turns to face where the ramp is taking it, and
+      // the reversal machinery never sees a reversal at all. Only a real about-face
+      // qualifies; a carve across the curve still steers normally.
+      if (this.surfaceAngle > this.TRANSITION_ANGLE
+          && currentSpeed > this.REALIGN_MIN_SPEED && Math.abs(misalign) > 1.75) {
+        this.physics.setRotationY(this.chairBody, travelAngle);
+        fwdFlat.set(Math.sin(travelAngle), 0, Math.cos(travelAngle));
+        misalign = 0;
+      }
       const slewing = currentSpeed > this.REALIGN_MIN_SPEED
         && Math.abs(misalign) > this.REALIGN_ANGLE;
       // Actually travelling backwards, as opposed to merely sliding: the only state the
@@ -4634,7 +5071,23 @@ export class Game {
       // back the moment it is facing its travel again — so a hit costs a change of line
       // rather than the run, which is the whole point of the restore, and it can never
       // again pay out along a direction the player did not choose.
-      if (!intent.brake && !reversing && this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.85) {
+      //
+      // AND IT IS HELD BACK ON A TRANSITION. Climbing a quarter pipe is SUPPOSED to cost
+      // you most of your speed — that is the trade the whole feature exists to offer — and
+      // to this rule a chair that entered at 12.6 m/s and reached the coping at 1.3 looked
+      // exactly like a chair that had just been eaten by a wall. It handed 93% of cruise
+      // back at the lip, every frame, and the probe caught the result: the chair hung at
+      // the top of the curve oscillating between 1 and 8 m/s and never went anywhere. The
+      // entitlement still bleeds correctly here (the climb is an authored loss, so
+      // carriedSpeed follows the speed down the wall and back up it); it is only the
+      // instant re-inflation that must not fire.
+      const onTransition = this.surfaceAngle > this.TRANSITION_ANGLE;
+      /** Set when the climb ran out of speed and the chair is being sent back down. */
+      let stalled = false;
+      /** Speed the slope gave (+) or took (-) this frame. An authored loss like any other. */
+      let slopeWork = 0;
+      if (!intent.brake && !reversing && !onTransition
+          && this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.85) {
         speed = this.carriedSpeed * (contact ? 0.85 : 0.93);
       }
       const speedAfterRestore = speed;
@@ -4689,16 +5142,106 @@ export class Game {
 
       // Gravity along the surface: ramps give speed back on the way down and cost on the
       // way up, which is what makes a transfer feel earned.
+      //
+      // THIS TERM USED TO HAVE THE SIGN BACKWARDS and had done since it was written — the
+      // comment above describes what was intended, the arithmetic did the opposite. For a
+      // surface rising toward +Z the up-normal is (0, cos, −sin), so `−dir·n_horizontal` is
+      // +sin θ going UP it, and the line `speed += slopeDot * 16 * dt` therefore paid the
+      // player to climb and charged them to descend. On the 0.85 m kickers it was invisible
+      // (+2 m/s, indistinguishable from "ramps feel punchy"). On a 3 m transition it is
+      // catastrophic: the ramp probe measured a chair entering at 12.6 m/s, ACCELERATING up
+      // the curve to 19, and leaving the lip on a trajectory 9.3 m high — three times the
+      // height of the ramp, off a wall it should barely have cleared.
+      //
+      // AND IT WAS BEING CHARGED TWICE. The rigid body is under 30 m/s^2 of world gravity
+      // and `speed` is read back out of that body every frame, so the solver has ALREADY
+      // taken the full gravity component along the surface before this line runs — the
+      // authored term was a second helping on top of it, ~46 m/s^2 all told. Measured: a
+      // 12.6 m/s entry stalled 1.6 m up a 3 m quarter pipe, when 12.6 m/s is enough energy
+      // for 2.6 m under real gravity alone.
+      //
+      // So this term now works the other way round: it HANDS BACK the difference between
+      // world gravity and the gentler figure a skate game wants on a transition. That is
+      // what lets a cruise clear a wall at all, and it keeps the trade honest — a full
+      // climb and descent still comes out slower than it went in.
       if (this.surfaceAngle > 3) {
-        const slopeDot = -dir.dot(new THREE.Vector3(this.surfaceNormal.x, 0, this.surfaceNormal.z));
-        speed += slopeDot * 16 * dt;
+        const climb = this.physics
+          .getSurfaceMovementDirection(dir, this.surfaceNormal).y;
+        speed += (30 - this.SLOPE_GRAVITY) * climb * dt;
         if (speed < 0) speed = 0;
+        // What the slope did to the line this frame: negative climbing, positive dropping.
+        // The entitlement below has to see it or it will treat a climb as damage.
+        slopeWork = -this.SLOPE_GRAVITY * climb * dt;
+
+        // ---- STALL OUT ----------------------------------------------------------------
+        // You did not make it. Every other rule in this model works on a scalar speed and a
+        // heading, which cannot express "rolling backwards down a wall" — so a chair that
+        // ran out of speed halfway up a transition simply STOPPED THERE, pinned to a 60
+        // degree surface by a velocity the model rewrote to zero every frame. A stall on a
+        // transition has to end with the chair coming back down it, and it has to come down
+        // FACING down, or the reversal rules above spend the descent scrubbing the speed
+        // off and crabbing the chair sideways out of the ramp.
+        //
+        // The horizontal part of the surface normal points straight down the fall line, so
+        // it is both the direction to travel and the direction to face.
+        if (onTransition && climb > 0.05 && speed < 1.6) {
+          const fall = new THREE.Vector3(this.surfaceNormal.x, 0, this.surfaceNormal.z);
+          if (fall.lengthSq() > 1e-4) {
+            fall.normalize();
+            this.physics.setRotationY(this.chairBody, Math.atan2(fall.x, fall.z));
+            fwdFlat.copy(fall);
+            dir.copy(fall);
+            speed = 1.6;
+            stalled = true;
+          }
+        }
       }
 
       if (speed > maxSpeed) speed = maxSpeed;
 
       // Ride the surface plane rather than skimming over it, so ramps convert speed to air.
-      const alongSurface = this.physics.getSurfaceMovementDirection(dir, this.surfaceNormal);
+      //
+      // ---- A HORIZONTAL HEADING IS THE WRONG THING TO STEER A WALL WITH ----------------
+      //
+      // `dir` is a compass bearing, and `getSurfaceMovementDirection` lifts it onto the
+      // surface. On a floor that is exact. On a transition it is unstable, and violently
+      // so: the up-the-wall direction is squashed in the horizontal plane by cos θ, so the
+      // lift DIVIDES the sideways part of the bearing by cos θ — a factor of 3.6 at 74
+      // degrees. Feed the resulting velocity's horizontal shadow back in as next frame's
+      // bearing and a 4 degree error becomes 16, then 45, then 90. That is the entire
+      // mechanism behind the worst thing the probe found: the chair reached the lip of the
+      // half pipe, spiralled off the fall line in three frames, and then TRAVERSED the wall
+      // at 7.5 m/s, at a constant height, for a second and a half.
+      //
+      // On a transition the direction of travel is therefore taken from the velocity the
+      // chair actually has, projected onto the surface — which is stable, and which carries
+      // gravity's pull back toward the fall line for free, because the solver has already
+      // applied it. Steering is blended in on top, weighted by cos θ so that its authority
+      // falls off at exactly the rate the instability grows: full on a bank, none on vert,
+      // which is also how a real transition rides.
+      let alongSurface: THREE.Vector3;
+      if (stalled) {
+        alongSurface = this.physics.getSurfaceMovementDirection(dir, this.surfaceNormal);
+      } else if (onTransition) {
+        const n = this.surfaceNormal;
+        const vn = velocity.x * n.x + velocity.y * n.y + velocity.z * n.z;
+        const travel3 = new THREE.Vector3(
+          velocity.x - n.x * vn, velocity.y - n.y * vn, velocity.z - n.z * vn,
+        );
+        const steer = this.physics.getSurfaceMovementDirection(dir, n);
+        if (travel3.lengthSq() > 1e-4) {
+          const blend = 0.35 * Math.max(0, Math.cos(this.surfaceAngle * DEG2RAD));
+          alongSurface = travel3.normalize().lerp(steer, blend).normalize();
+        } else {
+          alongSurface = steer;
+        }
+      } else {
+        alongSurface = this.physics.getSurfaceMovementDirection(dir, this.surfaceNormal);
+      }
+      // sin of the slope ALONG TRAVEL: what the chair is actually climbing or dropping,
+      // as opposed to how steep the surface is in the abstract. Traversing a transition
+      // sideways is flat; going straight up it is not. The visual pitch reads this.
+      this.surfaceClimb = this.surfaceAngle > 2 ? alongSurface.y : 0;
       const newVel = new THREE.Vector3(
         alongSurface.x * speed,
         this.surfaceAngle > 3 ? alongSurface.y * speed : velocity.y,
@@ -4723,7 +5266,17 @@ export class Game {
       // continue it with. Measured over a 30 s flow run, charging it took mean speed from
       // 13.9 to 9.3 m/s and dead time from 1.5% to 10.2%. The line survives the contact;
       // what it does not survive is being pointed backwards.
-      const authoredLoss = Math.min(0, speed - speedAfterRestore + reverseScrub);
+      //
+      // THE SLOPE IS AN AUTHORED LOSS TOO, and it was not being counted. The speed a climb
+      // costs is taken by gravity through the solver rather than by any line in this model,
+      // so the entitlement sat at the full 13.7 m/s all the way up a 3 m wall — and the
+      // moment the wheels touched anything flat again the restore paid every metre of it
+      // back. The probe caught the result: a chair popped over the lip of a half pipe at
+      // 1 m/s, landed on the deck, and was fired off the back of it at 12.6. Charging the
+      // climb and crediting the descent makes the entitlement track the thing it is
+      // supposed to represent — the speed the player would have if only this model had
+      // touched them — over a transition as well as over a floor.
+      const authoredLoss = Math.min(0, speed - speedAfterRestore + reverseScrub) + slopeWork;
       this.carriedSpeed = Math.min(maxSpeed, Math.max(speed,
         this.carriedSpeed + authoredLoss - (contact ? 3 : 0) * dt));
     } else if (intent.brake && currentSpeed > 0.1) {
@@ -4872,11 +5425,30 @@ export class Game {
     if (this.playerState.isAirborne) {
       const v = this.physics.getVelocity(this.chairBody);
       const rising = Math.abs(v.y);
+      let assist = 0;
       if (rising < this.HANG_FADE_SPEED) {
         const k = rising <= this.HANG_FULL_SPEED ? 1
           : (this.HANG_FADE_SPEED - rising) / (this.HANG_FADE_SPEED - this.HANG_FULL_SPEED);
+        assist += this.HANG_ACCEL * k;
+      }
+      // TRANSITION HANG TIME — "slow down a little bit in the air so it feels like
+      // hangtime". Air off a lip gets a SECOND, wider bite out of gravity, scaled by how
+      // much of a transition the take-off actually was: a kicker at 25 degrees gets a
+      // third of it, a full vert wall gets all of it. Deliberately kept as a gravity
+      // reduction around the apex rather than a longer, slower jump — the player should
+      // feel weightless at the top, not feel the controls go soft.
+      //
+      // A flat ollie sees NONE of this (transitionLaunch is 0 unless the take-off surface
+      // was steeper than TRANSITION_ANGLE), so the pop the whole game is tuned around is
+      // bit-for-bit what it was.
+      if (this.transitionLaunch > 0 && rising < this.TRANSITION_HANG_FADE) {
+        const k = rising <= this.HANG_FULL_SPEED ? 1
+          : (this.TRANSITION_HANG_FADE - rising) / (this.TRANSITION_HANG_FADE - this.HANG_FULL_SPEED);
+        assist += this.TRANSITION_HANG_ACCEL * this.transitionLaunch * k;
+      }
+      if (assist > 0) {
         this.physics.setVelocity(
-          this.chairBody, new THREE.Vector3(v.x, v.y + this.HANG_ACCEL * k * dt, v.z),
+          this.chairBody, new THREE.Vector3(v.x, v.y + assist * dt, v.z),
         );
       }
     }

@@ -3312,3 +3312,521 @@ export function makeManagerOffice(width = 9.4, depth = 4.4, o?: PropOptions): TH
 
   return finish(ctx, o, { size: [W, wallH + glazeH, D], offset: [0, (wallH + glazeH) / 2, 0] });
 }
+
+// ===========================================================================
+// FLOOR-PLAN PROPS
+//
+// The owner played the cross-corridor build and asked, in his own words, for
+// "some hallways in that level, a break room with a pool table and some chairs
+// and a couch and vending machines, some stairs, an elevator to go between two
+// floors, conference rooms, corner offices, a server room."
+//
+// That is a request for an OFFICE BUILDING FLOOR, not for more cubicles, and
+// every prop below exists to make one of those rooms nameable from thirty
+// metres away. They follow the same rules as everything above: chamfered
+// silhouettes, no inline materials, tints inside existing material families so
+// the whole floorplate still merges into a few dozen draw calls.
+//
+// THE ONE RULE THEY ALL SHARE: NOTHING HERE CAN TRAP THE PLAYER.
+// Every collider a room prop publishes is either
+//   * under Game.STEP_HEIGHT (0.42 m), so the chair rolls straight over it, or
+//   * a single convex slab you can ollie or grind, never a pocket, and
+//   * never a ring of geometry with an inside.
+// The couch, the pool table and the counter are deliberately AUTHORED AT OR
+// JUST OVER step height for the same reason a park kerb is: they are furniture
+// you ride, not furniture you crash into.
+// ===========================================================================
+
+export interface PoolTableOptions extends PropOptions {
+  length?: number;
+  width?: number;
+}
+
+/**
+ * POOL TABLE — the break room's centrepiece and, mechanically, a manual pad with
+ * grind edges down both long rails.
+ *
+ * Slate bed at 0.80 m with a 0.06 m cushion rail on top, which puts the grind line at
+ * 0.87 m: an ollie from flat, or a straight roll-on from the couch back behind it.
+ * ~430 tris.
+ */
+export function makePoolTable(o?: PoolTableOptions): THREE.Group {
+  const ctx = begin('poolTable', o, 401);
+  const r = ctx.rng;
+  const L = o?.length ?? 2.84;
+  const W = o?.width ?? 1.62;
+  const bedY = 0.80;
+  const railH = 0.07;
+  const top = bedY + railH;
+
+  // Cabinet and slate box.
+  ctx.root.add(mesh(cbox(L - 0.18, 0.30, W - 0.18, 0.02, [Math.round(L), 1]), MAT.wood, { pos: [0, bedY - 0.15, 0] }));
+  // Legs — chunky pedestals at the quarter points, inset so the silhouette reads as a table.
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      ctx.root.add(mesh(cbox(0.20, bedY - 0.30, 0.20, 0.015), MAT.wood, {
+        pos: [sx * (L / 2 - 0.36), (bedY - 0.30) / 2, sz * (W / 2 - 0.30)],
+      }));
+    }
+  }
+  // Baize. The only true green in the level, which is exactly why the room reads.
+  ctx.root.add(mesh(quad(L - 0.30, W - 0.30), ['cubicleFabric', { color: 0x2f7d52 }], {
+    pos: [0, bedY + 0.005, 0], rot: [-Math.PI / 2, 0, 0], cast: false,
+  }));
+  // Cushion rails: the grind line, and the bright timber edge that draws the silhouette.
+  for (const sz of [-1, 1]) {
+    ctx.root.add(mesh(cbox(L, railH, 0.15, 0.014, [Math.round(L * 2), 1]), MAT.deskTop, {
+      pos: [0, bedY + railH / 2, sz * (W / 2 - 0.075)],
+    }));
+  }
+  for (const sx of [-1, 1]) {
+    ctx.root.add(mesh(cbox(0.15, railH, W - 0.30, 0.014), MAT.deskTop, {
+      pos: [sx * (L / 2 - 0.075), bedY + railH / 2, 0],
+    }));
+  }
+  // Pockets — six dark discs, which is all it takes to say "pool table" from range.
+  for (const sx of [-1, 0, 1]) {
+    for (const sz of [-1, 1]) {
+      ctx.root.add(mesh(disc(0.075, 8), MAT.plastic, {
+        pos: [sx * (L / 2 - 0.14), bedY + 0.012, sz * (W / 2 - 0.14)], cast: false,
+      }));
+    }
+  }
+  if (ctx.variant === 0) {
+    // A rack of balls and the cue somebody left across the baize.
+    for (let i = 0; i < 7; i++) {
+      ctx.root.add(mesh(blob(0.028, 0), i % 3 === 0 ? MAT.accentRed : i % 3 === 1 ? MAT.accentYellow : MAT.plastic, {
+        pos: [r.range(-L / 3, L / 3), bedY + 0.032, r.range(-W / 3, W / 3)], cast: false,
+      }));
+    }
+    ctx.root.add(mesh(cyl(0.012, 0.02, 1.35, 6), MAT.wood, {
+      pos: [r.range(-0.3, 0.3), bedY + 0.025, r.range(-0.2, 0.2)],
+      rot: [0, r.range(0, 3.1), Math.PI / 2], cast: false,
+    }));
+  }
+
+  const gz = W / 2 - 0.075;
+  ctx.grinds.push({ start: [-L / 2 + 0.12, top + 0.02, gz], end: [L / 2 - 0.12, top + 0.02, gz] });
+  ctx.grinds.push({ start: [-L / 2 + 0.12, top + 0.02, -gz], end: [L / 2 - 0.12, top + 0.02, -gz] });
+  collide(ctx, [L, top, W], [0, top / 2, 0]);
+  return finish(ctx, o, { size: [L, top, W], offset: [0, top / 2, 0] });
+}
+
+export interface CouchOptions extends PropOptions {
+  length?: number;
+  /** Tint for the upholstery. Stays inside the cubicleFabric family, so it is free. */
+  tint?: number;
+}
+
+/**
+ * COUCH — "a kicker if you hit it right".
+ *
+ * The seat is authored at EXACTLY Game.STEP_HEIGHT (0.42 m) so the chair rolls onto it
+ * instead of stopping on it, and the back stands 0.44 m proud of the seat: roll on, hit the
+ * back, and it kicks. The back's top rail is a grind at 0.88 m. Two colliders, both convex,
+ * no pocket. ~380 tris.
+ */
+export function makeCouch(o?: CouchOptions): THREE.Group {
+  const ctx = begin('couch', o, 403);
+  const L = o?.length ?? 2.24;
+  const D = 0.92;
+  const seatH = 0.42;
+  const backH = 0.46;
+  const backT = 0.22;
+  const top = seatH + backH;
+  const fabric: MatRef = o?.tint ? ['cubicleFabric', { color: o.tint }] : ['cubicleFabric', { color: 0x8f6f58 }];
+
+  // Plinth + seat slab. One volume: a couch you can ride over has no gap under it.
+  ctx.root.add(mesh(cbox(L, 0.16, D, 0.014, [Math.round(L), 1]), MAT.plastic, { pos: [0, 0.08, 0] }));
+  ctx.root.add(mesh(cbox(L - 0.04, seatH - 0.16, D - 0.04, 0.03, [Math.round(L), 1]), fabric, { pos: [0, 0.16 + (seatH - 0.16) / 2, 0] }));
+  // Seat cushion seams.
+  const cushions = Math.max(2, Math.round(L / 1.05));
+  for (let i = 0; i < cushions; i++) {
+    const x = -L / 2 + (L / cushions) * (i + 0.5);
+    ctx.root.add(mesh(cbox(L / cushions - 0.06, 0.06, D - 0.28, 0.02), fabric, { pos: [x, seatH - 0.01, 0.06], cast: false }));
+  }
+  // Back — raked slightly, which is what stops it reading as a wall.
+  ctx.root.add(mesh(cbox(L, backH, backT, 0.02, [Math.round(L), 1]), fabric, {
+    pos: [0, seatH + backH / 2 - 0.02, -(D / 2 - backT / 2)], rot: [-0.10, 0, 0],
+  }));
+  // Back cap: the grind rail, in laminate so it catches a specular line like every other
+  // grind surface in the level.
+  ctx.root.add(mesh(cbox(L + 0.03, 0.05, backT + 0.04, 0.014, [Math.round(L * 1.5), 1]), MAT.panelCap, {
+    pos: [0, top, -(D / 2 - backT / 2) + 0.02],
+  }));
+  // Arms.
+  for (const s of [-1, 1]) {
+    ctx.root.add(mesh(cbox(0.20, 0.24, D - 0.06, 0.024), fabric, { pos: [s * (L / 2 - 0.10), seatH + 0.12, 0.02] }));
+  }
+  // Feet.
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    ctx.root.add(mesh(sbox(0.07, 0.08, 0.07), MAT.deskFrame, { pos: [sx * (L / 2 - 0.16), 0.04, sz * (D / 2 - 0.16)], cast: false }));
+  }
+
+  ctx.grinds.push({
+    start: [-L / 2 + 0.15, top + 0.03, -(D / 2 - backT / 2) + 0.02],
+    end: [L / 2 - 0.15, top + 0.03, -(D / 2 - backT / 2) + 0.02],
+  });
+  // Seat: at step height, so it is ridden. Back: the kicker, and the only thing that stops you.
+  collide(ctx, [L, seatH, D], [0, seatH / 2, 0]);
+  collide(ctx, [L, backH + 0.05, backT + 0.04], [0, seatH + (backH + 0.05) / 2, -(D / 2 - backT / 2)]);
+  return finish(ctx, o, { size: [L, top, D], offset: [0, top / 2, 0] });
+}
+
+/**
+ * ARMCHAIR / TUB CHAIR — break-room seating. Small enough that it is always placed
+ * non-colliding: dressing you skate past. ~220 tris.
+ */
+export function makeArmchair(o?: CouchOptions): THREE.Group {
+  const ctx = begin('armchair', o, 405);
+  const W = 0.86;
+  const D = 0.84;
+  const seatH = 0.42;
+  const fabric: MatRef = o?.tint ? ['cubicleFabric', { color: o.tint }] : ['cubicleFabric', { color: 0x6f82a8 }];
+
+  ctx.root.add(mesh(cbox(W, 0.14, D, 0.014), MAT.plastic, { pos: [0, 0.07, 0] }));
+  ctx.root.add(mesh(cbox(W - 0.04, seatH - 0.14, D - 0.04, 0.03), fabric, { pos: [0, 0.14 + (seatH - 0.14) / 2, 0] }));
+  ctx.root.add(mesh(cbox(W, 0.42, 0.20, 0.024), fabric, { pos: [0, seatH + 0.19, -(D / 2 - 0.10)], rot: [-0.12, 0, 0] }));
+  for (const s of [-1, 1]) {
+    ctx.root.add(mesh(cbox(0.16, 0.22, D - 0.08, 0.022), fabric, { pos: [s * (W / 2 - 0.08), seatH + 0.11, 0.02] }));
+  }
+  collide(ctx, [W, seatH, D], [0, seatH / 2, 0]);
+  return finish(ctx, o, { size: [W, seatH + 0.42, D], offset: [0, (seatH + 0.42) / 2, 0] });
+}
+
+export interface CounterOptions extends PropOptions {
+  length?: number;
+  /** Sink, kettle and coffee machine on top. Off for a plain run of units. */
+  kitchen?: boolean;
+}
+
+/**
+ * KITCHEN COUNTER — the break room's back wall: a run of base units with a laminate top at
+ * 0.92 m, which is a grind line you approach along the wall. Cupboard doors, a sink, a
+ * coffee machine. ~400 tris for a 4 m run.
+ */
+export function makeKitchenCounter(o?: CounterOptions): THREE.Group {
+  const ctx = begin('kitchenCounter', o, 407);
+  const L = o?.length ?? 4.0;
+  const D = 0.66;
+  const H = 0.86;
+  const topT = 0.06;
+  const top = H + topT;
+  const uv: [number, number] = [Math.max(1, Math.round(L / 1.2)), 1];
+
+  ctx.root.add(mesh(cbox(L, H, D, 0.016, uv), MAT.cabinetBeige, { pos: [0, H / 2, 0] }));
+  ctx.root.add(mesh(cbox(L + 0.04, topT, D + 0.04, 0.012, uv), MAT.deskTop, { pos: [0, H + topT / 2, 0] }));
+  // Doors and handles — the read that says "units", not "block".
+  const doors = Math.max(2, Math.round(L / 0.62));
+  for (let i = 0; i < doors; i++) {
+    const x = -L / 2 + (L / doors) * (i + 0.5);
+    ctx.root.add(mesh(sbox(L / doors - 0.05, H - 0.22, 0.02), MAT.cabinetGrey, { pos: [x, H / 2 - 0.02, D / 2 + 0.008], cast: false }));
+    ctx.root.add(mesh(sbox(L / doors - 0.24, 0.022, 0.024), MAT.chrome, { pos: [x, H - 0.18, D / 2 + 0.024], cast: false }));
+  }
+  ctx.root.add(mesh(sbox(L, 0.10, 0.04), MAT.plastic, { pos: [0, 0.05, D / 2 - 0.03], cast: false }));
+
+  if (o?.kitchen ?? true) {
+    // Sink: a recessed steel pan and a mixer tap.
+    ctx.root.add(mesh(sbox(0.52, 0.02, 0.40), MAT.chrome, { pos: [-L / 4, top - 0.01, 0], cast: false }));
+    ctx.root.add(mesh(cyl(0.018, 0.018, 0.26, 6), MAT.chrome, { pos: [-L / 4, top + 0.13, -0.20] }));
+    // Coffee machine and a kettle: the two things anybody in this building actually uses.
+    ctx.root.add(mesh(cbox(0.30, 0.38, 0.28, 0.016), MAT.plastic, { pos: [L / 4, top + 0.19, -0.04] }));
+    ctx.root.add(mesh(quad(0.16, 0.07), ['screenOn', { emissive: SCREEN_TINTS[0] }], { pos: [L / 4, top + 0.30, 0.101], cast: false }));
+    ctx.root.add(mesh(cyl(0.09, 0.10, 0.24, 8), MAT.chrome, { pos: [L / 4 - 0.42, top + 0.12, 0.0] }));
+    ctx.root.add(mesh(cyl(0.055, 0.06, 0.11, 8), MAT.ceramic, { pos: [L / 4 + 0.30, top + 0.055, 0.10], cast: false }));
+  }
+
+  ctx.grinds.push({ start: [-L / 2 + 0.2, top + 0.02, D / 2 + 0.01], end: [L / 2 - 0.2, top + 0.02, D / 2 + 0.01] });
+  collide(ctx, [L + 0.04, top, D + 0.04], [0, top / 2, 0]);
+  return finish(ctx, o, { size: [L + 0.04, top, D + 0.04], offset: [0, top / 2, 0] });
+}
+
+export interface BoardTableOptions extends PropOptions {
+  length?: number;
+  width?: number;
+}
+
+/**
+ * BOARDROOM TABLE — the hero feature of the level.
+ *
+ * A 9 m veneered slab at 0.74 m with a steel edge trim down both long sides. Both trims are
+ * registered as single unbroken grinds, and the top is rideable: land on it off the kicker at
+ * the room's south end, manual the length of it, and drop out of the far doorway. That is the
+ * longest single-feature line in the building and it is deliberately the thing you can see
+ * through the glazing from the hallway.
+ *
+ * ONE collider for the whole slab, and the trestles are inside its footprint, so there is no
+ * hole under the table to get stuck in. ~520 tris at 9 m.
+ */
+export function makeBoardTable(o?: BoardTableOptions): THREE.Group {
+  const ctx = begin('boardTable', o, 409);
+  const L = o?.length ?? 9.0;
+  const W = o?.width ?? 1.85;
+  const H = 0.74;
+  const topT = 0.075;
+  const uv: [number, number] = [Math.max(2, Math.round(L / 1.4)), 1];
+
+  // The slab.
+  ctx.root.add(mesh(cbox(L, topT, W, 0.016, uv), MAT.wood, { pos: [0, H - topT / 2, 0] }));
+  // Steel edge trim: the grind surface, and the specular line that makes a 9 m plank read.
+  for (const s of [-1, 1]) {
+    ctx.root.add(mesh(sboxUV(L + 0.02, 0.035, 0.07, Math.round(L), 1), MAT.grindSteel, {
+      pos: [0, H - 0.018, s * (W / 2 - 0.03)], cast: false,
+    }));
+  }
+  // Trestle bases, well inside the slab footprint.
+  const trestles = Math.max(2, Math.round(L / 3.2));
+  for (let i = 0; i < trestles; i++) {
+    const x = -L / 2 + (L / trestles) * (i + 0.5);
+    ctx.root.add(mesh(cbox(0.14, H - topT, W - 0.7, 0.014), MAT.deskFrame, { pos: [x, (H - topT) / 2, 0] }));
+    ctx.root.add(mesh(sbox(0.34, 0.05, W - 0.5), MAT.deskFrame, { pos: [x, 0.025, 0], cast: false }));
+  }
+  // Cable spine down the centre, plus the row of grommet caps.
+  ctx.root.add(mesh(sbox(L - 1.2, 0.05, 0.22), MAT.plastic, { pos: [0, H - 0.28, 0], cast: false }));
+  if (ctx.variant === 0) {
+    const ports = Math.max(2, Math.round(L / 1.6));
+    for (let i = 0; i < ports; i++) {
+      ctx.root.add(mesh(disc(0.055, 8), MAT.chrome, {
+        pos: [-L / 2 + (L / ports) * (i + 0.5), H + 0.003, 0], cast: false,
+      }));
+    }
+  }
+
+  const gz = W / 2 - 0.03;
+  ctx.grinds.push({ start: [-L / 2 + 0.3, H + 0.02, gz], end: [L / 2 - 0.3, H + 0.02, gz] });
+  ctx.grinds.push({ start: [-L / 2 + 0.3, H + 0.02, -gz], end: [L / 2 - 0.3, H + 0.02, -gz] });
+  collide(ctx, [L, H, W], [0, H / 2, 0]);
+  return finish(ctx, o, { size: [L, H, W], offset: [0, H / 2, 0] });
+}
+
+/**
+ * SERVER RACK — a 42U cabinet, perforated door, blue status LEDs and a cable comb overhead.
+ *
+ * Racks are placed in ROWS with a skateable aisle between them, which is what makes the
+ * server room the level's technical section: a slalom you take at speed with a hard cold
+ * light on it, not a room you get stuck in. ~330 tris.
+ */
+export function makeServerRack(o?: PropOptions): THREE.Group {
+  const ctx = begin('serverRack', o, 411);
+  const r = ctx.rng;
+  const W = 0.62;
+  const D = 1.02;
+  const H = 2.0;
+
+  ctx.root.add(mesh(cbox(W, H, D, 0.018, [1, 3]), MAT.chairShell, { pos: [0, H / 2, 0] }));
+  // Perforated front door, set back so the frame reads.
+  ctx.root.add(mesh(sbox(W - 0.08, H - 0.14, 0.02), MAT.plastic, { pos: [0, H / 2, D / 2 + 0.005], cast: false }));
+  // The kit inside: 1U slabs with status LEDs. Two emissive rows, not twenty — the LEDs are
+  // one emissive quad per band, which is what keeps the room inside its draw-call budget.
+  const bands = ctx.variant === 0 ? 7 : 4;
+  for (let i = 0; i < bands; i++) {
+    const y = 0.28 + i * ((H - 0.5) / bands);
+    ctx.root.add(mesh(sbox(W - 0.14, 0.055, 0.02), MAT.cabinetGrey, { pos: [0, y, D / 2 + 0.018], cast: false }));
+    if (r.chance(0.75)) {
+      ctx.root.add(mesh(quad(W - 0.30, 0.018), ['screenOn', { emissive: SCREEN_TINTS[r.chance(0.75) ? 0 : 1] }], {
+        pos: [0, y, D / 2 + 0.032], cast: false, receive: false,
+      }));
+    }
+  }
+  // Plinth and the overhead cable comb.
+  ctx.root.add(mesh(sbox(W + 0.04, 0.06, D + 0.04), MAT.deskFrame, { pos: [0, 0.03, 0], cast: false }));
+  ctx.root.add(mesh(sbox(W + 0.10, 0.05, 0.16), MAT.deskFrame, { pos: [0, H + 0.06, 0], cast: false }));
+
+  ctx.lights.push({ kind: 'point', offset: [0, H * 0.55, D / 2 + 0.5], color: 0x5aa2e8, intensity: 0.7, distance: 4.0 });
+  collide(ctx, [W, H, D], [0, H / 2, 0]);
+  return finish(ctx, o, { size: [W, H, D], offset: [0, H / 2, 0] });
+}
+
+export interface StairFlightOptions extends PropOptions {
+  /** Number of treads. */
+  steps?: number;
+  /** Clear width of the flight, metres. */
+  width?: number;
+  /** Total rise, metres. Riser height must stay under Game.STEP_HEIGHT — see below. */
+  rise?: number;
+  /** Total run along +Z, metres. The flight climbs toward +Z. */
+  run?: number;
+  /** Handrail down the middle of the flight as well as both sides. */
+  centreRail?: boolean;
+}
+
+/**
+ * STAIR FLIGHT — a classic Tony Hawk stair set, and this level's way upstairs.
+ *
+ * THE RISER HEIGHT IS THE WHOLE DESIGN. Game.STEP_HEIGHT is 0.42 m: anything shorter than
+ * that the casters roll straight up instead of stopping on. So a flight whose risers are
+ * 0.30 m is RIDEABLE IN BOTH DIRECTIONS with no special-case physics anywhere — you can push
+ * up it, and you can bomb down it and take the whole set as a gap. A flight with 0.45 m
+ * risers would be a wall with a texture on it.
+ *
+ * Each step is modelled and collided as a SOLID BLOCK from the floor up, not as a tread on
+ * stringers, so there is no cavity under the stair for the chair to end up inside.
+ *
+ * The handrails are the real prize: three unbroken sloped grinds the length of the flight,
+ * which is the single most-recognisable trick line in the genre. ~700 tris at 14 steps.
+ */
+export function makeStairFlight(o?: StairFlightOptions): THREE.Group {
+  const ctx = begin('stairFlight', o, 413);
+  const n = Math.max(2, Math.round(o?.steps ?? 14));
+  const W = o?.width ?? 5.4;
+  const rise = o?.rise ?? 4.2;
+  const run = o?.run ?? 10.0;
+  const r = rise / n;
+  const g = run / n;
+  const uv: [number, number] = [Math.max(1, Math.round(W / 1.4)), 1];
+
+  for (let i = 0; i < n; i++) {
+    const h = (i + 1) * r;
+    const z = -run / 2 + g * (i + 0.5);
+    ctx.root.add(mesh(cbox(W, h, g, 0.012, uv), MAT.ledgeStone, { pos: [0, h / 2, z] }));
+    // Steel nosing on every tread: the bright line that makes a stair set legible, and the
+    // thing the casters actually clatter over.
+    ctx.root.add(mesh(sboxUV(W, 0.022, 0.05, Math.round(W), 1), MAT.grindSteel, {
+      pos: [0, h + 0.01, z - g / 2 + 0.025], cast: false,
+    }));
+    collide(ctx, [W, h, g], [0, h / 2, z]);
+  }
+
+  // ---- handrails: sloped grinds the full length of the flight ----
+  const slope = Math.atan2(rise, run);
+  const railLen = Math.hypot(rise, run);
+  const railY = (z: number) => ((z + run / 2) / run) * rise;
+  const RAIL_UP = 0.92;
+  const xs: number[] = [-(W / 2 - 0.16), W / 2 - 0.16];
+  if (o?.centreRail ?? true) xs.push(0);
+
+  for (const x of xs) {
+    ctx.root.add(mesh(cyl(0.035, 0.035, railLen, 8), MAT.railSteel, {
+      pos: [x, rise / 2 + RAIL_UP, 0], rot: [Math.PI / 2 - slope, 0, 0],
+    }));
+    const posts = Math.max(2, Math.round(run / 2.0));
+    for (let i = 0; i <= posts; i++) {
+      const z = -run / 2 + (run / posts) * i;
+      const base = railY(z);
+      ctx.root.add(mesh(sbox(0.05, RAIL_UP, 0.05), MAT.railSteel, { pos: [x, base + RAIL_UP / 2, z], cast: false }));
+    }
+    ctx.grinds.push({
+      start: [x, RAIL_UP + 0.04, -run / 2 + 0.4],
+      end: [x, rise + RAIL_UP + 0.04, run / 2 - 0.4],
+    });
+  }
+
+  return finish(ctx, o, { size: [W, rise, run], offset: [0, rise / 2, 0] });
+}
+
+export interface ElevatorCarOptions extends PropOptions {
+  width?: number;
+  depth?: number;
+  height?: number;
+}
+
+/**
+ * ELEVATOR CAR — the platform half of the level's working lift.
+ *
+ * ONLY THE FLOOR PAN COLLIDES, and it is 0.12 m thick with its top surface at the car's
+ * origin. The three walls and the ceiling are geometry only. That is not laziness: a car with
+ * solid walls is a 2 x 2 m box the player can be carried up inside and cannot leave, which is
+ * the exact defect this whole pass exists to remove. With open walls the lift is a moving
+ * platform you can ride, ollie off, or fall off — and never a cell.
+ *
+ * The caller owns the motion (see OfficeInterior.movers). ~300 tris.
+ */
+export function makeElevatorCar(o?: ElevatorCarOptions): THREE.Group {
+  const ctx = begin('elevatorCar', o, 415);
+  const W = o?.width ?? 3.4;
+  const D = o?.depth ?? 3.4;
+  const H = o?.height ?? 2.5;
+  const uv: [number, number] = [Math.round(W), 1];
+
+  // Floor pan — the only collider.
+  ctx.root.add(mesh(cbox(W, 0.12, D, 0.012, uv), MAT.chrome, { pos: [0, -0.06, 0] }));
+  ctx.root.add(mesh(quad(W - 0.1, D - 0.1), MAT.plastic, { pos: [0, 0.005, 0], rot: [-Math.PI / 2, 0, 0], cast: false }));
+  // Three brushed-steel walls, NON-COLLIDING. Open side faces +Z.
+  const panels: [number, number, number, number][] = [
+    [0, -(D / 2 - 0.03), W, 0],
+    [-(W / 2 - 0.03), 0, D, Math.PI / 2],
+    [W / 2 - 0.03, 0, D, Math.PI / 2],
+  ];
+  for (const [px, pz, len, rot] of panels) {
+    ctx.root.add(mesh(cbox(len, H, 0.06, 0.01, [Math.round(len), 2]), MAT.chrome, {
+      pos: [px, H / 2, pz], rot: [0, rot, 0], cast: false,
+    }));
+    ctx.root.add(mesh(cbox(len - 0.1, 0.05, 0.09, 0.01), MAT.railSteel, {
+      pos: [px, 0.98, pz], rot: [0, rot, 0], cast: false,
+    }));
+  }
+  // Lit ceiling raft and the floor-indicator strip: the two things that read as a lift.
+  ctx.root.add(mesh(cbox(W - 0.2, 0.08, D - 0.2, 0.01), MAT.plastic, { pos: [0, H - 0.04, 0], cast: false }));
+  ctx.root.add(mesh(quad(W - 0.36, D - 0.36), ['screenOn', { emissive: 0xfff0d0 }], {
+    pos: [0, H - 0.09, 0], rot: [Math.PI / 2, 0, 0], cast: false, receive: false,
+  }));
+  ctx.root.add(mesh(quad(0.44, 0.14), ['screenOn', { emissive: SCREEN_TINTS[0] }], {
+    pos: [0, 1.9, -(D / 2 - 0.07)], cast: false, receive: false,
+  }));
+
+  ctx.lights.push({ kind: 'point', offset: [0, H - 0.35, 0], color: 0xffd9a0, intensity: 1.1, distance: 6.0 });
+  collide(ctx, [W, 0.12, D], [0, -0.06, 0]);
+  return finish(ctx, o, { size: [W, 0.12, D], offset: [0, -0.06, 0] });
+}
+
+/**
+ * ELEVATOR DOOR SET — the wall dressing that tells the player where the lift is, from range.
+ * Brushed-steel leaves, an architrave, a call panel and a lit floor indicator. Never collides:
+ * it is a facing on a wall the level has already built. ~160 tris.
+ */
+export function makeElevatorDoors(o?: PropOptions): THREE.Group {
+  const ctx = begin('elevatorDoors', o, 417);
+  ctx.root.userData.mount = 'wall';
+  const W = 2.2;
+  const H = 2.5;
+
+  ctx.root.add(mesh(cbox(W + 0.3, H + 0.22, 0.09, 0.014, [2, 2]), MAT.railSteel, { pos: [0, (H + 0.22) / 2, 0], cast: false }));
+  for (const s of [-1, 1]) {
+    ctx.root.add(mesh(cbox(W / 2 - 0.02, H, 0.06, 0.01, [1, 3]), MAT.chrome, { pos: [s * (W / 4), H / 2, 0.05], cast: false }));
+  }
+  ctx.root.add(mesh(quad(0.5, 0.16), ['screenOn', { emissive: SCREEN_TINTS[1] }], { pos: [0, H + 0.16, 0.075], cast: false, receive: false }));
+  ctx.root.add(mesh(cbox(0.16, 0.30, 0.05, 0.01), MAT.plastic, { pos: [W / 2 + 0.28, 1.15, 0.03], cast: false }));
+  ctx.root.add(mesh(quad(0.07, 0.07), ['screenOn', { emissive: 0xffb24a }], { pos: [W / 2 + 0.28, 1.20, 0.062], cast: false, receive: false }));
+  return finish(ctx, o, { size: [0, 0, 0], offset: [0, 0, 0] });
+}
+
+export interface GlazedScreenOptions extends PropOptions {
+  /** Height of the solid/glazed screen. Grind edge lands at height + 0.08. */
+  height?: number;
+}
+
+/**
+ * GLAZED SCREEN — the partition every conference room and corner office in this level is
+ * walled with: an aluminium-framed glass panel on a low solid base, with a laminate cap rail.
+ *
+ * IT IS DELIBERATELY NO TALLER THAN A CUBICLE PANEL. Full-height glazing looks better in a
+ * still and is a trap in motion: a room walled to the ceiling has exactly as many ways out as
+ * it has doorways, and a player who lands inside it at speed has to find one. At 1.32 m the
+ * screen is a grind rail on the way past and an ollie on the way out, so every glazed room in
+ * the building is escapable from any point inside it, in any direction. You can still see
+ * straight through it, which is the whole reason the glass is there. ~90 tris per 5 m.
+ */
+export function makeGlazedScreen(lengthMetres: number, o?: GlazedScreenOptions): THREE.Group {
+  const ctx = begin('glazedScreen', o, 419);
+  const L = Math.max(0.4, lengthMetres);
+  const H = o?.height ?? 1.32;
+  const capH = 0.08;
+  const top = H + capH;
+  const baseH = 0.30;
+  const uv: [number, number] = [Math.max(1, Math.round(L / 1.4)), 1];
+
+  ctx.root.add(mesh(cbox(L, baseH, 0.09, 0.012, uv), MAT.cabinetGrey, { pos: [0, baseH / 2, 0] }));
+  ctx.root.add(mesh(cbox(L - 0.06, H - baseH - 0.02, 0.035, 0.006, uv), MAT.glass, { pos: [0, baseH + (H - baseH) / 2, 0], cast: false }));
+  // Mullions every ~1.6 m, so the glazing has a frame instead of being an invisible slab.
+  const mull = Math.max(1, Math.round(L / 1.6));
+  for (let i = 0; i <= mull; i++) {
+    ctx.root.add(mesh(sbox(0.05, H - baseH, 0.075), MAT.railSteel, {
+      pos: [-L / 2 + (L / mull) * i, baseH + (H - baseH) / 2, 0], cast: false,
+    }));
+  }
+  ctx.root.add(mesh(cbox(L + 0.02, capH, 0.14, 0.018, uv), MAT.panelCap, { pos: [0, H + capH / 2, 0] }));
+
+  ctx.grinds.push({ start: [-L / 2, top, 0], end: [L / 2, top, 0] });
+  collide(ctx, [L, top, 0.14], [0, top / 2, 0]);
+  return finish(ctx, o, { size: [L, top, 0.14], offset: [0, top / 2, 0] });
+}
