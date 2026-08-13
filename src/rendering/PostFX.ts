@@ -290,16 +290,24 @@ float hash21( vec2 p ) {
 // stays invisible at a cruise and only announces itself flat out, and the radial term is
 // smoothstep(0.34, 1.0) SQUARED — genuinely nothing in the middle half of the frame,
 // ramping only into the corners where a real lens has lateral colour.
+//
+// ATTENTION BUDGET: the player reads the world through the CENTRE of the frame. The
+// previous falloff, smoothstep(0.08, 0.78, rad), started 8% out from centre — that is not
+// an edge effect, it is a WHOLE-FRAME effect that merely spares the chair. Measured, it
+// smeared 34 px at half-radius and 132 px in the corner at 15 m/s, which made the entire
+// periphery illegible exactly when the player most needs to read the space ahead. The
+// falloff below is expressed in radius NORMALISED TO THE CORNER (rad * sqrt(2)), and
+// starts at 0.55 of that, so the middle half of the frame is mathematically untouched at
+// every speed and the smear only ever lives in the outer ring where it sells velocity.
 vec3 sampleScene( vec2 uv, float jitter ) {
   vec2 dir = uv - CENTER;
   float rad = length( dir );
-  float edge = smoothstep( 0.08, 0.78, rad );
+  float edge = smoothstep( 0.55, 1.00, rad * 1.41421 );
 
-  // The square term was the bug: at a realistic cruise (uSpeed ~0.4) it produced a
-  // 0.015 px displacement, i.e. nothing. A THPS still has to sell velocity on its own,
-  // so the curve is now slightly SUPERLINEAR-in-reverse — most of the effect arrives
-  // early, then saturates.
-  float blur = pow( uSpeed, 1.25 ) * 0.16 * edge;
+  // Linear in the drive, and the drive itself saturates at 12 m/s (SpeedLines.getBlurDrive),
+  // so this reaches its ceiling below cruise and then STAYS THERE. Going faster must not
+  // buy more lens artefact — the world moving past is what carries the speed.
+  float blur = uSpeed * 0.020 * edge;
 
   float caEdge = smoothstep( 0.34, 1.0, rad );
   caEdge *= caEdge;
@@ -421,11 +429,14 @@ void main() {
     col = mix( col, vec3( mx ), uBleach * smoothstep( uBleachKnee, 1.0, bl ) );
   }
 
-  // vignette (aspect corrected, tightens slightly with speed) ------------
+  // vignette (aspect corrected) ------------------------------------------
+  // It used to tighten with speed (+0.18 at flat out). That is one more thing closing in
+  // on the player at the exact moment four other systems are also closing in, and a
+  // darkening periphery actively removes the information they steer against. Fixed now.
   float aspect = uResolution.x / max( uResolution.y, 1.0 );
   vec2 v = ( vUv - CENTER ) * vec2( aspect, 1.0 );
   float r = length( v );
-  float vigAmount = uVignette + uSpeed * 0.18;
+  float vigAmount = uVignette;
   float vig = 1.0 - vigAmount * smoothstep( 0.30, 0.95, r );
   col *= vig;
 
@@ -494,10 +505,13 @@ const GRADE_DEFAULTS = {
   // reads as a rendering artifact. 0.0 also means the shader takes the single-tap branch,
   // so a stationary frame is bit-exact.
   chromaticBase: 0.0,
-  // Corner-only, speed-squared. 0.0055 uv at rad = 1 is ~5 px of split in the extreme
-  // corner at flat out, and ~1.4 px at a 0.5 speed cruise — under the radial blur, where
-  // it reads as velocity instead of as fringing.
-  chromaticSpeed: 0.0055,
+  // ZERO. Corner CA was the fourth fullscreen effect peaking at the same instant as the
+  // radial blur, the streaks and the vignette tighten, and it is the one of the four that
+  // adds no velocity information at all — it only degrades the edge of the frame. With
+  // both chroma terms at zero the shader takes the single-tap branch and the frame is
+  // bit-exact clean at EVERY speed, not just at rest. The radial blur alone carries the
+  // lens read, and only in the outer ring.
+  chromaticSpeed: 0.0,
   // Highlight path-to-white. Knee sits above the amber floor pools (luma ~0.55-0.6) so
   // the warm/cool split survives and only genuinely blown surfaces bleach.
   bleach: 0.72,

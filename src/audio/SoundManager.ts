@@ -187,6 +187,23 @@ export class SoundManager {
   private intensity = 0;
   /** Layer levels are only committed at a bar line; these are the pending ones. */
   private pendingLevels = { keys: 0, lead: 0, tension: 0, bass: 1 };
+  /** What the last bar line agreed to. The arrangement only changes on a bar. */
+  private committed = { keys: 0, lead: 0, tension: 0, bass: 1 };
+  /**
+   * The committed arrangement after the legibility trims — what the mixer is
+   * actually at, and what decides whether a part gets NOTES scheduled at all.
+   */
+  private mix = { keys: 0, lead: 0, tension: 0, bass: 1 };
+  /** Last value written to each gain node, so a settled frame writes nothing. */
+  private written = { keys: -1, lead: -1, tension: -1, bass: -1 };
+  /**
+   * 0..1 — how much of the SFX channel is currently spoken for by sounds the
+   * player is actively steering with. The grind bed is the whole reason this
+   * exists: it is a continuous, mid-band, balance-carrying sound, and if the
+   * comping keys and the lead hook are sitting on top of it the player cannot
+   * hear the thing they are balancing on.
+   */
+  private clarity = 0;
 
   private prevComboOpen = false;
   /** True once a chase got properly hot; gates the one "lost them" cadence. */
@@ -377,7 +394,12 @@ export class SoundManager {
     const comboDrive = s.comboOpen
       ? clamp01(0.30 + 0.62 * Math.log(Math.max(1, s.multiplier)) / Math.log(28))
       : 0;
-    const speedDrive = clamp01((s.speed - 4) / 12) * 0.35;
+    // Speed must not be able to ADD a layer on its own. The old curve reached
+    // 0.32 at 15 m/s, which crosses the 0.30 keys threshold, so simply going
+    // fast stacked another part onto the mix at exactly the moment every other
+    // system in the game was also peaking. Capped at 0.28 it can still push the
+    // arrangement towards a layer, but only a combo or a chase can open one.
+    const speedDrive = clamp01((s.speed - 4) / 9) * 0.28;
     const target = clamp01(Math.max(comboDrive, s.heat, speedDrive));
 
     // Rise fast (the music should react), fall slow (no flapping between layers).
@@ -400,6 +422,62 @@ export class SoundManager {
     const heatTension = s.heat > 0.4 ? clamp01((s.heat - 0.4) / 0.4) * 0.85 : 0;
     const comboTension = i > 0.86 ? clamp01((i - 0.86) / 0.12) * 0.55 : 0;
     this.pendingLevels.tension = Math.max(heatTension, comboTension);
+
+    // ---- the mix's share of the attention budget ---------------------------
+    // Rise fast so the grind is legible the instant you lock on; fall slowly so
+    // the band comes back in over a bar rather than snapping back.
+    const need = Math.max(
+      s.grinding ? 1 : 0,
+      s.comboOpen ? clamp01((s.multiplier - 6) / 10) * 0.6 : 0,
+    );
+    const ctau = need > this.clarity ? 0.15 : 0.6;
+    this.clarity += (need - this.clarity) * (1 - Math.exp(-dt / ctau));
+    this.applyMix();
+  }
+
+  /**
+   * Push the committed arrangement through the legibility trims and into the
+   * mixer. Two rules, and they are the same rule the visuals are getting:
+   *
+   *   1. When the player is riding something they have to hear (the grind bed,
+   *      a big combo riser), the parts that share its register step back.
+   *   2. The chase layer and the lead hook may not both be at full. A chase is
+   *      already the loudest thing the arrangement can say; adding the hook on
+   *      top does not make it more urgent, it makes it less legible.
+   *
+   * A trimmed-away part is not merely quiet: scheduleStep stops writing its
+   * notes at all, so the voice count comes down with the level.
+   */
+  private applyMix(): void {
+    const c = this.committed;
+    const cl = this.clarity;
+    const tensionMask = Math.min(1, c.tension / 0.55);
+
+    this.mix.bass = c.bass;
+    this.mix.tension = c.tension * (1 - 0.25 * cl);
+    this.mix.keys = c.keys * (1 - 0.45 * cl) * (1 - 0.30 * tensionMask);
+    this.mix.lead = c.lead * (1 - 0.70 * cl) * (1 - 0.55 * tensionMask);
+
+    const buses = proceduralSounds.buses;
+    if (!buses) return;
+    const t = buses.ctx.currentTime;
+    // 120 ms: long enough not to click, short enough to feel deliberate.
+    if (Math.abs(this.mix.keys - this.written.keys) > 0.01) {
+      this.written.keys = this.mix.keys;
+      this.keysGain?.gain.setTargetAtTime(this.mix.keys, t, 0.12);
+    }
+    if (Math.abs(this.mix.lead - this.written.lead) > 0.01) {
+      this.written.lead = this.mix.lead;
+      this.leadGain?.gain.setTargetAtTime(this.mix.lead, t, 0.12);
+    }
+    if (Math.abs(this.mix.tension - this.written.tension) > 0.01) {
+      this.written.tension = this.mix.tension;
+      this.tensionGain?.gain.setTargetAtTime(this.mix.tension, t, 0.15);
+    }
+    if (Math.abs(this.mix.bass - this.written.bass) > 0.01) {
+      this.written.bass = this.mix.bass;
+      this.bassGain?.gain.setTargetAtTime(this.mix.bass, t, 0.12);
+    }
   }
 
   /** Was a combo open on the previous director frame. */
@@ -443,11 +521,14 @@ export class SoundManager {
   /** Commit staged layer levels and re-roll the decorations at phrase starts. */
   private onBarLine(ctx: AudioContext, bar: number): void {
     const t = ctx.currentTime;
-    // 120 ms crossfade: long enough not to click, short enough to feel deliberate.
-    this.keysGain?.gain.setTargetAtTime(this.pendingLevels.keys, t, 0.12);
-    this.leadGain?.gain.setTargetAtTime(this.pendingLevels.lead, t, 0.12);
-    this.tensionGain?.gain.setTargetAtTime(this.pendingLevels.tension, t, 0.15);
-    this.bassGain?.gain.setTargetAtTime(this.pendingLevels.bass, t, 0.12);
+    // The arrangement decision lands here, on the bar. The crossfade itself is
+    // applyMix()'s job, because the legibility trims move between bar lines and
+    // the grind must not have to wait two seconds to be heard.
+    this.committed.keys = this.pendingLevels.keys;
+    this.committed.lead = this.pendingLevels.lead;
+    this.committed.tension = this.pendingLevels.tension;
+    this.committed.bass = this.pendingLevels.bass;
+    this.applyMix();
 
     // Tempo only moves at a bar line, so the delay time and the grid stay sane.
     this.bpm += (this.targetBpm - this.bpm) * 0.5;
@@ -517,18 +598,18 @@ export class SoundManager {
     // ---------------- keys -------------------------------------------------
     // Off-beat comping on the "and" of 2 and the "and" of 4: the classic funk
     // placement. Landing chords on the beat would fight the kick.
-    if (this.pendingLevels.keys > 0.01) {
+    if (this.mix.keys > 0.02) {
       if (s === 6 || s === 14) this.keyStab(ctx, t, chord, s === 6 ? 0.85 : 0.6);
       else if (s === 3 && r() < 0.25) this.keyStab(ctx, t, chord, 0.35);
     }
 
     // ---------------- lead -------------------------------------------------
-    if (this.pendingLevels.lead > 0.01 && this.decor.leadThisPhrase) {
+    if (this.mix.lead > 0.02 && this.decor.leadThisPhrase) {
       this.scheduleLead(ctx, t, s, bar, chord);
     }
 
     // ---------------- tension ---------------------------------------------
-    if (this.pendingLevels.tension > 0.01) {
+    if (this.mix.tension > 0.02) {
       if (s % 2 === 0) this.ride(ctx, t, s % 4 === 0 ? 0.34 : 0.2);
       if (s === 0 && bar % 4 === 2) this.tensionPad(ctx, t, chord);
     }

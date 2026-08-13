@@ -42,6 +42,43 @@ const BOOST_SEGMENTS = 8;
 /** WANTED is a four-star system, driven by PoliceSquad.heatLevel (0..1). */
 const WANTED_STARS = 4;
 
+// ---------------------------------------------------------------------------
+// THE ATTENTION BUDGET
+// ---------------------------------------------------------------------------
+/**
+ * There is ONE attention budget and every widget spends from it. As speed rises
+ * the total amount of stuff on screen must stay flat or go DOWN — going fast in
+ * a Tony Hawk game is calm, and the world carries the speed, not the UI.
+ *
+ * So the reference material (goal list, minimap, controls) steps back as the
+ * player commits to a line, and the hero elements (STONKS, the combo readout,
+ * the speed bar) stay exactly as they are. Nothing brightens with speed.
+ */
+/** Below this the HUD is fully lit; above CALM_FULL it is fully stepped back. */
+const CALM_START = 8;    // m/s
+const CALM_FULL = 11;    // m/s
+/** How far the reference panels recede at full calm. */
+const GOALS_MIN_OPACITY = 0.15;
+const MAP_MIN_OPACITY = 0.35;
+const HINT_MIN_OPACITY = 0.18;
+/** Above this the transient popups go terse: points only, shorter, rate-limited. */
+const BUSY_SPEED = 12;   // m/s
+const POPUP_HOLD_CALM = 1500;   // ms
+const POPUP_HOLD_BUSY = 700;    // ms
+/** Two popups may never occupy the same space, so they queue behind this gap. */
+const POPUP_MIN_GAP = 600;      // ms
+const BANNER_HOLD_CALM = 2000;  // ms
+const BANNER_HOLD_BUSY = 1100;  // ms
+const DELTA_HOLD_CALM = 1500;   // ms
+const DELTA_HOLD_BUSY = 700;    // ms
+
+/**
+ * Who currently owns the one centre-stage slot under the combo card. Exactly one
+ * of these can be on screen at a time, ever; the priority order is
+ * banner > trick > spin, and it is enforced in renderStage().
+ */
+type StageOwner = 'none' | 'spin' | 'trick' | 'banner';
+
 /**
  * Unrealised-stonks thresholds for the combo readout's tension tiers.
  * Lines in ch1_office top out around 155k, so tier 4 is genuinely rare and genuinely loud.
@@ -154,6 +191,26 @@ export class HUD {
   private comboUrgent = false;
   private balanceMode: HUDBalanceMode = 'none';
   private balanceVisible = false;
+
+  // ---- attention budget ----------------------------------------------------
+  /** Last speed reported by the game, m/s. */
+  private speed = 0;
+  /** 0 = parked and reading the HUD, 1 = committed to a line. */
+  private calm = 0;
+  /** Last calm actually written to the DOM, so a settled frame writes nothing. */
+  private appliedCalm = -1;
+  /** Redraw budget for the minimap: it is the only canvas the HUD repaints. */
+  private mapAccum = 0;
+  /** Centre-stage arbitration. Exactly one tenant may be visible. */
+  private stageOwner: StageOwner = 'none';
+  private spinWanted = false;
+  private trickUntil = 0;
+  private bannerUntil = 0;
+  private lastTrickAt = -1e9;
+  /** A bank/bail banner already states the number; the ticker must not repeat it. */
+  private skipNextDelta = false;
+  /** Is a combo line open right now — the card is already naming every trick. */
+  private comboOpenNow = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -310,6 +367,10 @@ export class HUD {
       @keyframes wantedPulse { 0%,100% { color: #FFFFFF; } 50% { color: var(--red); } }
 
       /* ---- GOAL PANEL (top-right, under WANTED) -------------------------- */
+      /* The biggest block of standing text on screen, and it is reference
+         material: you read it between lines, never during one. It fades out as
+         the player commits to speed (see applyCalm) — 0.4 s, slow enough that
+         it reads as the HUD stepping back rather than as a flicker. */
       .hud-goals {
         position: absolute;
         top: calc(var(--u) * 6.4);
@@ -317,6 +378,7 @@ export class HUD {
         width: calc(var(--u) * 22);
         padding: calc(var(--u) * 0.55) calc(var(--u) * 0.7) calc(var(--u) * 0.55);
         text-align: left;
+        transition: opacity 0.4s ease-out;
       }
       .hud-goals-head {
         display: flex;
@@ -767,7 +829,7 @@ export class HUD {
         transform: translateX(-50%);
         padding: calc(var(--u) * 0.3);
         opacity: 0;
-        transition: opacity 0.3s ease-out;
+        transition: opacity 0.4s ease-out;
       }
       .hud-map.active { opacity: 1; }
       .hud-map canvas {
@@ -778,13 +840,34 @@ export class HUD {
         background: rgba(0,0,0,0.42);
       }
 
-      /* ---- transient centre elements ------------------------------------- */
-      .hud-spin-counter {
+      /* ---- THE CENTRE STAGE ----------------------------------------------
+         Spin counter, trick popup and banner all live in ONE slot, directly
+         under the combo card. Two of them can never be on screen at once (see
+         renderStage), and the slot sits at 14% of frame height so no transient
+         text ever lands in the 30%..62% band the player reads the direction of
+         travel out of. Before this they sat at 30% / 41% / 52% — three separate
+         pieces of text stacked over the chair, at exactly the moment the player
+         most needed to see where they were going. */
+      /* A zero-size anchor: all three tenants are absolutely positioned on the
+         same point, so whichever one is showing sits at exactly the same height
+         and a hidden one never reserves space that pushes the next one down. */
+      .hud-stage {
         position: absolute;
-        top: 30%;
+        top: calc(var(--u) * 10.2);
         left: 50%;
+        width: 0;
+        height: 0;
+      }
+      .hud-stage > * {
+        position: absolute;
+        top: 0;
+        left: 0;
         transform: translateX(-50%);
-        font-size: calc(var(--u) * 3.2);
+        text-align: center;
+        white-space: nowrap;
+      }
+      .hud-spin-counter {
+        font-size: calc(var(--u) * 2.6);
         font-weight: 900;
         color: var(--gold);
         text-shadow: 0 0 calc(var(--u) * 1.2) rgba(255,192,30,0.8), 0 3px 6px rgba(0,0,0,0.9);
@@ -799,10 +882,6 @@ export class HUD {
       }
 
       .hud-trick-popup {
-        position: absolute;
-        top: 41%;
-        left: 50%;
-        transform: translateX(-50%);
         text-align: center;
         opacity: 0;
         transition: opacity 0.3s;
@@ -813,23 +892,23 @@ export class HUD {
         50% { transform: translateX(-50%) scale(1.18); }
         100% { transform: translateX(-50%) scale(1); opacity: 1; }
       }
-      .hud-trick-name { font-size: calc(var(--u) * 2.1); font-weight: 900; color: #5FE3FF; }
-      .hud-trick-points { font-size: calc(var(--u) * 1.4); font-weight: 800; color: var(--green); }
+      .hud-trick-name { font-size: calc(var(--u) * 1.85); font-weight: 900; color: #5FE3FF; }
+      .hud-trick-points { font-size: calc(var(--u) * 1.3); font-weight: 800; color: var(--green); }
+      /* At speed the name line goes away: the combo card is already printing the
+         trick string, so the popup was saying it twice in two places. */
+      .hud-trick-popup.terse .hud-trick-name { display: none; }
+      .hud-trick-popup.terse .hud-trick-points { font-size: calc(var(--u) * 1.55); }
 
       .hud-goal-popup {
-        position: absolute;
-        top: 52%;
-        left: 50%;
-        transform: translate(-50%, -50%) scale(0.7);
         font-size: calc(var(--u) * 2.1);
         font-weight: 900;
         letter-spacing: calc(var(--u) * 0.08);
         color: var(--green);
         opacity: 0;
+        transform: translateX(-50%) scale(0.7);
         transition: opacity 0.25s ease-out, transform 0.25s ease-out;
-        text-align: center;
       }
-      .hud-goal-popup.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      .hud-goal-popup.show { opacity: 1; transform: translateX(-50%) scale(1); }
       .hud-goal-popup small {
         display: block;
         font-size: calc(var(--u) * 1.05);
@@ -906,6 +985,7 @@ export class HUD {
         line-height: 1.55;
         padding: calc(var(--u) * 0.4) calc(var(--u) * 0.7);
         max-width: calc(var(--u) * 22);
+        transition: opacity 0.4s ease-out;
       }
     `;
     document.head.appendChild(style);
@@ -1052,12 +1132,15 @@ export class HUD {
     this.mapCtx = this.mapCanvas.getContext('2d') as CanvasRenderingContext2D;
     hud.appendChild(this.mapWrap);
 
-    // ---- Spin counter ----------------------------------------------------
+    // ---- THE CENTRE STAGE ------------------------------------------------
+    // One slot, three tenants, never more than one on screen. See renderStage().
+    const stage = document.createElement('div');
+    stage.className = 'hud-stage';
+
     this.spinCounterElement = document.createElement('div');
     this.spinCounterElement.className = 'hud-spin-counter';
-    hud.appendChild(this.spinCounterElement);
+    stage.appendChild(this.spinCounterElement);
 
-    // ---- Trick popup -----------------------------------------------------
     this.trickPopup = document.createElement('div');
     this.trickPopup.className = 'hud-trick-popup';
     this.trickPopup.innerHTML = `
@@ -1066,12 +1149,13 @@ export class HUD {
     `;
     this.trickName = this.trickPopup.querySelector('.hud-trick-name') as HTMLElement;
     this.trickPoints = this.trickPopup.querySelector('.hud-trick-points') as HTMLElement;
-    hud.appendChild(this.trickPopup);
+    stage.appendChild(this.trickPopup);
 
-    // ---- Goal-complete banner -------------------------------------------
     this.goalPopup = document.createElement('div');
     this.goalPopup.className = 'hud-goal-popup';
-    hud.appendChild(this.goalPopup);
+    stage.appendChild(this.goalPopup);
+
+    hud.appendChild(stage);
 
     // ---- SPEED bar (bottom-left) ----------------------------------------
     this.speedChartElement = document.createElement('div');
@@ -1157,6 +1241,11 @@ export class HUD {
       this.suppressDelta = false;
       this.displayedScore = score;
       this.scoreValue.textContent = '$' + Math.round(score).toLocaleString();
+    } else if (this.skipNextDelta) {
+      // A bank or a bail has just put the very same number on the centre stage.
+      // Printing it a second time under the hero counter is two things competing
+      // to tell the player one thing. The counter still rolls to the new value.
+      this.skipNextDelta = false;
     } else if (Math.abs(delta) >= 1) {
       this.showDelta(delta);
     }
@@ -1181,7 +1270,7 @@ export class HUD {
     if (this.deltaTimer) clearTimeout(this.deltaTimer);
     this.deltaTimer = setTimeout(() => {
       this.deltaElement.classList.remove('show');
-    }, 1500);
+    }, this.speed > BUSY_SPEED ? DELTA_HOLD_BUSY : DELTA_HOLD_CALM);
 
     if (this.flashTimer) clearTimeout(this.flashTimer);
     this.flashTimer = setTimeout(() => {
@@ -1191,7 +1280,14 @@ export class HUD {
   }
 
   /**
-   * Update the SPEED bar (segmented, bottom-left).
+   * Update the SPEED bar (segmented, bottom-left) — and, because this is the one
+   * per-frame call that knows how fast the player is going, drive the whole HUD's
+   * attention budget from it.
+   *
+   * The speed bar itself is deliberately the ONLY element that gets louder with
+   * speed: it is the one widget whose entire job is to report speed. Everything
+   * else pays for it by receding.
+   *
    * @param speed - current speed (0–20 typical)
    */
   setSpeed(speed: number): void {
@@ -1204,6 +1300,48 @@ export class HUD {
       const frac = (i + 1) / SPEED_SEGMENTS;
       const cls = 'hud-seg' + (on ? ' on' + (frac > 0.85 ? ' hot' : frac > 0.65 ? ' warm' : '') : '');
       if (seg.className !== cls) seg.className = cls;
+    }
+
+    this.speed = Number.isFinite(speed) ? speed : 0;
+    this.calm = Math.max(0, Math.min(1, (this.speed - CALM_START) / (CALM_FULL - CALM_START)));
+    this.applyCalm();
+  }
+
+  /** Speed the HUD is budgeting against. Read by tools/hud-shot.mjs. */
+  get attentionSpeed(): number { return this.speed; }
+  /** 0 = everything lit, 1 = reference panels stepped back. */
+  get attentionCalm(): number { return this.calm; }
+
+  /**
+   * Push the calm level into the DOM. Quantised, so a settled frame writes
+   * nothing at all; the CSS transitions do the 0.4 s crossfade.
+   *
+   * Speed is not the only thing that makes the reference panels the wrong thing
+   * to be looking at. An open combo or a live balance meter means the player is
+   * committed and every glance is spoken for, so those hush the panels outright
+   * — which is also what stops the goal list sharing pixels with the manual
+   * meter on the right-hand side.
+   */
+  private applyCalm(): void {
+    const busy = this.comboOpenNow || this.balanceVisible ? 1 : 0;
+    const c = Math.max(this.calm, busy);
+    if (Math.abs(c - this.appliedCalm) < 0.02) return;
+    this.appliedCalm = c;
+
+    const goals = (1 - c * (1 - GOALS_MIN_OPACITY)).toFixed(3);
+    if (this.goalsElement.style.opacity !== goals) this.goalsElement.style.opacity = goals;
+
+    // Only touch the map's opacity once it has something to show; without a
+    // layout the `.active` class is absent and the inline value would reveal an
+    // empty panel.
+    if (this.mapStatic) {
+      const map = (1 - c * (1 - MAP_MIN_OPACITY)).toFixed(3);
+      if (this.mapWrap.style.opacity !== map) this.mapWrap.style.opacity = map;
+    }
+
+    if (!this.controlsHidden) {
+      const hint = (1 - c * (1 - HINT_MIN_OPACITY)).toFixed(3);
+      if (this.controlsHint.style.opacity !== hint) this.controlsHint.style.opacity = hint;
     }
   }
 
@@ -1234,22 +1372,81 @@ export class HUD {
       }
     }
 
-    if (this.mapDirty) this.drawMinimap();
+    // Expiry for the centre stage. The timers are only a backstop; this is the
+    // path that actually hands the slot back.
+    this.renderStage();
+
+    // Minimap redraw budget. The map is the only canvas the HUD repaints, and a
+    // 60 Hz arrow twitching inside a panel the player has stopped looking at is
+    // pure motion cost. Once it has faded back it repaints at 10 Hz instead.
+    if (this.mapDirty) {
+      this.mapAccum += dt;
+      if (this.calm < 0.5 || this.mapAccum >= 0.1) {
+        this.mapAccum = 0;
+        this.drawMinimap();
+      }
+    }
   }
 
   /**
-   * Show trick popup with color based on trick type
+   * Show trick popup with color based on trick type.
+   *
+   * Rate-limited and terse at speed. Measured on a realistic line, trick popups
+   * fire at 0.60/s above 14.5 m/s against 0.12/s at cruise — five times as much
+   * text arriving exactly when the player has the least attention to spare, and
+   * every word of it is ALREADY on screen in the combo card's trick string. So
+   * above BUSY_SPEED (or any time a combo is open) the name line is dropped, the
+   * hold is more than halved, and a second popup can never land on top of the
+   * one still fading.
    */
   showTrick(name: string, points: number, multiplier: number, trickType?: TrickType): void {
+    const now = performance.now();
+    const terse = this.speed > BUSY_SPEED || this.comboOpenNow;
+    if (terse && now - this.lastTrickAt < POPUP_MIN_GAP) return;
+    this.lastTrickAt = now;
+
     this.trickName.textContent = name;
     this.trickName.style.color = trickType ? TRICK_TYPE_COLORS[trickType] : '#5FE3FF';
-    this.trickPoints.textContent = `+${points} × ${multiplier}`;
+    this.trickPoints.textContent = terse
+      ? `+${Math.round(points).toLocaleString()}`
+      : `+${points} × ${multiplier}`;
+    // Terse keeps the trick TYPE by colour, which survives a glance; the name is
+    // the part the combo card is already showing.
+    this.trickPoints.style.color = terse && trickType ? TRICK_TYPE_COLORS[trickType] : '';
+    this.trickPopup.classList.toggle('terse', terse);
 
-    this.trickPopup.classList.remove('show');
-    void this.trickPopup.offsetWidth;
-    this.trickPopup.classList.add('show');
+    const hold = terse ? POPUP_HOLD_BUSY : POPUP_HOLD_CALM;
+    this.trickUntil = now + hold;
+    this.renderStage();
+    setTimeout(() => this.renderStage(), hold + 20);
+  }
 
-    setTimeout(() => { this.trickPopup.classList.remove('show'); }, 1500);
+  // -------------------------------------------------------------------------
+  // The centre stage
+  // -------------------------------------------------------------------------
+
+  /**
+   * Decide which of the three centre-stage tenants is on screen and hide the
+   * other two. Banner beats trick popup beats spin counter, always.
+   *
+   * This is the whole answer to "too much happening at once" in the middle of
+   * the frame: before, a 540° readout, a trick name and a BANKED banner could be
+   * on screen simultaneously at three different heights, all of them over the
+   * chair. Now the slot holds one thing.
+   */
+  private renderStage(): void {
+    const now = performance.now();
+    const owner: StageOwner =
+      now < this.bannerUntil ? 'banner'
+        : now < this.trickUntil ? 'trick'
+          : this.spinWanted ? 'spin'
+            : 'none';
+    if (owner === this.stageOwner) return;
+    this.stageOwner = owner;
+
+    this.goalPopup.classList.toggle('show', owner === 'banner');
+    this.trickPopup.classList.toggle('show', owner === 'trick');
+    this.spinCounterElement.classList.toggle('active', owner === 'spin');
   }
 
   /**
@@ -1284,10 +1481,12 @@ export class HUD {
         this.comboSig = '';
       }
       this.lastMultiplier = 1;
+      if (this.comboOpenNow) { this.comboOpenNow = false; this.applyCalm(); }
       return;
     }
 
     this.comboWrap.classList.add('active');
+    if (!this.comboOpenNow) { this.comboOpenNow = true; this.applyCalm(); }
 
     // --- trick string: dim history, bright newest -------------------------
     const n = state.tricks.length;
@@ -1366,12 +1565,14 @@ export class HUD {
         this.closeCombo();
         if (event.gained > 0) {
           this.showGoalBanner('BANKED', `${event.formattedGain}  ·  ${event.tricks.length} tricks`, '#3BE38B');
+          this.skipNextDelta = true;
         }
         break;
 
       case 'bail':
         this.closeCombo();
         this.showGoalBanner(event.headline, `${event.formattedForfeit}  ·  ${event.formattedLoss} banked`, '#FF5A3C');
+        this.skipNextDelta = true;
         break;
 
       case 'tierReached':
@@ -1520,11 +1721,17 @@ export class HUD {
       small.textContent = sub;
       this.goalPopup.appendChild(small);
     }
+    // The banner outranks everything else on the centre stage, and taking the
+    // slot also evicts whatever trick popup was still fading there.
+    const hold = this.speed > BUSY_SPEED ? BANNER_HOLD_BUSY : BANNER_HOLD_CALM;
+    this.bannerUntil = performance.now() + hold;
+    this.trickUntil = 0;
     this.goalPopup.classList.remove('show');
-    void this.goalPopup.offsetWidth;
-    this.goalPopup.classList.add('show');
+    void this.goalPopup.offsetWidth;   // restart the entry transition on a re-fire
+    this.stageOwner = 'none';
+    this.renderStage();
     if (this.goalPopupTimer) clearTimeout(this.goalPopupTimer);
-    this.goalPopupTimer = setTimeout(() => this.goalPopup.classList.remove('show'), 2000);
+    this.goalPopupTimer = setTimeout(() => this.renderStage(), hold + 20);
   }
 
   // -------------------------------------------------------------------------
@@ -1602,6 +1809,7 @@ export class HUD {
     if (visible === this.balanceVisible) return;
     this.balanceVisible = visible;
     this.applyBalanceVisibility();
+    this.applyCalm();
   }
 
   private applyBalanceVisibility(): void {
@@ -1647,6 +1855,8 @@ export class HUD {
     this.mapStatic = null;
     this.mapTransform = null;
     this.mapWrap.classList.remove('active');
+    this.mapWrap.style.opacity = '';
+    this.appliedCalm = -1;      // re-apply the fade once there is a map to fade
     if (!prints || prints.length === 0) return;
 
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -1754,7 +1964,20 @@ export class HUD {
     this.comboRiskText = '';
     this.comboClockText = '';
     this.comboRisk.classList.remove('show');
-    this.trickPopup.classList.remove('show');
+    this.comboOpenNow = false;
+
+    this.speed = 0;
+    this.calm = 0;
+    this.appliedCalm = -1;
+    this.skipNextDelta = false;
+    this.spinWanted = false;
+    this.trickUntil = 0;
+    this.bannerUntil = 0;
+    this.lastTrickAt = -1e9;
+    this.stageOwner = 'none';
+    this.trickPopup.classList.remove('show', 'terse');
+    this.goalPopup.classList.remove('show');
+    this.spinCounterElement.classList.remove('active');
 
     this.balanceVisible = false;
     this.balanceMode = 'none';
@@ -1777,6 +2000,9 @@ export class HUD {
 
     this.wantedStars = -1;
     this.applyStars(0);
+
+    // Last, once every hush input above has been cleared.
+    this.applyCalm();
   }
 
   /**
@@ -1790,13 +2016,14 @@ export class HUD {
       const newText = `${displayDegrees}°`;
       if (this.spinCounterElement.textContent !== newText) {
         this.spinCounterElement.textContent = newText;
-        this.spinCounterElement.classList.remove('active');
-        void this.spinCounterElement.offsetWidth;
-        this.spinCounterElement.classList.add('active');
       }
+      this.spinWanted = true;
     } else {
-      this.spinCounterElement.classList.remove('active');
+      this.spinWanted = false;
     }
+    // The spin counter is the lowest-priority tenant of the centre stage: it is
+    // live information, but a trick popup or a bank banner outranks it.
+    this.renderStage();
   }
 
   /**

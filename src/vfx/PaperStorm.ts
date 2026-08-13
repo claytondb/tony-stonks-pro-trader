@@ -171,6 +171,31 @@ const KICK_SPIN_BASE = 6.0;
 const KICK_SPIN_PER_MS = 0.9;
 
 /**
+ * ATTENTION BUDGET — CEILINGS ON THE WAKE.
+ *
+ * Every term above is LINEAR IN CHAIR SPEED and none of them had a ceiling, so at 15 m/s
+ * the wake was throwing paper 10.9 m/s straight up, spinning it at 19.5 rad/s and swirling
+ * it at 4.5 m/s. That does not read as a wake — it reads as sheets flying ACROSS THE VIEW,
+ * through the exact part of the frame the player needs to see the next feature in, and it
+ * gets worse the faster they go. Capped here at roughly their 11-12 m/s values: paper still
+ * boils up behind the chair at cruise, it just stops escalating past it. Litter belongs in
+ * the wake, not in the windscreen.
+ */
+const KICK_LIFT_MAX = 6.5;         // m/s updraft in the wake core (was 10.9 at 15 m/s)
+const KICK_DRAG_MAX = 6.0;         // m/s of along-travel airflow  (was 7.5)
+const KICK_SWIRL_MAX = 3.0;        // m/s of vortex tangent        (was 4.5)
+const KICK_INDRAW_MAX = 1.4;       // m/s of radial in-draw
+const KICK_SPIN_MAX = 12.0;        // rad/s tumble                 (was 19.5)
+
+/**
+ * Hard ceiling on how many sheets the wake is allowed to have in the air at once. Bursts
+ * (landings, smashed props) are events and are exempt — they are allowed their moment. This
+ * caps only the SUSTAINED storm, which is the part that scaled with speed: measured 18-19
+ * sheets airborne at cruise with peaks of 60 while the player was trying to read a line.
+ */
+const WAKE_AIRBORNE_CAP = 24;
+
+/**
  * A settled sheet still needs a small impulse to break contact with the floor and start
  * tumbling; the wind does the actual lifting from there.
  */
@@ -476,12 +501,19 @@ export class PaperStorm {
     const wakeOn = hs >= WAKE_MIN_SPEED;
     let fx = 0, fz = 0, rx = 0, rz = 0;
     let wakeLen = 0, wakeHalf = 0, sf = 0;
+    // Wake air velocities, resolved ONCE per update and capped. See the KICK_*_MAX block.
+    let kickDrag = 0, kickSwirl = 0, kickIndraw = 0, kickLift = 0, kickSpin = 0;
     if (wakeOn) {
       fx = playerVel.x / hs; fz = playerVel.z / hs;
       rx = -fz; rz = fx;                                        // right = forward x up
       wakeLen = Math.min(WAKE_LEN_MAX, WAKE_LEN_BASE + hs * WAKE_LEN_PER_MS);
       wakeHalf = Math.min(WAKE_HALF_MAX, WAKE_HALF_BASE + hs * WAKE_HALF_PER_MS);
       sf = Math.min(1.5, hs / 9);
+      kickDrag = Math.min(KICK_DRAG_MAX, hs * KICK_DRAG);
+      kickSwirl = Math.min(KICK_SWIRL_MAX, hs * KICK_SWIRL);
+      kickIndraw = Math.min(KICK_INDRAW_MAX, hs * KICK_INDRAW);
+      kickLift = Math.min(KICK_LIFT_MAX, KICK_LIFT_BASE + hs * KICK_LIFT_PER_MS);
+      kickSpin = Math.min(KICK_SPIN_MAX, KICK_SPIN_BASE + hs * KICK_SPIN_PER_MS);
     }
     const ppx = playerPos.x, ppy = playerPos.y, ppz = playerPos.z;
 
@@ -526,11 +558,11 @@ export class PaperStorm {
                     tanx = -radz; tanz = radx;
                   }
                   const sgn = side >= 0 ? 1 : -1;
-                  const swirl = hs * KICK_SWIRL * strength * sgn;
-                  const indraw = hs * KICK_INDRAW * strength;
-                  wkx = fx * hs * KICK_DRAG * strength + tanx * swirl - radx * indraw;
-                  wkz = fz * hs * KICK_DRAG * strength + tanz * swirl - radz * indraw;
-                  wky = (KICK_LIFT_BASE + hs * KICK_LIFT_PER_MS) * strength;
+                  const swirl = kickSwirl * strength * sgn;
+                  const indraw = kickIndraw * strength;
+                  wkx = fx * kickDrag * strength + tanx * swirl - radx * indraw;
+                  wkz = fz * kickDrag * strength + tanz * swirl - radz * indraw;
+                  wky = kickLift * strength;
                 }
               }
             }
@@ -540,13 +572,19 @@ export class PaperStorm {
         // A settled sheet — or one halfway through flopping down — gets picked back up.
         // Re-launching mid-settle matters: without it, paper that is 300 ms from resting
         // visibly ignores a chair passing straight over it.
-        if ((st === STATE_RESTING || st === STATE_SETTLING) && strength > DISTURB_THRESHOLD) {
+        // ...but only while the storm is under its ceiling. Once WAKE_AIRBORNE_CAP sheets
+        // are already flying, a resting sheet is left where it is: past that point another
+        // sheet adds nothing to the read and everything to the noise. Sheets already in the
+        // air (STATE_SETTLING) are still allowed to be re-caught — dropping those would
+        // make paper visibly ignore a chair passing over it, and they cost no new bodies.
+        if ((st === STATE_SETTLING || (st === STATE_RESTING && this.flying < WAKE_AIRBORNE_CAP))
+            && strength > DISTURB_THRESHOLD) {
           // Just enough to unstick it and set it tumbling — the wake wind does the lifting,
           // starting on this very step now that the sheet is being integrated.
           this.vx[i] += wkx * KICK_IMPULSE_FRACTION;
           this.vy[i] += wky * KICK_IMPULSE_FRACTION;
           this.vz[i] += wkz * KICK_IMPULSE_FRACTION;
-          const spin = (KICK_SPIN_BASE + hs * KICK_SPIN_PER_MS) * strength;
+          const spin = kickSpin * strength;
           this.wx[i] = rand(-spin, spin);
           this.wy[i] = rand(-spin, spin) * 0.7;
           this.wz[i] = rand(-spin, spin);

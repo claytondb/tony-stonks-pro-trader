@@ -292,7 +292,11 @@ export class GrindParticles {
     if (_side.lengthSq() < 1e-6) _side.set(1, 0, 0);
     else _side.normalize();
 
-    const sp = Math.max(2, speed);
+    // Clamped at BOTH ends. The ejection velocity and the fan angle are both linear in this,
+    // so an uncapped `sp` meant the rooster tail kept widening and throwing further the
+    // faster the player went — more of the screen covered, at speed, by an effect that was
+    // already reading fully at 10 m/s.
+    const sp = Math.max(2, Math.min(10, speed));
     for (let k = 0; k < count; k++) {
       const i = this.allocate();
       if (i < 0) return;
@@ -353,8 +357,12 @@ export class GrindParticles {
     if (isGrinding && grindPosition) {
       this.resolveEmitters(grindPosition, _dir);
 
-      // Density rides speed: ~150/s at a crawl, ~560/s flat out.
-      const rate = 180 + Math.min(1, speed / 15) * 620;
+      // Density rides speed, but it TOPS OUT AT 10 m/s rather than 15 and lands at 500/s
+      // instead of 800/s. Sparks are this game's signature and they stay vivid — the point
+      // is not fewer sparks, it is that the spray must stop getting denser exactly when the
+      // blur, the streaks, the paper and the shakes are all also getting louder. It reaches
+      // its full look at a normal grind speed and then holds.
+      const rate = 180 + Math.min(1, speed / 10) * 320;
       this.spawnAccumulator += dt * rate;
       let budget = 34; // cap per frame so a long stall cannot dump the whole pool at once
       while (this.spawnAccumulator >= 1 && budget-- > 0) {
@@ -403,7 +411,10 @@ export class GrindParticles {
     // Flicker hard: a steady glow reads as a lamp, a flickering one reads as friction.
     const t = this.time;
     const flick = 0.58 + 0.42 * Math.sin(t * 47.3) * Math.sin(t * 18.1 + 1.3);
-    const e = this.flareEnergy * flick * (0.55 + Math.min(1, speed / 14) * 0.45);
+    // Saturates at 10 m/s and at 0.80 rather than climbing to 1.00 at 14 — the flare drives
+    // both the sprite and a 9-unit point light, so at the top it was putting a rising
+    // orange wash over the ledge, the carpet and everything the player is reading.
+    const e = this.flareEnergy * flick * (0.55 + Math.min(1, speed / 10) * 0.25);
 
     const on = e > 0.02;
     this.flare.visible = on;

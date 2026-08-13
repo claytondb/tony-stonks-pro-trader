@@ -42,6 +42,12 @@ function damp(k: number, dt: number): number {
   return 1 - Math.exp(-k * dt);
 }
 
+/** Hermite ease between two edges, clamped. Used to taper speed-driven terms back OUT. */
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 /** Camera-local forward axis, reused for the dutch-roll quaternion. */
 const FORWARD_AXIS = /*@__PURE__*/ new THREE.Vector3(0, 0, 1);
 const UP_AXIS = /*@__PURE__*/ new THREE.Vector3(0, 1, 0);
@@ -196,18 +202,33 @@ export class CameraController {
   // `camYaw` is the boom's own yaw. It damps toward the chair's yaw and is hard-limited
   // to the framing's `yawLag` radians behind it, so it always catches up but never snaps.
   //
-  // The lag is then modulated by SPEED as well as by state: tight at walking pace, where
-  // the player is placing the chair and needs the camera to be an extension of the input,
-  // and progressively looser at speed, where the trail is the drama.
+  // The lag is then modulated by SPEED as well as by state — and the sign of that
+  // modulation is the opposite of what it used to be. The trail used to LOOSEN with speed
+  // ("the trail is the drama"): 34 deg of permitted lag at walking pace opening to 43 deg
+  // flat out, with the follow rate simultaneously dropping from 8 to 5. That is a camera
+  // that gets progressively worse at its job exactly when the player needs it most, and it
+  // is the single largest contributor to the "camera swinging around, worst once I build up
+  // speed" report. In a shipped THPS the camera gets CALMER as you go faster; the world
+  // carries the speed. So the boom now chases HARDER and is permitted LESS trail as speed
+  // rises: 34 deg -> 24 deg of lag, 8 -> 10.3 of follow rate.
   private camYaw = 0;
   private hasCamYaw = false;
 
   // ---- FOV ------------------------------------------------------------------
+  // A speed-coupled FOV ramp is a lens artefact, not world motion. 58 -> 72 deg was a
+  // 14-degree zoom-out that peaked at the same instant as the radial blur, the speed
+  // lines, the dutch roll and the shake, and the sum of those was the "too much moving on
+  // screen" report. The ramp is kept — a little breathing at the lens is a real cue — but
+  // it is now small (5 deg total) and it SATURATES at 12 m/s, below the game's realistic
+  // 14 m/s push ceiling, so the last third of the speed range adds no lens motion at all.
   private baseFOV = 58;      // vertical; ~85 deg horizontal at 16:9
-  private maxFOV = 72;       // FOV at max speed
+  private maxFOV = 63;       // FOV once the (early-saturating) speed ramp is full
+  private readonly fovFullSpeed = 12;   // m/s at which the ramp is done
   private currentFOV = 58;
   private targetFOV = 58;
-  private fovSmoothSpeed = 6;
+  // Slower than the old 6: with a shallower ramp the risk is no longer lag, it is the FOV
+  // pumping visibly every time the speed wobbles. 3.5 makes it a drift, not a breath.
+  private fovSmoothSpeed = 3.5;
   /** Everything that touches FOV is summed once, here, and clamped once. */
   private readonly minRenderFOV = 42;
   private readonly maxRenderFOV = 90;
@@ -232,6 +253,10 @@ export class CameraController {
   private shakeTimeRemaining = 0;
   private shakeClock = 0;
   private shakeOffset = new THREE.Vector3();
+  /** Seconds since the last ACCEPTED shake, for the refractory window in shake(). */
+  private shakeSinceLast = 999;
+  private lastShakeAccepted = 0;
+  private readonly shakeRefractory = 0.25;
 
   // ---- boom collision -------------------------------------------------------
   // Nothing may ever put the camera inside geometry. `occlusionProbe` is injected by the
@@ -368,6 +393,10 @@ export class CameraController {
       this.boomScale = 1;
       this.bailTimer = 0;
       this.bailBlend = 0;
+      this.shakeSinceLast = 999;
+      this.lastShakeAccepted = 0;
+      this.shakeTimeRemaining = 0;
+      this.impactZoomCurrent = 0;
       this.frame = cloneFraming(FRAMING.cruise);
     }
   }
@@ -410,12 +439,15 @@ export class CameraController {
     this.lastSpeed = speed;
     this.speedRatio = Math.min(Math.max(speed / maxSpeed, 0), 1);
 
-    // Ease, but not as a pure square — squaring meant the FOV ramp, like the radial
-    // blur, only arrived at terminal velocity and was invisible at cruise.
-    const easedRatio = Math.pow(this.speedRatio, 1.35);
+    // LINEAR to `fovFullSpeed`, then flat. It used to be `speedRatio ^ 1.35` against an
+    // 18 m/s ceiling the chair cannot actually reach, so the lens was still widening
+    // through the entire usable speed range and every carve at pace came with a zoom.
+    // Saturating early means the top of the speed range — where the player is being asked
+    // to read a line through furniture — is rendered at ONE constant focal length.
+    const fovRatio = Math.min(Math.max(speed / this.fovFullSpeed, 0), 1);
 
     // Interpolate between base and max FOV
-    this.targetFOV = this.baseFOV + (this.maxFOV - this.baseFOV) * easedRatio;
+    this.targetFOV = this.baseFOV + (this.maxFOV - this.baseFOV) * fovRatio;
   }
 
   /** 0..1 speed, shared by the FOV ramp, the framing shaping and the speed rumble. */
@@ -490,17 +522,27 @@ export class CameraController {
     // further ahead, so the frame fills with oncoming floor instead of trailing chair.
     // The look-at drops with the camera so the pitch stays near 15 deg and the ceiling
     // never takes the frame back.
+    //
+    // Both of those terms used to be twice this size, and both spend from the same budget
+    // as everything else: dropping the camera 0.30 m raises the horizon and speeds up the
+    // ground flow across the whole frame, and running the aim point a full metre ahead
+    // slides the chair down toward the bottom edge just as the player needs to judge where
+    // it is. The drop is halved, and `lookAhead` is both halved AND capped at sr = 0.72
+    // (13 m/s) so it stops growing across the part of the range the player actually
+    // spends time in — one composition to learn, not a continuously sliding one.
     const sr = this.speedRatio;
     const shape = this.frame.speedShape;
     const dist = (this.frame.dist + airPull - 0.25 * sr * shape) * this.zoomScale;
-    const height = (this.frame.height - 0.30 * sr * shape) * this.zoomScale;
+    const height = (this.frame.height - 0.15 * sr * shape) * this.zoomScale;
     const lookHeight = this.frame.lookHeight - 0.12 * sr * shape;
-    const lookAhead = this.frame.lookAhead + 1.0 * sr * shape;
+    const lookAhead = this.frame.lookAhead + 0.55 * Math.min(sr, 0.72) * shape;
 
     // ---- 3. yaw trail --------------------------------------------------------
-    // Tighter at low speed for control, looser at high speed for drama.
-    const yawFollow = this.frame.yawFollow * (1 - 0.45 * sr);
-    const yawLag = this.frame.yawLag * (1 + 0.30 * sr);
+    // Tighter and shorter-trailing the FASTER you go — see the `camYaw` note above. This
+    // is the deliberate inversion of the old curve, and it is the fix for "the camera
+    // swings around, worst once I build up speed".
+    const yawFollow = this.frame.yawFollow * (1 + 0.35 * sr);
+    const yawLag = this.frame.yawLag * (1 - 0.35 * sr);
 
     const targetRotationY = this._euler.setFromQuaternion(this.target.quaternion, 'YXZ').y;
 
@@ -766,8 +808,9 @@ export class CameraController {
     this.bailDrift = (this.rollCurrent >= 0 ? 1 : -1) * 0.6;
     this.bailTimer = duration;
     this.bailElapsed = 0;
-    // A wipeout is worth a jolt even if nothing else calls shake().
-    this.shake(0.35, 0.25);
+    // A wipeout is worth a jolt even if nothing else calls shake(), and it must survive
+    // the refractory window — a bail almost always follows an impact.
+    this.shake(0.35, 0.25, true);
   }
 
   /** True while the bail rig owns the frame. */
@@ -841,18 +884,42 @@ export class CameraController {
 
   /**
    * Shake camera (for impacts, bails)
+   *
+   * This is the single entry point for every impulse shake in the game, so it is the
+   * right place to enforce the attention budget on shake — measured on a realistic line,
+   * shakes fire 0.12/s at 11-13 m/s and 1.40/s above 14.5 m/s. Twelve times the RATE, at
+   * the moment the player most needs a stable frame to steer against. Two rules:
+   *
+   *   1. AMPLITUDE recedes with speed, `1 - 0.4 * speedRatio`. A jolt at rest is a jolt;
+   *      at pace it is a nudge, because the world is already moving.
+   *   2. A 0.25 s REFRACTORY. A second shake inside that window is dropped unless it is
+   *      at least 1.5x stronger than the one that started it, which is what turns a
+   *      cascade of small landings into one readable hit instead of continuous rumble.
+   *
+   * `force` bypasses only the refractory (never the amplitude scale) and exists for the
+   * bail, where the jolt IS the event and must land whatever preceded it.
+   *
    * @param intensity - Shake strength (0.1 = subtle, 1 = strong)
    * @param duration - Shake duration in seconds
+   * @param force - Ignore the refractory window (bails only)
    */
-  shake(intensity = 0.5, duration = 0.3): void {
+  shake(intensity = 0.5, duration = 0.3, force = false): void {
+    const scaled = intensity * (1 - 0.4 * this.speedRatio);
+    if (!force
+      && this.shakeSinceLast < this.shakeRefractory
+      && scaled < this.lastShakeAccepted * 1.5) {
+      return;
+    }
     // Only start new shake if it would be more intense
     const remaining = this.shakeDuration > 0
       ? this.shakeIntensity * (this.shakeTimeRemaining / this.shakeDuration)
       : 0;
-    if (intensity > remaining) {
-      this.shakeIntensity = intensity;
+    if (scaled > remaining) {
+      this.shakeIntensity = scaled;
       this.shakeDuration = duration;
       this.shakeTimeRemaining = duration;
+      this.lastShakeAccepted = scaled;
+      this.shakeSinceLast = 0;
     }
   }
 
@@ -864,6 +931,7 @@ export class CameraController {
    */
   private applyShake(dt: number): void {
     this.shakeClock += dt;
+    this.shakeSinceLast += dt;
 
     let amp = 0;
     if (this.shakeTimeRemaining > 0) {
@@ -872,9 +940,13 @@ export class CameraController {
       amp += this.shakeIntensity * progress * progress;   // squared: a hit, not a wobble
     }
     if (!this.airborne) {
-      // Chair casters on office carpet at 15 m/s. Subtle, but it is the difference
-      // between "fast" and "a photograph moving".
-      amp += 0.012 * this.speedRatio * this.speedRatio;
+      // Chair casters on office carpet. Subtle, but it is the difference between "fast"
+      // and "a photograph moving" — in the MIDDLE of the range. At the top it FADES BACK
+      // OUT: a rumble that peaks flat out jitters every edge in frame at the one moment
+      // the player is reading the furthest ahead, and the audio channel (roll gain, carpet
+      // filter) is already carrying that information without costing legibility.
+      const taper = 1 - smoothstep(0.60, 0.85, this.speedRatio);
+      amp += 0.010 * this.speedRatio * this.speedRatio * taper;
     }
 
     if (amp <= 1e-4) return;
@@ -916,7 +988,15 @@ export class CameraController {
     const lateral = yawRate * Math.min(this.lastSpeed, 24);
     // Per-state scale, and killed off entirely while the bail rig owns the frame — a
     // canted horizon there would fight the arc instead of adding to it.
-    const scale = this.frame.rollScale * (1 - this.bailBlend);
+    //
+    // The `1 - 0.55 * sr` term is the budget: because `lateral` is yawRate * SPEED, the
+    // cant was saturating at the 4.3 deg limit in any committed carve from about 11 m/s
+    // up, so the horizon was fully tilted for most of a fast line and the roll stopped
+    // carrying any information at all — it was just a tilted frame to steer inside of.
+    // Scaling the gain down with speed keeps the roll PROPORTIONAL to how hard you are
+    // turning across the whole range (max cant 4.3 -> 2.3 deg), which is both calmer and
+    // more informative.
+    const scale = this.frame.rollScale * (1 - this.bailBlend) * (1 - 0.55 * this.speedRatio);
     const limit = this.maxRoll * Math.max(scale, 0.001);
     let targetRoll = THREE.MathUtils.clamp(-lateral * 0.0026 * scale, -limit, limit);
     // A single deliberate cant on the wipeout, in the direction the camera is drifting.
@@ -955,12 +1035,18 @@ export class CameraController {
     if (points < 5000) return;
 
     // Scale intensity based on points (5000 = subtle, 50000+ = dramatic)
-    // FOV reduction: 5-15 degrees based on points
+    //
+    // 5-15 degrees was a bigger FOV move than the ENTIRE speed ramp, fired on a landing —
+    // and landings-per-second is one of the things that rises fastest with speed (0.09/s
+    // at cruise, 0.40/s above 14.5). Ten times the rate of a fifteen-degree lens punch is
+    // just FOV pumping. Halved, and scaled down further with speed for the same reason the
+    // shake is: the frame is already busy, so the punch has to be quieter to read as one.
     const pointsFactor = Math.min((points - 5000) / 45000, 1); // 0 at 5000, 1 at 50000
-    const fovReduction = 5 + pointsFactor * 10; // 5 to 15 degrees
+    const fovReduction = (3 + pointsFactor * 5) * (1 - 0.5 * this.speedRatio);
 
-    // Set the impact zoom (will decay back to 0)
-    this.impactZoomCurrent = fovReduction;
+    // Set the impact zoom (will decay back to 0). Never let a smaller, later pulse cut
+    // a big one short.
+    this.impactZoomCurrent = Math.max(this.impactZoomCurrent, fovReduction);
   }
 
   /**

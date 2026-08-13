@@ -2,21 +2,33 @@
  * SpeedLines — the sense of velocity.
  *
  * A skate game has to sell speed in a STILL frame, and it has to sell it as a BUILD: barely
- * there at a push-around cruise, overwhelming at flat out. A linear ramp does neither — it is
- * either always on (and so reads as a constant screen texture the eye stops seeing) or always
- * off until terminal velocity.
+ * there at a push-around cruise, present at speed. A linear ramp does neither — it is either
+ * always on (and so reads as a constant screen texture the eye stops seeing) or always off
+ * until terminal velocity.
  *
- * The response here is deliberately two-part:
+ * The response is two-part:
  *   - a gentle toe from ~5 m/s, so pushing hard is *just* perceptible;
- *   - a steep shoulder above ~11 m/s, where the streak count, streak length, brightness AND
- *     the inner radius all move together, so the frame closes in on the player as they
- *     approach top speed.
- * Four parameters moving at once is what makes the last 30% of the speed range feel like
- * twice the speed it actually is.
+ *   - a shoulder above ~11 m/s that reaches a CEILING and stops.
  *
- * It also owns the drive signal for the post chain's radial blur / chromatic aberration
- * (`getBlurDrive()`), so the streaks and the lens distortion ramp on the same curve instead
- * of fighting each other. PostFX itself is not touched from here — Game feeds it this number.
+ * THE CEILING IS THE POINT, AND IT IS WHY THIS FILE WAS REWRITTEN.
+ * The previous version drove the streak count, the streak length, the streak width, the
+ * brightness AND the inner radius off one intensity that ran to 1.0 — five parameters all
+ * peaking at top speed, on top of a radial blur, a chromatic aberration, an FOV ramp, a
+ * dutch roll and a paper storm that were each independently doing the same thing. Every
+ * system in the game was tuned on its own, each was reasonable on its own, and they all
+ * arrived at the same instant. The sum was noise, and the player reported it as noise:
+ * "too much moving on screen", worst "once I build up speed".
+ *
+ * In a shipped Tony Hawk game, going fast feels CALM. Speed is communicated by the WORLD
+ * moving past, not by the effects shouting. So there is one attention budget and this
+ * effect spends a fixed, small amount of it: capped intensity (MAX_INTENSITY), a hard live
+ * count (MAX_VISIBLE), a constant spawn radius that never encroaches on the play space, and
+ * outward flow so a streak's screen radius can only ever increase. Above ~13 m/s this
+ * effect is FLAT. What still rises with speed is the world.
+ *
+ * It also owns the drive signal for the post chain's radial blur (`getBlurDrive()`), which
+ * saturates at 12 m/s for the same reason. PostFX itself is not touched from here — Game
+ * feeds it this number.
  *
  * One draw call, one geometry, zero allocation per frame.
  */
@@ -25,6 +37,21 @@ import * as THREE from 'three';
 
 const MAX_LINES = 112;
 const VERTS_PER_LINE = 6;   // two triangles
+
+/**
+ * ATTENTION BUDGET: a hard ceiling on how many streaks may be ALIVE at once, independent
+ * of speed. The spawn rate curve is capped too (see `response()`), but a rate cap is a
+ * soft guarantee — a frame hitch or a boost can still stack streaks. This is the hard one,
+ * and it is the number that decides how busy the frame is allowed to get.
+ */
+const MAX_VISIBLE = 12;
+
+/**
+ * Ceiling on the streak intensity. Every derived quantity — spawn rate, length, width,
+ * brightness — is a function of intensity, so capping the one value caps all four at once
+ * and they can never again all peak together at top speed.
+ */
+const MAX_INTENSITY = 0.45;
 
 /**
  * WHY QUADS AND NOT `LineSegments`: a GL line is ONE PIXEL wide on every desktop driver
@@ -149,19 +176,25 @@ export class SpeedLines {
       return u * u * 0.28;                     // 0 -> 0.28, concave: barely there
     }
     const u = Math.min(1, (speed - this.SPEED_KNEE) / (this.SPEED_FULL - this.SPEED_KNEE));
-    return 0.28 + Math.pow(u, 0.8) * 0.72;     // 0.28 -> 1.0, convex early: bites fast
+    // Capped. The original ran to 1.0, and because count, length, width and brightness are
+    // ALL functions of this number, the last third of the speed range quadrupled the
+    // effect four ways at once. It now reaches its ceiling around cruise and holds: going
+    // faster stops making the screen busier.
+    return Math.min(MAX_INTENSITY, 0.28 + Math.pow(u, 0.8) * 0.72);
   }
 
   private spawn(): void {
-    if (this.count >= MAX_LINES) return;
+    if (this.count >= MAX_LINES || this.count >= MAX_VISIBLE) return;
     const i = this.count++;
     const intensity = this.currentIntensity;
 
     const angle = Math.random() * Math.PI * 2;
 
-    // As speed builds the streaks encroach from the frame edge toward the centre — the
-    // single strongest cue that the world is being pulled past the camera.
-    const minRadius = 0.70 - intensity * 0.24;
+    // The streaks used to ENCROACH toward the centre as speed built (0.70 -> 0.46 of the
+    // half-extent). That is the effect eating the play space: at 15 m/s streaks were
+    // crossing the middle of the frame, over the very ground the player is steering at.
+    // Constant now, and pushed further out — the streaks live in the outer ring only.
+    const minRadius = 0.80;
     const radiusT = Math.pow(Math.random(), 0.5);   // bias toward the outer edge
     // Cap at 0.95 rather than 1.06: beyond ~1.0 the streak spawns OUTSIDE the frustum and
     // dies before it ever crosses the frame, which is how a 165 lines/second effect ends up
@@ -189,12 +222,18 @@ export class SpeedLines {
     this.ly[i] = sa * radius * halfH;
     this.lz[i] = distance;   // negative: in FRONT of the camera
 
-    // Streaks rush INWARD and toward the lens; faster at high intensity. +Z here means
-    // "closer to the camera", since the streak plane sits at negative z.
-    const inward = (7 + Math.random() * 5) * (0.7 + intensity * 1.1);
-    this.vx[i] = -ca * inward;
-    this.vy[i] = -sa * inward;
-    this.vz[i] = inward * 0.30;
+    // Streaks flow OUTWARD and toward the lens. The old motion was inward at 8-14 m/s for
+    // a 0.19 s life, which carried a streak spawned at 0.85 of the half-extent clean
+    // through the centre of the frame — which is exactly what the capture showed, streaks
+    // sitting on top of the chair and the floor ahead of it. Forward motion parallax runs
+    // the other way: a point ahead of you sweeps OUT of frame as you close on it. Doing it
+    // correctly also makes the placement a hard guarantee — screen radius only ever
+    // increases, so a streak that spawns at 0.80 can never re-enter the play space.
+    // +Z here means "closer to the camera", since the streak plane sits at negative z.
+    const flow = (7 + Math.random() * 5) * (0.7 + intensity * 1.1);
+    this.vx[i] = ca * flow * 0.16;
+    this.vy[i] = sa * flow * 0.16;
+    this.vz[i] = flow * 0.42;
 
     this.len[i] = (0.11 + intensity * intensity * 0.52) * (0.75 + Math.random() * 0.5);
     const ml = this.LINE_LIFETIME * (0.75 + Math.random() * 0.5);
@@ -275,10 +314,11 @@ export class SpeedLines {
       const nx = -sa * halfW * wScale;
       const ny = ca * halfW * wScale;
 
-      // Hot (inner) end and tail (outer) end.
+      // Hot (outer, leading) end and tail (inner) end. The streak now flows outward, so
+      // the tail has to trail INWARD behind it or the smear points the wrong way.
       const hx = this.lx[i], hy = this.ly[i], hz = this.lz[i];
-      const tx = hx + ca * this.len[i];
-      const ty = hy + sa * this.len[i];
+      const tx = hx - ca * this.len[i];
+      const ty = hy - sa * this.len[i];
 
       // 0: hot-left  1: hot-right  2: tail-left  3: hot-right  4: tail-right  5: tail-left
       this.writeVert(positions, b + 0, hx - nx, hy - ny, hz);
@@ -288,10 +328,11 @@ export class SpeedLines {
       this.writeVert(positions, b + 4, tx + nx, ty + ny, hz);
       this.writeVert(positions, b + 5, tx - nx, ty - ny, hz);
 
-      // Brightness is superlinear in intensity and goes over 1 at the top, so the streaks
-      // themselves start to halate in the bloom pass right when the player is flat out.
+      // Brightness no longer goes over 1: halating into the bloom pass is precisely how a
+      // "subtle" effect becomes the brightest thing in a frame the player is trying to
+      // read. 0.85 -> 0.45 on the superlinear term keeps the build without the blow-out.
       const f = lifeRatio * lifeRatio;
-      const bright = f * this.currentIntensity * (0.35 + this.currentIntensity * 0.85);
+      const bright = f * this.currentIntensity * (0.35 + this.currentIntensity * 0.45);
       for (let v = 0; v < VERTS_PER_LINE; v++) {
         const c = (b + v) * 3;
         colors[c] = 1.00 * bright;
@@ -321,18 +362,24 @@ export class SpeedLines {
   }
 
   /**
-   * Drive value for the post chain's radial blur / CA, on the SAME curve as the streaks so
-   * the two effects arrive together. Weighted toward the streak intensity but keeping a
-   * little raw-speed floor, so a boost that pins intensity still tracks actual velocity.
+   * Drive value for the post chain's radial blur.
+   *
+   * ATTENTION BUDGET: this deliberately SATURATES AT 12 m/s and is flat above it. It used
+   * to track the streak intensity, so the blur, the streak count, the streak length, the
+   * streak brightness and the CA all climbed together through the top of the speed range
+   * and peaked at the same instant — five systems, one moment, one big smear. The lens
+   * effect now reaches its (small, edge-only) ceiling before cruise and then holds, which
+   * leaves the whole upper speed range for the WORLD to communicate speed.
    */
   getBlurDrive(): number {
-    const raw = Math.max(0, Math.min(1, (this.rawSpeed - this.SPEED_TOE) / (this.SPEED_FULL - this.SPEED_TOE)));
-    return Math.max(0, Math.min(1, this.currentIntensity * 0.75 + raw * 0.35));
+    return Math.max(0, Math.min(1, (this.rawSpeed - 5) / 7));
   }
 
   /** Force the streaks on — used by speed boosts, decays back on its own. */
   setIntensity(intensity: number): void {
-    this.currentIntensity = Math.max(this.currentIntensity, Math.max(0, Math.min(1, intensity)));
+    // Clamped to the same ceiling as the speed response: a boost may bring the effect on
+    // EARLY, it may not make it louder than the effect is ever allowed to be.
+    this.currentIntensity = Math.max(this.currentIntensity, Math.max(0, Math.min(MAX_INTENSITY, intensity)));
   }
 
   dispose(): void {
