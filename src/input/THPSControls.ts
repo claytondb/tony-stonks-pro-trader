@@ -839,7 +839,10 @@ export class THPSControls {
     const dirKb = `${kb('dirUp')}${kb('dirDown')}${kb('dirLeft')}${kb('dirRight')}`;
     const rows: { action: string; keyboard: string; gamepad: string }[] = [
       { action: 'Push', keyboard: kb('push'), gamepad: gp('push') },
-      { action: 'Brake / Reverse', keyboard: kb('brake'), gamepad: gp('brake') },
+      // Brake only. There is no reverse gear — the movement model clamps speed at zero and
+      // the chair always faces the way it travels — so promising one in the legend was the
+      // shortest possible route to a player believing the game had reversed on purpose.
+      { action: 'Brake', keyboard: kb('brake'), gamepad: gp('brake') },
       { action: 'Steer', keyboard: `${kb('turnLeft')} / ${kb('turnRight')}`, gamepad: 'L-Stick / D-Pad ←→' },
       {
         action: this.options.chargeOllie ? 'Ollie (hold for height)' : 'Ollie',

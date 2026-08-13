@@ -7,31 +7,78 @@
  * dressed cubicle floorplate assembled from OfficeProps.
  *
  * ---------------------------------------------------------------------------
+ * READ THIS FIRST: THE ROOM COMES BEFORE THE FEATURES.
+ *
+ * The owner played the previous build and said, in full: "It still plays really
+ * weird... The office space level is too crowded and not a lot of place to skate
+ * around. It's frustrating to play." Every automated reading of that build was
+ * green — 97% of a run inside a combo, 45% grinding, 0.8% dead time — and every
+ * one of them was measuring features-touched-per-second, which a narrow corridor
+ * lined wall to wall with furniture maximises by construction.
+ *
+ * So the ordering rule for this file, which several passes of "the level looks
+ * sparse, add density" had inverted:
+ *
+ *   1. OPEN FLOOR FIRST. A Tony Hawk park is mostly floor. The player has to be
+ *      able to pick a heading, hold it, and arrive somewhere.
+ *   2. FEATURES SECOND, and each one gets a clean approach and a clean landing —
+ *      never another obstacle immediately after it.
+ *   3. DRESSING THIRD, and dressing is what you skate PAST. If it is not a
+ *      designed feature it does not get a collider.
+ *
+ * The numbers that hold that rule honest, measured with tools/space.mjs, before
+ * and after the opening-up pass:
+ *
+ *                                              before     after
+ *   static colliders                              427       295
+ *   floor REACHABLE from spawn            1,267 m2    1,485 m2
+ *   straight line through a point, median      30.0 m    38.8 m
+ *   ...................................  P10   10.8 m    19.3 m
+ *   open floor with a 25 m line in it         62.0%     86.3%
+ *   ..................30 m................    50.1%     79.5%
+ *   from the spawn, median of 72 headings       7.3 m    12.3 m
+ *   Game.resolveObstacles firings, cruise    2.2-3.3%  3.3-4.5%
+ *                                      (and one script STALLED outright: 19 m
+ *                                       travelled in 20 s, 86% of frames in the
+ *                                       obstacle recovery. It now runs 240 m.)
+ *
+ * If a future pass wants to add density, add it OUTSIDE the corridors and give it
+ * `collide: false`, and re-run tools/space.mjs. A straight-line median under 30 m
+ * or a 25 m-line share under 80% means the level has closed up again.
+ *
+ * ---------------------------------------------------------------------------
  * LAYOUT DOCTRINE (this is a skate level, not a floor plan)
  *
  * A Tony Hawk level has to read from the wide shot as a set of CONNECTED LINES,
- * not as a maze. The previous version was a machine-regular 8x10 lattice of
- * identical pods at a fixed pitch — every part of it looked like every other
- * part and there was nothing to navigate by. This one is built around:
+ * not as a maze. This one is built around:
  *
- *   - A SPINE running the full depth of the plate and a CROSS corridor running
- *     its full width, meeting in an open intersection at the spawn. That is the
- *     readable skate line, and it is the shape you see from any establishing
- *     camera.
- *   - CONTINUOUS cap rails down both edges of both corridors. Eight unbroken
- *     grind runs of 17 m and 17 m, not four hundred 1.8 m panel segments — inside
- *     a dense section the player can commit to a line and hold it.
+ *   - A SPINE 15.2 m wide running the full depth of the plate and a CROSS corridor
+ *     14.4 m wide running its full width, meeting in a ROOM at the spawn — not an
+ *     intersection. Both are wide enough to turn a 15 m/s line around in twice
+ *     without touching a wall (min turn radius 4.2 m). That is the readable skate
+ *     shape, and it is what you see from any establishing camera.
+ *   - The four inside corners of that crossing SPLAYED at 45 degrees, so the room
+ *     is an octagon and a diagonal carve out of it is deflected rather than
+ *     stopped. Re-entrant corners are the one thing Game.resolveObstacles cannot
+ *     rescue a run from.
+ *   - CONTINUOUS cap rails down both edges of both corridors, plus the splays. Six
+ *     unbroken grind runs of 5-9 m and the loop's 11 m caps, not four hundred 1.8 m
+ *     panel segments — the player commits to a line once and holds it.
  *   - AND THEN THE VOIDS. Density is only half a park. The corners, the two arm
  *     crossings, the whole east straight and the spawn crossroads carry NO rail
  *     on purpose, because a line that cannot end is not a line, it is a treadmill.
  *     Dense section, void, dense section — the boundary between them is the only
  *     place the game gets to ask "bank it or push on".
- *   - LANDMARKS at the corridor ends and in the pod field (glazed conference
- *     room, manager offices, copier bank, vending alcove) so the player can
- *     navigate by silhouette.
- *   - ACCRETION in the pod field: per-column pitch jitter, three panel heights,
- *     per-pod fabric tints, cleared-out pods full of packing boxes. Real offices
- *     are lumpy; generated ones are not.
+ *   - THE CUBICLE FARM ONE BAY DEEP, behind those walls, entirely non-skateable
+ *     and mostly non-colliding. It is what the corridor looks out at, and nothing
+ *     else. It used to be two bays deep in all four quadrants, which is a third of
+ *     the plate spent on scenery the player cannot reach.
+ *   - LANDMARKS terminating each arm (glazed conference room north-east, manager's
+ *     office north-west, copier bank south-west, the open plaza south-east) so the
+ *     player can navigate by silhouette.
+ *   - ACCRETION in what is left of the pod field: mixed panel heights, per-pod
+ *     fabric tints, a barbelled tidy/feral mess roll, cleared-out pods full of
+ *     packing boxes. Real offices are lumpy; generated ones are not.
  *
  * ---------------------------------------------------------------------------
  * THE THREE LINES
@@ -41,31 +88,24 @@
  * tools/play.mjs, which steps fixedUpdate() at a fixed 1/60 with rendering off —
  * so the scripts below reproduce exactly (--seed 12345).
  *
- * WHAT CHANGED AND WHY. Every one of these used to be a single unbroken combo
- * from the first feature to the last, and so was everything else: 70 s holding W
- * and L scored ONE combo of 69.25 s and 107 tricks, banked 3,100 stonks against
- * 457,092 unrealised, and could not be lost. A park where the line never ends is
- * a park with no decisions in it. Four VOIDS were cut into it — four corner arcs,
- * the two arm crossings, the whole east straight, and the crossroads — and the
- * same 70 s now scores FIVE combos, best 19.3 s / 27 tricks, four of them banked,
- * 249,736 stonks in the account. Same speed (median 16.1 m/s, up from 15.0), same
- * 0.8% dead time. Nothing was made slower; things were made losable.
+ * All three survived the opening-up pass — the walls moved, the routes did not,
+ * because every one of them runs along a corridor or the loop rather than through
+ * the pod field. Re-measured on the wider plate:
  *
- *   THE BENCH TO THE STAIRWELL HIP        16 s   (a DENSE section: still one line)
+ *   THE BENCH TO THE STAIRWELL HIP        16 s
  *     node tools/play.mjs --level ch1_office --duration 16 \
  *       --script "W:0-16,L:0-16,Space:1.9@tap,Space:5@tap"
  *     Long Bench north out of spawn -> bank the stairwell head-on -> the hip's
  *     nose rail -> down onto the loop's north straight.
- *     15.2 s combo, 20 tricks, 9 grinds, 192 m, 1.9% dead.
+ *     7.35 s best combo, 4 combos, 8 grinds, 192 m, 1.9% dead, 30,154 banked.
  *
- *   THE COPIER ARM LAP                    24 s   (crosses TWO voids: now two lines)
+ *   THE COPIER ARM LAP                    24 s
  *     node tools/play.mjs --level ch1_office --duration 24 \
  *       --script "A:0-0.75,W:0-24,L:1.2-24,Space:9@tap"
  *     Carve into the east arm at spawn -> arm ledge -> out of the east mouth,
- *     which is now open carpet -> the east air section, which has no rail on it
- *     at all -> north-east corner void.
- *     was 17.1 s and 23 tricks in ONE combo; now 4.45 s best, 2 combos, BOTH
- *     BANKED, 15,996 stonks in the account instead of 0.
+ *     which is open carpet -> the east air section, which has no rail on it at
+ *     all -> north-east corner void.
+ *     13.3 s best combo, 21 tricks, 16 grinds, 357 m, 1.3% dead.
  *
  *   THE BOARDROOM LAP                     30 s
  *     node tools/play.mjs --level ch1_office --duration 30 \
@@ -73,11 +113,11 @@
  *     Turn at spawn -> spine floor rail south -> up the conference table and
  *     along its outboard rail -> the south end-wall bank -> south straight ->
  *     south-east corner void.
- *     14.25 s combo, 21 tricks, 425 m, banked 83,500.
+ *     8 combos, 15 grinds, 349 m, longest stop 0.55 s (a bail, not a wall).
  *
- * The park still LOOPS — a 70 s lap covers 1,104 m and there is nowhere a player
- * has to stop and turn around — but it no longer carries a position round for
- * free. Speed is continuous; the COMBO is not.
+ * The park still LOOPS — 45 s holding W and L covers 680 m at a median 15.3 m/s
+ * with 0.7% dead time and one dead episode — but it no longer carries a position
+ * round for free. Speed is continuous; the COMBO is not.
  *
  * Everything static is merged per material (OfficeProps.mergePropsByMaterial) so
  * the entire floorplate costs a few dozen draw calls instead of several hundred.
@@ -98,6 +138,7 @@ import {
   makeCorkBoard,
   makeCubiclePod,
   makeCubicleWall,
+  makeDesk,
   makeDeskChair,
   makeExitSign,
   makeFilingCabinet,
@@ -365,9 +406,40 @@ function blocked(rects: KeepClearRect[], x: number, z: number, halfX: number, ha
 // ---------------------------------------------------------------------------
 
 const POD_SIZE = 4.4;      // makeCubiclePod footprint
-const POD_PITCH = 5.7;     // 1.3 m service aisles between pods
-const SPINE_HALF = 5.2;    // half-width of the main skate spine (runs along Z)
-const CROSS_HALF = 4.6;    // half-depth of the cross corridor (runs along X)
+// ---------------------------------------------------------------------------
+// THE CORRIDORS ARE ROOMS NOW, AND THAT IS THE WHOLE POINT.
+//
+// The owner played this and said: "the office space level is too crowded and not a lot
+// of place to skate around. It's frustrating to play." The harness disagreed — 97% of a
+// run inside a combo, 45% grinding, 0.8% dead time — and the harness was measuring the
+// wrong thing. It counted features touched per second, and a level that is one long
+// narrow hallway lined with features maximises exactly that metric while being miserable
+// to ride, because every input is a correction and nothing is a choice.
+//
+// MEASURED before this change, with tools/space.mjs (a temporary probe; see the report):
+//   * 427 static colliders, 542 m2 of a 2,116 m2 plate standing proud of STEP_HEIGHT
+//   * from the SPAWN, the median of 72 compass headings hit something within 7.3 m, and
+//     the single best heading ran 22.8 m
+//   * only 62% of open floor had a 25 m straight line through it in ANY direction
+//   * Game.resolveObstacles — the anti-stall recovery that shoves the player off geometry —
+//     fired on 4.1-7.8% of frames on plain cruise scripts. That recovery is what the owner
+//     was feeling: it swings the heading to escape, so a corridor tight enough to trigger
+//     it constantly reads as the chair steering itself.
+//
+// The spine went 10.4 -> 15.2 m and the cross 9.2 -> 14.4 m, which turns the spawn
+// intersection from a 10 x 9 m box with four doors into a 15 x 14 m ROOM. Both numbers are
+// derived, not taste: Game's turn rate is 3.6 rad/s, so the minimum turn radius at the
+// measured 15 m/s cruise is 4.2 m and a full U-turn needs 8.4 m of width. At 9.2 m the
+// cross corridor could not be turned around in without touching a wall. At 14.4 it can be
+// turned around in twice.
+//
+// The cubicle farm paid for it. It was two pod bays deep in each quadrant and every one of
+// those pods was BEHIND a 1.32 m wall the player can never reach — pure collision mass and
+// draw weight in service of a wide shot. It is one bay deep now, dressed harder and
+// mostly non-colliding, which is the trade this level should always have made: clutter you
+// skate PAST, not through.
+const SPINE_HALF = 7.6;    // half-width of the main skate spine (runs along Z)
+const CROSS_HALF = 7.2;    // half-depth of the cross corridor (runs along X)
 const WALL_GAP = 0.36;     // service gap between a corridor wall and the pods behind it
 const TILE = 1.22;         // ceiling module
 const WALL_SEG = 5.7;      // corridor-wall panel length
@@ -434,13 +506,15 @@ const RING_LEDGE_HALF = 9; // ledges span +/-9 m of each side's centre
 // ------------------------------------------------------------- THE OPEN PLAZA ---
 // One quadrant of the cubicle farm — the south-east — is cleared to bare carpet. A park needs
 // somewhere the answer to "what now" has not already been decided for you: a place to land a
-// bail, rebuild speed, and pick which line to start next. Every other square metre of this
-// floorplate is either a line or a pod, and that is precisely why a run here could never end.
-// The quadrant runs from the corridor walls out to the loop's inner wall, which is 10.8 x 11.3 m
-// of clear floor with a grindable cap rail on three sides of it and a 6 m door on the fourth.
-const PLAZA_DOOR_X = 10.9;   // centre of the mouth cut in the south-east cross-corridor wall
-const PLAZA_DOOR_HALF = 3.0; // 6 m opening
-const PLAZA_RECT: KeepClearRect = { minX: 5.3, maxX: 16.3, minZ: -16.3, maxZ: -4.6 };
+// bail, rebuild speed, and pick which line to start next.
+//
+// IT HAS NO DOOR ANY MORE. It used to be a room reached through a 6 m mouth cut in the
+// south-east cross-corridor wall, which made a 10 x 11 m space with one way in and out —
+// the definition of somewhere you get stuck. The wall along its north side is simply gone,
+// so the plaza and the east arm are ONE space: the east arm is 14.4 m wide for the first
+// 7.6 m out of the spawn room and then opens to 23.5 m all the way to the loop wall. That
+// is the widest piece of floor in the level and it is where a bailed run rebuilds.
+const PLAZA_RECT: KeepClearRect = { minX: SPINE_HALF, maxX: RING_IN, minZ: -RING_IN, maxZ: -CROSS_HALF };
 // THE CHAMFER MUST SPAN THE WHOLE RACETRACK OR IT IS NOT A CORNER.
 // A 45-degree corner deflects an incoming run only where the corner actually IS. Cut back only
 // CHAMFER metres from RING_OUT, the diagonal face covers |x| + |z| >= RING_OUT + (RING_OUT -
@@ -490,7 +564,6 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   const rng = mulberry32((opts.seed ?? 20260730) >>> 0);
   const rand = (a: number, b: number) => a + rng() * (b - a);
   const chance = (p: number) => rng() < p;
-  const pick = <T,>(arr: readonly T[]): T => arr[Math.floor(rng() * arr.length) % arr.length];
 
   const root = new THREE.Group();
   root.name = 'OfficeInterior';
@@ -1155,21 +1228,34 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
 
   // ----------------------------------------------------- corridor walls -----
-  // The spine and the cross run from the plaza out to their mouths in the loop wall.
+  // The spine and the cross run from the spawn room out to their mouths in the loop wall.
+  //
+  // THE SOUTH-EAST CROSS WALL IS NOT BUILT. That wall used to separate the east arm from the
+  // plaza, with a 6 m door in it — one mouth into a 10 x 11 m room, which is a cul-de-sac
+  // with extra steps. Leaving it out merges the plaza into the east arm: 23.5 m of unbroken
+  // floor width from z = -16.3 to z = +7.2, the only place in the park where the player can
+  // carve a full circle without seeing a wall. Losing its 11 m cap rail is the price, and it
+  // is worth paying — the arm already carries a floor rail, a ledge run and two banks.
+  //
+  // AND THE FOUR INSIDE CORNERS ARE CUT AT 45 DEGREES. A cross plan has four re-entrant
+  // corners at the crossing, and a re-entrant corner is the one piece of geometry
+  // Game.resolveObstacles cannot help with: a run that meets it head-on has no tangential
+  // velocity left to slide along, so it stops. Measured at the spawn before this changed,
+  // sweeping 72 compass headings out of the spawn point: the MEDIAN heading hit something
+  // within 10.0 m, and every one of those short headings was a diagonal into one of these
+  // four corners. Splaying them 3.4 m turns the spawn crossroads from a plus into an
+  // octagon — the diagonals open up, and a player who carves out of the room at 45 degrees
+  // is deflected round the splay instead of being stopped by it. It is the same trick the
+  // loop's chamfers play, at a tenth of the size.
+  const SPAWN_CHAM = 3.4;
   for (const sx of [-1, 1]) {
-    runWall(sx * SPINE_HALF, CROSS_HALF, sx * SPINE_HALF, RING_IN);
-    runWall(sx * SPINE_HALF, -CROSS_HALF, sx * SPINE_HALF, -RING_IN);
     for (const sz of [-1, 1]) {
-      // THE OPEN PLAZA'S DOOR. The south-east quadrant's cubicles are gone (see THE OPEN
-      // PLAZA below) and a 10 x 10 m room you can only reach by clearing a 1.32 m wall is a
-      // trap, not a plaza. This one wall runs as two pieces with a 6 m mouth in it, so the
-      // east arm has a branch: hold the arm out to the loop, or turn in and use the room.
-      if (sx > 0 && sz < 0) {
-        runWall(sx * SPINE_HALF, sz * CROSS_HALF, PLAZA_DOOR_X - PLAZA_DOOR_HALF, sz * CROSS_HALF);
-        runWall(PLAZA_DOOR_X + PLAZA_DOOR_HALF, sz * CROSS_HALF, sx * RING_IN, sz * CROSS_HALF);
-        continue;
-      }
-      runWall(sx * SPINE_HALF, sz * CROSS_HALF, sx * RING_IN, sz * CROSS_HALF);
+      runWall(sx * SPINE_HALF, sz * (CROSS_HALF + SPAWN_CHAM), sx * SPINE_HALF, sz * RING_IN);
+      // The splay itself. Grindable: it is 4.8 m of cap rail on the inside corner of the
+      // room every route in the level passes through.
+      runWall(sx * SPINE_HALF, sz * (CROSS_HALF + SPAWN_CHAM), sx * (SPINE_HALF + SPAWN_CHAM), sz * CROSS_HALF);
+      if (sx > 0 && sz < 0) continue;   // the plaza is open to the east arm
+      runWall(sx * (SPINE_HALF + SPAWN_CHAM), sz * CROSS_HALF, sx * RING_IN, sz * CROSS_HALF);
     }
   }
 
@@ -1224,15 +1310,17 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
 
   // Corner dressing behind the chamfers: the leftover triangle at each corner of the
-  // building, which the loop routes around. Props here are never on a line.
+  // building, which the loop routes around. Props here are never on a line — and because
+  // they are never on a line they do not need colliders. The chamfer wall is what turns the
+  // player; these are what he sees over it.
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
       const cx = sx * (halfW - 1.4);
       const cz = sz * (halfD - 1.4);
       if (blocked(keepClear, cx, cz, 1.2, 1.2)) continue;
-      place(acc, makeBoxStack({ seed: 401 + sx * 3 + sz * 5 }), cx, 0, cz, rand(0, Math.PI), { collide: true });
+      place(acc, makeBoxStack({ seed: 401 + sx * 3 + sz * 5 }), cx, 0, cz, rand(0, Math.PI), { collide: false });
       place(acc, makePottedPlant({ variant: 0, seed: 411 + sx * 7 + sz * 11 }),
-        cx - sx * 1.9, 0, cz - sz * 0.4, 0, { collide: true });
+        cx - sx * 1.9, 0, cz - sz * 0.4, 0, { collide: false });
     }
   }
 
@@ -1249,8 +1337,10 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   let corner = 0;
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      const cx = sx * (SPINE_HALF - 0.5);
-      const cz = sz * (CROSS_HALF + 1.4);
+      // Just past the 45-degree splay, tight against the spine wall. They used to sit at
+      // |z| = CROSS_HALF + 1.4, which the splay has since turned into open floor.
+      const cx = sx * (SPINE_HALF - 0.55);
+      const cz = sz * (CROSS_HALF + SPAWN_CHAM + 0.9);
       if (blocked(keepClear, cx, cz, 0.6, 0.6)) continue;
       // collide:false — see THE SERVICE STRIP note above the aisle clutter. These four sit at
       // |x| = 4.7 and the level data's spine floor rails are at |x| = 4.0; a 0.4 m chair riding
@@ -1264,229 +1354,204 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   }
 
   // ---------------------------------------------------------- cubicle farm ---
-  // The pod field fills the four quadrants OUTSIDE the corridors. Columns are jittered per
-  // column and pods jittered per pod, heights are mixed, and a fraction of the cells are
-  // consumed by landmarks or cleared out entirely.
-  const colBase = SPINE_HALF + WALL_GAP + POD_SIZE / 2;
-  const rowBase = CROSS_HALF + WALL_GAP + POD_SIZE / 2;
-
-  // The field now stops at the loop's inner wall instead of running to the building wall:
-  // the outer 6 m of the plate is the racetrack. Two bays deep in each direction per
-  // quadrant, which is what a 4.8 m loop plus two 5 m corridors leaves of a 46 m plate.
-  const cols: number[] = [];
-  for (let x = colBase, i = 0; x + POD_SIZE / 2 < RING_IN - 0.5; x += POD_PITCH + rand(-0.3, 0.3), i++) {
-    cols.push(Number(x.toFixed(2)));
-  }
-  const rows: number[] = [];
-  for (let z = rowBase; z + POD_SIZE / 2 < RING_IN - 0.5; z += POD_PITCH + rand(-0.3, 0.3)) {
-    rows.push(Number(z.toFixed(2)));
-  }
-
-  // Landmark cells, addressed as `${sx}${sz}:${ci},${ri}`. Hand-placed, not rolled: the
-  // point of a landmark is that the player learns where it is.
-  const CONFERENCE_CELL = '1,1:1,1';
-  const MANAGER_CELLS = ['-1,-1:0,1'];
-  const consumed = new Set<string>();
-
-  // THE OPEN PLAZA (see PLAZA_RECT). Everything the farm places — pods, aisle clutter, the
-  // stray chairs, the service-gap dressing — goes through `podClear`, so adding one rect here
-  // empties the whole south-east quadrant without touching the loop, the corridors or the
-  // landmarks. It is the only quadrant with neither the conference room nor the manager
-  // office in it, so nothing readable is lost.
+  //
+  // ONE BAY DEEP, NOT TWO — AND NONE OF IT IS SKATEABLE, SO NONE OF IT PRETENDS TO BE.
+  //
+  // The farm used to be a jittered 2 x 2 grid of pods in each of the four quadrants, driven
+  // by a `cols` / `rows` sweep, and it ate everything between the corridor walls and the
+  // loop. That is roughly a third of the floorplate, standing behind a 1.32 m wall the
+  // player can only clear off a bank — which is to say it was set dressing that was paying
+  // full price in colliders, draw weight and, once the corridors were widened to hold it,
+  // in the only thing that actually matters: room to skate.
+  //
+  // What is left is what the camera can see. Each quadrant is one bay, split in two:
+  //
+  //   THE POD RUN     two pods stacked nose to tail against the loop wall, sharing a panel
+  //                   line — which is how a real fit-out is built, a run rather than islands.
+  //   THE LANDMARK    the strip behind the spine wall, carrying the thing the player names
+  //                   that arm by: the glazed conference room, the manager's office, the
+  //                   copier bank. Every arm terminates in a silhouette.
+  //
+  // Both are behind a 1.32 m cap-railed wall. From the corridor you read a skyline of panels
+  // and monitors with a landmark at the end of it; from the wide shot you read a dressed
+  // office; from the chair you read a wall you skate past.
+  //
+  // The south-east quadrant carries no farm at all: it is THE OPEN PLAZA, and with its
+  // cross wall gone it is simply the wide end of the east arm.
+  const BAY_X = (SPINE_HALF + SPAWN_CHAM + RING_IN) / 2;   // 13.65 — the pod run's centreline
+  const BAY_Z0 = CROSS_HALF + WALL_GAP + POD_SIZE / 2;     // 9.76 — first pod
+  const BAY_Z1 = BAY_Z0 + POD_SIZE - 0.1;                  // 14.06 — second, sharing its panels
   const podClear = [...keepClear, PLAZA_RECT];
 
   // Bare carpet reads as unfinished, so the plaza gets floor WEAR and blown paper and nothing
-  // else — no collider, no rail, nothing to steer around. The scuffing runs from the door
+  // else — no collider, no rail, nothing to steer around. The scuffing runs from the arm
   // diagonally across to the far corner, which is the line a player rebuilding speed actually
   // takes, and it is the only navigational cue in the room.
   for (let k = 0; k <= 4; k++) {
     const t = k / 4;
     acc.wear.push({
-      x: PLAZA_DOOR_X - t * 4.4, z: -6.0 - t * 8.0,
+      x: 9.6 + t * 4.2, z: -CROSS_HALF - 1.2 - t * 7.4,
       width: 4.2, depth: 3.6, rotation: 0.6, strength: 0.32 + t * 0.12,
     });
   }
-  acc.paperSeeds.push({ x: 8.4, z: -12.6, radius: 2.0 });
-  acc.paperSeeds.push({ x: 13.4, z: -8.2, radius: 1.6 });
+  acc.paperSeeds.push({ x: 9.0, z: -13.4, radius: 2.0 });
+  acc.paperSeeds.push({ x: 14.2, z: -9.4, radius: 1.6 });
 
-  let podIndex = 0;
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      for (let ci = 0; ci < cols.length; ci++) {
-        for (let ri = 0; ri < rows.length; ri++) {
-          const key = `${sx},${sz}:${ci},${ri}`;
-          if (consumed.has(key)) continue;
-
-          const baseX = sx * cols[ci];
-          const baseZ = sz * rows[ri];
-
-          // ---- landmark: glazed conference room (one per floorplate) --------
-          if (key === CONFERENCE_CELL && !blocked(podClear, baseX, baseZ, 2.8, 2.4)) {
-            consumed.add(key);
-            const room = makeConferenceBox(5.0, 4.2, { seed: 501 });
-            place(acc, room, baseX, 0, baseZ, 0, { collide: true, grind: true });
-            acc.paperSeeds.push({ x: baseX - 3.2, z: baseZ, radius: 1.0 });
-            continue;
-          }
-
-          // ---- landmark: manager office spanning two cells ------------------
-          if (MANAGER_CELLS.includes(key) && ci + 1 < cols.length) {
-            const nextKey = `${sx},${sz}:${ci + 1},${ri}`;
-            if (!consumed.has(nextKey)) {
-              const cx = (sx * cols[ci] + sx * cols[ci + 1]) / 2;
-              const span = Math.abs(cols[ci + 1] - cols[ci]) + POD_SIZE - 0.6;
-              if (!blocked(podClear, cx, baseZ, span / 2, 2.4)) {
-                consumed.add(key);
-                consumed.add(nextKey);
-                const office = makeManagerOffice(span, 4.3, { seed: 600 + podIndex });
-                // Door always faces the nearest corridor.
-                place(acc, office, cx, 0, baseZ, sz > 0 ? Math.PI : 0, { collide: true });
-                podIndex++;
-                continue;
-              }
-            }
-          }
-
-          const x = baseX + rand(-0.16, 0.16);
-          const z = baseZ + rand(-0.16, 0.16);
-          if (blocked(podClear, x, z, POD_SIZE / 2, POD_SIZE / 2)) continue;
-
-          // Detail falls off with distance from the corridor, not from the origin:
-          // the column the player skates past is always hero detail.
-          //
-          // The OUTER column used to drop to variant 2 — panels plus four featureless slabs —
-          // and from any establishing camera that column is a third of the floorplate reading
-          // as empty navy boxes. Triangles are not the constraint here (draw calls are, and
-          // the whole field is one merge), so the outer column now gets real desks, monitors
-          // and chairs; only its collider and grind sets stay cheap.
-          const variant = ci === 0 ? 0 : 1;
-          const cleared = ci > 0 && chance(0.18);
-
-          // ---- PER-POD CHARACTER ------------------------------------------
-          // The floorplate used to roll the same dressing distribution for every pod, which is
-          // the mathematically reliable way to make thirty pods look like one pod stamped
-          // thirty times. Instead, give each pod ONE personality roll and let it drive
-          // everything downstream. The distribution is deliberately barbelled — a real office
-          // has genuinely pristine desks and genuinely feral ones, and very few average ones,
-          // and it is the CONTRAST between neighbours that reads as authorship.
-          const roll = rng();
-          const mess =
-            roll < 0.22 ? rand(0.0, 0.18)   // the tidy desk nobody uses
-              : roll < 0.55 ? rand(0.3, 0.55) // normal
-                : roll < 0.85 ? rand(0.6, 0.82) // busy
-                  : rand(0.85, 1.0);            // feral
-
-          // Fabric runs in BLOCKS, not per pod: real floorplates were fitted out one bay at a
-          // time, so colour changes on a bay boundary. Blocking the tint by (quadrant, column)
-          // gives the wide shot large legible colour masses instead of confetti.
-          const tintIndex = (ci * 2 + (sx > 0 ? 1 : 0) + (sz > 0 ? 3 : 0) + Math.floor(ri / 2)) % POD_FABRIC_TINTS.length;
-
-          const pod = makeCubiclePod({
-            variant: cleared ? 1 : variant,
-            seed: 101 + podIndex * 7,
-            // Aisle-facing pods keep the house height so the skyline behind the hero grind
-            // line stays legible; everything deeper mixes.
-            panelHeight: ci === 0 ? 1.32 : pick(PANEL_HEIGHTS),
-            fabricTint: POD_FABRIC_TINTS[tintIndex],
-            cleared,
-            mess,
-            chairs: true,
-          });
-          podIndex++;
-
-          // A feral pod leaks: paper on the aisle carpet outside it, and a chair somebody
-          // shoved out of the way.
-          if (mess > 0.72) {
-            acc.paperSeeds.push({ x: x - sx * (POD_SIZE / 2 + 0.6), z: z + rand(-1.6, 1.6), radius: 1.2 });
-            if (chance(0.45)) {
-              const stray = makeDeskChair({
-                variant: 1,
-                seed: 4100 + podIndex,
-                knocked: chance(0.45),
-              });
-              // OUTBOARD, into the service gap between pod columns — never into the corridor,
-              // which is the skate line and stays clean.
-              place(acc, stray, x + sx * (POD_SIZE / 2 + 0.62), 0, z + rand(-1.5, 1.5), rand(0, Math.PI * 2), {
-                collide: 1,
-              });
-            }
-          }
-
-          // Full desk colliders only in the corridor-facing column; outer pods get
-          // just the panel boxes, which is all the player can ever touch.
-          const collide = variant === 0 ? true : 8;
-          // POD TOPS ARE NOT REGISTERED AS RAILS ANY MORE.
-          //
-          // They used to be, and they were 140 of the level's 211 grind edges: 1.8 m panel
-          // segments at 1.40 m, out in the middle of the pod field, with no ramp feeding
-          // them and nothing to land on off the end. Every one of them was decoration that
-          // the nearest-rail search still had to consider. The high line now lives on the
-          // corridor and loop cap rails, which are 11-16 m long, sit beside a racing lane,
-          // and lead somewhere.
-          const grind = false;
-
-          // Orientation used to be a strict CHECKERBOARD — (ci + ri) parity — which from any
-          // wide camera is the most legible pattern a human eye can find, and it read as
-          // wallpaper. Real fit-outs run in BAYS: several pods sharing an orientation, then a
-          // break. Rolling per pod with a heavy bias toward the previous bay's orientation gives
-          // runs of two to four, with the occasional pod turned right around because the tenant
-          // wanted a window. Aisle-facing pods stay square to the corridor so the hero grind
-          // line keeps a clean edge behind it.
-          const podYaw =
-            ci === 0
-              ? rand(-0.02, 0.02)
-              : (Math.floor(ri / (1 + (ci % 3)) + ci) % 2) * (Math.PI / 2)
-                + (chance(0.16) ? Math.PI / 2 : 0)
-                + rand(-0.035, 0.035);
-
-          place(acc, pod, x, 0, z, podYaw, { collide, grind });
-
-          if (ci === 0 && chance(0.4)) {
-            acc.paperSeeds.push({ x: x - sx * (POD_SIZE / 2 + 0.5), z: z + rand(-1.4, 1.4), radius: 1.1 });
-          }
-
-          // Between-pod service gap dressing: the 1.3 m aisle between pod columns was empty on
-          // every one of the thirty pods. One prop in three of those gaps is what stops the pod
-          // field reading as a lattice of identical islands separated by clean carpet.
-          if (ci > 0 && chance(0.34)) {
-            const gx = x - sx * (POD_PITCH / 2);
-            const gz = z + rand(-1.8, 1.8);
-            if (!blocked(podClear, gx, gz, 0.5, 0.5)) {
-              const g = rng();
-              const gp =
-                g < 0.26 ? makeBoxStack({ seed: podIndex * 13 + 5 })
-                  : g < 0.46 ? makeCardboardBox({ variant: 1, seed: podIndex * 17 + 7 })
-                    : g < 0.62 ? makeFilingCabinet({ variant: 1, seed: podIndex * 19 + 11, accent: chance(0.2) })
-                      : g < 0.76 ? makeTrashCan({ variant: 1, seed: podIndex * 23 + 13 })
-                        : g < 0.88 ? makePottedPlant({ variant: 0, seed: podIndex * 29 + 17 })
-                          : makeDeskChair({ variant: 1, seed: podIndex * 31 + 19, knocked: chance(0.5) });
-              place(acc, gp, gx, 0, gz, rand(0, Math.PI * 2), { collide: 1 });
-            }
-          }
-        }
+  // ...but "no props on the floor" and "no props in the room" are different things, and the
+  // first cut of this read as a missing room rather than a cleared one: 10 x 9 m of carpet
+  // with paper on it and nothing at the edges. A floor that has been emptied out has its
+  // furniture stacked round the walls. So the plaza gets a 0.9 m dressing band hard against
+  // its three walls — non-colliding, like everything else that is not a designed feature —
+  // and the middle stays exactly as empty as it needs to be.
+  {
+    const edges: [number, number, number, number][] = [
+      [SPINE_HALF + 0.85, SPINE_HALF + 0.85, -CROSS_HALF - 2.0, -RING_IN + 1.6],   // spine wall
+      [RING_IN - 0.85, RING_IN - 0.85, -CROSS_HALF - 2.0, -RING_IN + 1.6],         // loop wall, east
+      [SPINE_HALF + 1.8, RING_IN - 1.8, -RING_IN + 0.85, -RING_IN + 0.85],         // loop wall, south
+    ];
+    for (const [x0, x1, z0, z1] of edges) {
+      const n = Math.max(3, Math.round(Math.hypot(x1 - x0, z1 - z0) / 1.8));
+      for (let i = 0; i < n; i++) {
+        const t = (i + rand(0.15, 0.85)) / n;
+        const x = x0 + (x1 - x0) * t;
+        const z = z0 + (z1 - z0) * t;
+        const roll = rng();
+        let prop: THREE.Object3D;
+        if (roll < 0.24) prop = makeBoxStack({ seed: Math.round(x * 7 + z * 3) + 311 });
+        else if (roll < 0.44) prop = makeCardboardBox({ variant: 1, seed: Math.round(x * 11 + z * 5) + 313 });
+        else if (roll < 0.60) prop = makeFilingCabinet({ variant: 1, seed: Math.round(x * 13 + z * 7) + 317, accent: chance(0.2) });
+        else if (roll < 0.74) prop = makeDeskChair({ variant: 1, seed: Math.round(x * 17 + z * 11) + 331, knocked: chance(0.5) });
+        else if (roll < 0.86) prop = makePottedPlant({ variant: 0, seed: Math.round(x * 19 + z * 13) + 337 });
+        else prop = makeDesk({ variant: 1, seed: Math.round(x * 23 + z * 17) + 347 });
+        place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: false });
+        if (chance(0.4)) acc.paperSeeds.push({ x, z, radius: 1.0 });
       }
     }
   }
 
-  // ------------------------------------------------------------ landmarks ---
-  // SIGHTLINES. From the spawn intersection the player is looking down four corridors, and
-  // each one has to terminate in something he can name, or he cannot navigate. Copier bank
-  // east, vending alcove west, both set into the pod field beside the corridor mouth rather
-  // than across it — the mouth itself is a skate line and stays clear.
-  const MOUTH = RING_IN - 2.4;
-  for (let i = -1; i <= 1; i++) {
-    place(acc, makeCopier({ seed: 700 + i }), MOUTH + i * 0.05, 0, CROSS_HALF + 0.95, Math.PI, { collide: true });
+  /** Loose furniture, never colliding: this band is behind a wall and can only be looked at. */
+  function dressBay(sx: number, sz: number, x0: number, x1: number, z0: number, z1: number, n: number): void {
+    for (let i = 0; i < n; i++) {
+      const x = sx * rand(x0, x1);
+      const z = sz * rand(z0, z1);
+      if (blocked(podClear, x, z, 0.6, 0.6)) continue;
+      // Behind the 45-degree splay only. Inboard of that diagonal is corridor, and a prop
+      // standing in the corridor is the thing this whole pass exists to stop.
+      if (Math.abs(x) + Math.abs(z) < SPINE_HALF + CROSS_HALF + SPAWN_CHAM + 0.7) continue;
+      const roll = rng();
+      const accent = chance(0.18);
+      let prop: THREE.Object3D;
+      if (roll < 0.26) prop = makeDesk({ variant: 1, seed: Math.round(x * 13 + z * 7) + 211 });
+      else if (roll < 0.42) prop = makeFilingCabinet({ variant: 1, seed: Math.round(x * 17 + z * 5) + 223, accent });
+      else if (roll < 0.55) prop = makeBoxStack({ seed: Math.round(x * 19 + z * 11) + 227 });
+      else if (roll < 0.66) prop = makeCardboardBox({ variant: 1, seed: Math.round(x * 23 + z * 3) + 229 });
+      else if (roll < 0.76) prop = makePottedPlant({ variant: 0, seed: Math.round(x * 29 + z * 13) + 233 });
+      else if (roll < 0.85) prop = makeDeskChair({ variant: 1, seed: Math.round(x * 31 + z * 17) + 239, knocked: chance(0.4) });
+      else if (roll < 0.93) prop = makePrinter({ variant: 1, seed: Math.round(x * 37 + z * 19) + 241 });
+      else prop = makeTrashCan({ variant: 1, seed: Math.round(x * 41 + z * 23) + 251, accent });
+      place(acc, prop, x, 0, z, rand(0, Math.PI * 2), { collide: false });
+      if (chance(0.35)) acc.paperSeeds.push({ x, z, radius: 1.0 });
+    }
   }
-  place(acc, makeTrashCan({ variant: 0, seed: 711, accent: true }), MOUTH - 2.6, 0, CROSS_HALF + 0.8, 0, { collide: true });
-  acc.paperSeeds.push({ x: MOUTH, z: CROSS_HALF - 0.7, radius: 1.6 });
-  acc.wear.push({ x: MOUTH, z: CROSS_HALF - 1.1, width: 3.6, depth: 2.4, strength: 0.55 });
 
-  for (const vz of [-0.6, 0.6]) {
-    place(acc, makeVendingMachine({ seed: 720 + Math.round(vz * 10) }),
-      -MOUTH + vz * 1.1, 0, -CROSS_HALF - 0.9, 0, { collide: true, lights: true });
+  let podIndex = 0;
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      if (sx > 0 && sz < 0) continue;                       // the plaza
+
+      // ---- the pod run: two pods sharing a panel line, hard against the loop wall -------
+      // The run stands OUTBOARD of the splay, i.e. beyond |x| = SPINE_HALF + SPAWN_CHAM. The
+      // splay cuts the bay's inside corner off, so anything laid along X here would poke its
+      // nose through the diagonal and stand in the corridor; laid along Z it fits the 5.3 m
+      // window between the splay and the loop wall exactly, two deep.
+      for (const pz of [BAY_Z0, BAY_Z1]) {
+        const x = sx * BAY_X;
+        const z = sz * pz;
+        if (blocked(podClear, x, z, POD_SIZE / 2, POD_SIZE / 2)) continue;
+
+        // PER-POD CHARACTER. One personality roll drives every downstream dressing
+        // decision, and the distribution is barbelled on purpose: a real office has
+        // genuinely pristine desks and genuinely feral ones and very few average ones, and
+        // it is the CONTRAST between neighbours that reads as authorship. With six pods
+        // left in the level instead of thirty, each one has to carry more of that.
+        const roll = rng();
+        const mess =
+          roll < 0.25 ? rand(0.0, 0.15)
+            : roll < 0.55 ? rand(0.3, 0.55)
+              : roll < 0.82 ? rand(0.6, 0.82)
+                : rand(0.85, 1.0);
+        const tintIndex = (podIndex * 2 + (sx > 0 ? 1 : 0) + (sz > 0 ? 3 : 0)) % POD_FABRIC_TINTS.length;
+
+        const pod = makeCubiclePod({
+          variant: 0,                                       // hero dressing: this is all on camera now
+          seed: 101 + podIndex * 7,
+          panelHeight: podIndex % 3 === 1 ? PANEL_HEIGHTS[3] : 1.32,
+          fabricTint: POD_FABRIC_TINTS[tintIndex],
+          cleared: chance(0.14),
+          mess,
+          chairs: true,
+        });
+        podIndex++;
+
+        // collide: 8 — the panel boxes and nothing else. The bay is behind a 1.32 m wall, so
+        // the only way in is off a bank at cap height; the panels stop a player who lands in
+        // there from standing inside a desk, and the desks themselves are never touched.
+        // POD TOPS ARE STILL NOT RAILS: the high line lives on the corridor and loop caps,
+        // which are 9-16 m long, sit beside a racing lane, and lead somewhere.
+        place(acc, pod, x, 0, z, sx > 0 ? -Math.PI / 2 : Math.PI / 2, { collide: 8, grind: false });
+        if (mess > 0.7) acc.paperSeeds.push({ x: x - sx * (POD_SIZE / 2 + 0.5), z, radius: 1.2 });
+      }
+
+      // ---- the landmark, in the strip behind the spine wall ---------------------------
+      // SILHOUETTES TO NAVIGATE BY. From the spawn room the player is looking down four
+      // arms; each one has to terminate in something nameable or the level is a maze of
+      // identical panels. The strip is 3.7 m wide and 5.7 m deep, so each landmark is turned
+      // side-on with its front face toward the spine — which is the face the player sees.
+      const markX = sx * 9.5;
+      const markZ = sz * 13.5;
+      const markYaw = sx > 0 ? -Math.PI / 2 : Math.PI / 2;
+      if (sx > 0 && sz > 0) {
+        // The glazed conference room, north-east: the level's one see-through volume.
+        place(acc, makeConferenceBox(5.4, 3.5, { seed: 501 }), markX, 0, markZ, markYaw,
+          { collide: 4, grind: false });
+        acc.paperSeeds.push({ x: markX - sx * 2.4, z: markZ, radius: 1.0 });
+      } else if (sx < 0 && sz > 0) {
+        // The manager's office, north-west. Door faces the spine.
+        place(acc, makeManagerOffice(5.4, 3.5, { seed: 600 }), markX, 0, markZ, markYaw, { collide: 4 });
+      } else {
+        // South-west: the copier bank and the vending alcove, i.e. the bit of the floor
+        // nobody photographs. Cheap, tall, and it gives the south-west arm an end.
+        for (let i = -1; i <= 1; i++) {
+          place(acc, makeCopier({ seed: 700 + i }), markX, 0, markZ + sz * i * 1.55, markYaw,
+            { collide: false });
+        }
+        place(acc, makeVendingMachine({ seed: 720 }), markX - sx * 1.4, 0, markZ + sz * 3.4, markYaw,
+          { collide: false, lights: true });
+        acc.paperSeeds.push({ x: markX - sx * 1.8, z: markZ, radius: 1.4 });
+      }
+
+      // ---- and fill the rest with furniture you can only look at ----------------------
+      // Band 1 is the wedge left behind the 45-degree splay; band 2 is the gap between the
+      // landmark strip and the pod run, seen end-on down the arm.
+      dressBay(sx, sz, SPINE_HALF + 0.5, SPINE_HALF + SPAWN_CHAM, CROSS_HALF + 0.6, CROSS_HALF + SPAWN_CHAM, 9);
+      dressBay(sx, sz, SPINE_HALF + 0.5, SPINE_HALF + 3.4, CROSS_HALF + SPAWN_CHAM + 0.8, RING_IN - 1.0, 10);
+    }
   }
-  place(acc, makeFireExtinguisher({ seed: 731 }), -MOUTH + 2.6, 0, -CROSS_HALF - 0.7, 0, { collide: true });
-  acc.wear.push({ x: -MOUTH, z: -CROSS_HALF + 1.0, width: 3.0, depth: 2.4, strength: 0.45 });
+  // ------------------------------------------------------------ landmarks ---
+  // SIGHTLINES. The bays above already terminate each arm in something nameable — the glazed
+  // conference room north-east, the manager's office north-west, the copier bank south-west,
+  // the open plaza south-east. What used to be here was a SECOND copier bank and a second
+  // vending alcove, floor-standing and COLLIDING, sitting 0.95 m behind the cross-corridor
+  // wall at |x| = 13.9. With the corridors widened they landed inside the new pod run, and
+  // they were never anything but doubled-up landmarks anyway.
+  //
+  // All that is left is the traffic they imply: scuffed carpet and blown paper at the two
+  // arm mouths, where every route in the level converges on the loop.
+  const MOUTH = RING_IN - 2.4;
+  for (const sx of [-1, 1]) {
+    acc.wear.push({ x: sx * MOUTH, z: 0, width: 4.4, depth: 6.0, strength: 0.5 });
+    acc.paperSeeds.push({ x: sx * (MOUTH - 1.2), z: rand(-2.4, 2.4), radius: 1.8 });
+  }
 
   // ============================================================ THE PLAZA ====
   // The spawn intersection. Three parallel lines a metre and a half apart — the Long Bench
@@ -1555,14 +1620,24 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     acc.paperSeeds.push({ x: sx * 11.5, z: lane - Math.sign(lane) * 1.3, radius: 1.2 });
   }
 
-  // Banks against the arm walls, opposite the arm ledge, with their coping FLUSH with the
-  // corridor cap rail at 1.40: pump the ramp, pop the lip, hold the cap for 11 m. That is a
-  // designed line rather than a field of props.
+  // Banks against the arm walls, with their coping FLUSH with the corridor cap rail at 1.40:
+  // pump the ramp, pop the lip, hold the cap for 9 m. That is a designed line rather than a
+  // field of props.
+  //
+  // BOTH ARMS USE THEIR NORTH WALL. The east arm's used to stand against its SOUTH wall, and
+  // that wall no longer exists — the plaza opens straight onto the arm now — which left two
+  // 1.34 m quarter pipes standing free in the middle of the widest piece of floor in the
+  // level, with nothing behind their copings and a blind drop off the back. A transition
+  // needs a wall to be a transition.
   const QP_ARM_D = 1.5;
   for (const sx of [-1, 1]) {
-    const wallZ = sx > 0 ? -CROSS_HALF : CROSS_HALF;
+    const wallZ = CROSS_HALF;
     const cz = wallZ - Math.sign(wallZ) * (QP_ARM_D / 2 + 0.06);
-    for (const bx of [9.0, 14.6]) {
+    // ONE bank per arm now, not two. The 45-degree splay at the spawn end means the arm's
+    // cross wall only starts at |x| = SPINE_HALF + SPAWN_CHAM = 11.0, and 11.0 to the loop
+    // wall at 16.3 is 5.3 m of wall — room for one 4.4 m transition with a clean run-in at
+    // each end, or two crammed nose to tail with neither.
+    for (const bx of [13.6]) {
       const px = sx * bx;
       if (blocked(keepClear, px, cz, 2.4, QP_ARM_D / 2)) continue;
       place(acc, makeQuarterPipe({
@@ -1594,19 +1669,26 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // The arms only ever got skate furniture; the 1.5 m strip between the furniture and the
   // corridor wall stayed showroom-clean for eighteen metres in both directions, which is a
   // large share of what reads as "empty". Same rules as the spine: hard against the wall,
-  // never in the skate line.
+  // never in the skate line — and, like the spine's aisle clutter, NON-COLLIDING.
+  //
+  // It used to carry `collide: 2`. The arms are the level's two fastest straights and this
+  // strip is 0.55 m off the wall; a 0.35 m half-extent bin therefore projected ~0.9 m into a
+  // lane taken at 14 m/s, with no warning and nothing to route around it. That is the exact
+  // shape of the thing the owner described as bouncing off furniture. The props stay,
+  // because a bare corridor is worse, and the player ploughs through them.
+  //
+  // The south-east arm's wall is gone entirely now (the plaza opens onto it), so this run
+  // skips that quadrant rather than leaving a line of furniture floating in open floor.
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
+      if (sx > 0 && sz < 0) continue;                   // no wall there any more
       const wz = sz * (CROSS_HALF - 0.55);
-      // This arm's transitions live on the wall opposite the level's floor rail; on that side
-      // the clutter loop has to step around them.
-      const transitionSide = (sx > 0 ? -1 : 1) === sz;
-      for (let x = sx * (SPINE_HALF + 1.6); Math.abs(x) < RING_IN - 1.0; x += sx * rand(1.8, 4.2)) {
-        if (transitionSide && [9.0, 14.6].some((b) => Math.abs(Math.abs(x) - b) < 2.8)) continue;
-        // Nothing stands in the open plaza's door (see PLAZA_DOOR_X): it is a 6 m mouth a run
-        // turns through at cruise, and this loop's props are the only things that could
-        // narrow it.
-        if (sx > 0 && sz < 0 && Math.abs(x - PLAZA_DOOR_X) < PLAZA_DOOR_HALF + 1.0) continue;
+      // Both arms carry their transition on the NORTH wall now, so that is the side the
+      // clutter loop has to step around. It starts past the 45-degree splay, because inboard
+      // of |x| = SPINE_HALF + SPAWN_CHAM there is no wall to stand against.
+      const transitionSide = sz > 0;
+      for (let x = sx * (SPINE_HALF + SPAWN_CHAM + 0.7); Math.abs(x) < RING_IN - 1.0; x += sx * rand(1.6, 3.2)) {
+        if (transitionSide && Math.abs(Math.abs(x) - 13.6) < 2.8) continue;
         if (blocked(keepClear, x, wz, 0.6, 0.6)) continue;
         const roll = rng();
         const accent = chance(0.2);
@@ -1619,7 +1701,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
         else if (roll < 0.78) prop = makeWaterCooler({ variant: 1, seed: Math.round(x * 19) + 157 });
         else if (roll < 0.86) prop = makePrinter({ variant: 1, seed: Math.round(x * 23) + 163 });
         else prop = makeDeskChair({ variant: 1, seed: Math.round(x * 29) + 167, knocked: roll > 0.94 });
-        place(acc, prop, x, 0, wz, rand(0, Math.PI * 2), { collide: 2 });
+        place(acc, prop, x, 0, wz, rand(0, Math.PI * 2), { collide: false });
         if (chance(0.55)) acc.paperSeeds.push({ x: x + rand(-1.1, 1.1), z: wz - sz * 0.9, radius: 1.0 });
       }
     }
@@ -1676,6 +1758,13 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // therefore backs onto the loop's INNER wall instead, in the service strip beside the
   // cubicle panelling, stepping around the banks and the four corridor mouths. Wall-mounted
   // furniture (no colliders) stays on the building wall where it belongs.
+  //
+  // AND IT DOES NOT COLLIDE EITHER. The argument above applies just as hard to the inner
+  // wall: the loop is a 6.7 m lane, the ledge down the middle of it is 3.0 m wide, and that
+  // leaves 1.85 m of clear carpet inboard of the ledge. A filing cabinet at RING_IN + 0.62
+  // with a 0.3 m half-extent took HALF of that lane. Measured on the perimeter cruise
+  // scripts, this run was the single largest contributor to Game.resolveObstacles firing on
+  // the ring — a circuit you are supposed to be able to hold at speed with one hand.
   const DRESS = RING_IN + 0.62;
   const wallRuns: { nx: number; nz: number; along: 'x' | 'z'; base: number; wall: number }[] = [
     { nx: 0, nz: -1, along: 'x', base: -DRESS, wall: -halfD + 0.34 },
@@ -1687,8 +1776,12 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   for (const run of wallRuns) {
     const yaw = Math.atan2(run.nx, run.nz); // face out into the loop
     const span = run.along === 'x' ? W : D;
+    // The mouth this run has to step around is the SPINE mouth on the north/south walls and
+    // the CROSS mouth on the east/west ones. It used to use CROSS_HALF for both, which put
+    // furniture across the spine's exits onto the loop.
+    const mouthHalf = (run.along === 'x' ? SPINE_HALF : CROSS_HALF) + 1.6;
     for (let t = -RING_IN + 1.2; t < RING_IN - 1.2; t += rand(0.9, 2.4)) {
-      if (Math.abs(t) < CROSS_HALF + 1.6) continue;                       // corridor mouth
+      if (Math.abs(t) < mouthHalf) continue;                              // corridor mouth
       if ([-10.4, 10.4].some((b2) => Math.abs(t - b2) < 2.9)) continue;   // bank window
       const x = run.along === 'x' ? t : run.base;
       const z = run.along === 'x' ? run.base : t;
@@ -1714,7 +1807,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       } else {
         prop = makeFireExtinguisher({ seed: Math.round(t * 43) + 27 });
       }
-      place(acc, prop, x, 0, z, yaw + rand(-0.05, 0.05), { collide: true });
+      place(acc, prop, x, 0, z, yaw + rand(-0.05, 0.05), { collide: false });
 
       // A stacked box on top of a cabinet reads as "moving day" like the refs.
       if (roll < 0.2 && chance(0.5)) {
@@ -1752,12 +1845,14 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // no contact shadow was the loudest cheapness tell in the build: it read as a broken decal
   // system, not as blown paperwork. Paper piles where it was dropped.
   //
-  // 320 sheets, up from 160. Two things changed since that number was picked: the clustering
-  // pass landed (so sheets pile where something happened instead of dusting the plate evenly),
-  // and the seed list has roughly doubled with the transitions, islands and arm clutter. Loose
-  // paper is the single cheapest thing in the refs — it is in every one of them, in drifts —
-  // and at 18 triangles a sheet the whole storm is one mesh and 5,800 triangles.
-  const paper = makeScatterPaper(320, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
+  // 240 sheets, down from 320. The count was picked when the pod field filled four quadrants
+  // and the seed list was twice as long; on the opened-up plate the same 320 sheets fell
+  // mostly on bare corridor carpet, where a uniform dusting of white quads reads as noise
+  // rather than as blown paperwork. Fewer sheets against the same seed list means the drifts
+  // that remain are where something happened. Loose paper is the single cheapest thing in the
+  // refs — it is in every one of them, in drifts — and at 18 triangles a sheet the whole storm
+  // is one mesh.
+  const paper = makeScatterPaper(240, W - 6, D - 6, { seed: 7, clusters: acc.paperSeeds });
   place(acc, paper, 0, 0, 0, 0, { collide: false });
 
   // Traffic-lane wear down both corridors plus the point stains collected above.

@@ -42,6 +42,29 @@ import { DialogueBox } from '../ui/DialogueBox';
 
 const DEG2RAD = Math.PI / 180;
 
+/** Shortest signed representation of an angle, in (-pi, pi]. */
+function wrapPi(a: number): number {
+  let x = a;
+  while (x > Math.PI) x -= Math.PI * 2;
+  while (x < -Math.PI) x += Math.PI * 2;
+  return x;
+}
+
+/**
+ * The chair's heading in world space, from a quaternion, as the angle whose forward is
+ * (sin, 0, cos) — the same convention PhysicsWorld.setRotationY writes.
+ *
+ * Reading `object.rotation.y` instead is a trap that cost this game several bugs. THREE's
+ * default 'XYZ' Euler decomposition of a pure yaw q folds the angle into [-pi/2, pi/2]:
+ * for any |yaw| > 90 degrees it reports (pi, pi - yaw, pi), which is the SAME rotation but
+ * a different number, mirrored about the X axis and running the other way. Anything that
+ * read it — the minimap arrow, the checkpoint heading, the air-spin counter — was right on
+ * one half of the compass and mirrored on the other.
+ */
+function yawOf(q: THREE.Quaternion | { x: number; y: number; z: number; w: number }): number {
+  return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.z * q.z));
+}
+
 /** Stable 32-bit hash, so a level's procedural scatter is identical every reload. */
 function hashString(s: string): number {
   let h = 2166136261;
@@ -268,7 +291,7 @@ export class Game {
     taken: boolean;
   }[] = [];
   private cumulativeSpinDegrees = 0;  // Track total spin during air time
-  private airStartRotation = 0;  // Chair Y rotation when leaving ground
+  private lastAirYaw = 0;  // Chair heading last air frame, for the spin accumulator
   private lastGroundedTime = 0;  // Coyote time tracking
   private lastPushSoundTime = 0;  // Cooldown for push sound
   
@@ -304,6 +327,30 @@ export class Game {
   private readonly ROLL_DRAG_K = 0.035;
   /** How fast velocity is redirected to the way the chair points, 1/s. Carving keeps speed. */
   private readonly GRIP_RATE = 9.0;
+  /**
+   * Facing-follows-travel recovery. A chair whose velocity has been knocked more than
+   * REALIGN_ANGLE off its nose is not carving, it is sliding — and there is no input that
+   * asks for that, so the chair turns to face where it is going at REALIGN_RATE until the
+   * misalignment is back inside the threshold. 60 degrees is comfortably outside the ~16
+   * degrees a full-lock carve lags by, so steering never wakes it, and the rate is a
+   * spin-out recovery the player can read rather than a snap — doubled for an outright
+   * reversal, which is an emergency and should be over before it can be watched.
+   */
+  private readonly REALIGN_ANGLE = Math.PI / 3;
+  private readonly REALIGN_RATE = 9.0;
+  /**
+   * Drag while travelling backwards, 1/s, on top of the constant term. Being dragged
+   * backwards on casters is not a mode of travel, it is a scrub: a full-speed bounce
+   * loses about a tenth of what is left every frame, so the worst hit in the game is
+   * down to walking pace by the time the chair has finished turning to face its line.
+   */
+  private readonly REVERSE_SCRUB = 6.0;
+  /**
+   * Below this the heading is noise — a chair at rest has no travel direction. Kept low
+   * deliberately: a chair rolling backwards at walking pace is still rolling backwards,
+   * and it is the slow ones a player has time to sit and watch.
+   */
+  private readonly REALIGN_MIN_SPEED = 0.9;
   /** Tallest obstacle the casters will roll up instead of stopping dead. */
   private readonly STEP_HEIGHT = 0.42;
   /** Seconds of being stopped-while-pushing before the chair is treated as pinned. */
@@ -1041,7 +1088,7 @@ export class Game {
   private triggerCheckpoint(index: number, checkpoint: StoryCheckpoint): void {
     this.lastCheckpointIndex = index;
     this.checkpointPosition = this.chair.position.clone();
-    this.checkpointRotation = this.chair.rotation.y;
+    this.checkpointRotation = yawOf(this.chair.quaternion);
     
     // Save to story progress
     storyProgress.setCheckpoint(this.currentLevelId, index);
@@ -3564,7 +3611,7 @@ export class Game {
     this.chair.quaternion.copy(rot);
 
     if (this.playerState.isAirborne && this.spinRotation !== 0) {
-      this.chair.rotation.y += this.spinRotation * dt;
+      this.chair.rotateY(this.spinRotation * dt);
     }
 
     // The rigid body is Y-locked, so BalanceSystem's pitch/roll go on the visual group.
@@ -3580,11 +3627,11 @@ export class Game {
     this.score.setAirborne(this.playerState.isAirborne);
     // Air rotation feeds the spin scorer, which turns it into 180/360/540 entries itself.
     if (this.playerState.isAirborne) {
-      const yawNow = this.chair.rotation.y;
+      const yawNow = yawOf(this.chair.quaternion);
       this.score.addSpin(yawDeltaDegrees(this.lastYaw, yawNow));
       this.lastYaw = yawNow;
     } else {
-      this.lastYaw = this.chair.rotation.y;
+      this.lastYaw = yawOf(this.chair.quaternion);
     }
     this.score.update(dt);
     this.hud?.setScore(this.score.balance);
@@ -3645,7 +3692,7 @@ export class Game {
 
     this.speedLines.update(dt, currentSpeed, this.playerState.isGrounded);
     this.hud?.setSpeed(currentSpeed);
-    this.hud?.setMinimapPlayer(this.chair.position.x, this.chair.position.z, this.chair.rotation.y);
+    this.hud?.setMinimapPlayer(this.chair.position.x, this.chair.position.z, yawOf(this.chair.quaternion));
     this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
     this.cameraController.setTrickZoom(this.playerState.isAirborne, this.playerState.airTime);
     this.cameraController.setManualing(this.playerState.isManualing);
@@ -4181,11 +4228,14 @@ export class Game {
     if (this.playerState.isAirborne) {
       this.playerState.airTime += dt * 1000;
       
-      // Track spin - calculate cumulative rotation since leaving ground
-      const currentRotation = this.chair.rotation.y;
-      const spinDelta = (currentRotation - this.airStartRotation) * (180 / Math.PI);
-      // Normalize to handle wrap-around (accumulates properly)
-      this.cumulativeSpinDegrees = Math.abs(spinDelta);
+      // Track spin. Accumulated from per-frame deltas rather than differenced against the
+      // take-off heading: a heading is an angle on a circle, so the difference across the
+      // wrap point is a 360-degree jump that never happened, and a 540 that crossed it read
+      // as a 180.
+      const currentRotation = yawOf(this.chair.quaternion);
+      this.cumulativeSpinDegrees
+        += Math.abs(wrapPi(currentRotation - this.lastAirYaw)) * (180 / Math.PI);
+      this.lastAirYaw = currentRotation;
       
       // Update HUD with spin counter (only show if >= 90 degrees)
       const roundedSpin = Math.floor(this.cumulativeSpinDegrees / 180) * 180;
@@ -4196,8 +4246,8 @@ export class Game {
     
     // Becoming airborne - store starting rotation
     if (wasGrounded && !this.playerState.isGrounded) {
-      this.airStartRotation = this.chair.rotation.y;
-      this.lastYaw = this.chair.rotation.y;
+      this.lastAirYaw = yawOf(this.chair.quaternion);
+      this.lastYaw = this.lastAirYaw;
       this.takeoffPos.copy(pos);
       this.cumulativeSpinDegrees = 0;
       // A manual cannot survive the wheels leaving the floor.
@@ -4479,13 +4529,83 @@ export class Game {
       // coasting bleeds off slowly enough that the gaps between features stay alive.
       let speed = currentSpeed;
       const rolling = currentSpeed > 0.05 ? planar.clone().divideScalar(currentSpeed) : fwdFlat.clone();
-      const goingBackwards = rolling.dot(fwdFlat) < -0.2;
-      const heading = goingBackwards ? fwdFlat.clone().negate() : fwdFlat.clone();
 
-      // Grip: rotate the velocity vector toward the heading, magnitude untouched.
-      const grip = 1 - Math.exp(-this.GRIP_RATE * dt);
-      const dir = rolling.lerp(heading, grip);
-      if (dir.lengthSq() < 1e-8) dir.copy(heading); else dir.normalize();
+      // ---- THE CHAIR HAS NO REVERSE GEAR ------------------------------------------
+      //
+      // This model used to accept backwards travel as a legitimate state: if the velocity
+      // opposed the facing by more than ~101 degrees it flipped `heading` to -forward and
+      // gripped the velocity onto it. Nothing ever flipped it back, so backwards was a
+      // LATCH, and everything downstream then worked to keep the player there: the speed
+      // entitlement re-inflated the reversed direction to 93% of cruise, and holding the
+      // push accelerated along it. Measured on ch1_office, 37.6% of a 20 s coast-and-turn
+      // run had velocity opposing the facing, worst case 10.6 m/s backwards.
+      //
+      // How the player got there is not a reverse input — there isn't one. It is contact:
+      // the solver removes the into-the-surface component of a graze, and whatever slice
+      // of the line survives can point anywhere, including behind the chair. One frame of
+      // that used to be permanent.
+      //
+      // So: travel that opposes the facing is always something the WORLD did, never
+      // something the player asked for, and the correction is to turn the CHAIR to face
+      // where it is actually going — a spin-out recovery, over about a quarter of a
+      // second — rather than to turn the LINE around to suit a facing nobody chose. The
+      // trajectory the player earned survives; the chair ends up pointing along it.
+      const faceAngle = Math.atan2(fwdFlat.x, fwdFlat.z);
+      const travelAngle = Math.atan2(rolling.x, rolling.z);
+      const misalign = wrapPi(travelAngle - faceAngle);
+      const slewing = currentSpeed > this.REALIGN_MIN_SPEED
+        && Math.abs(misalign) > this.REALIGN_ANGLE;
+      // Actually travelling backwards, as opposed to merely sliding: the only state the
+      // rules below have to refuse. Judged on the body's own velocity before anything in
+      // this frame has touched it, and only while the chair is moving fast enough for a
+      // heading to mean anything — a chair shuffling at walking pace against a desk leg
+      // has no line to protect and must never be locked out of its own accelerator.
+      const reversing = currentSpeed > this.REALIGN_MIN_SPEED && Math.abs(misalign) > Math.PI / 2;
+      if (slewing) {
+        // Turn toward the travel direction, but never past the threshold: this is a
+        // recovery from a broadside, not a steering override. A normal carve lags the
+        // facing by ~16 degrees and can never wake it. An outright reversal is an
+        // emergency and gets twice the rate, so the worst case in the game — landing a
+        // 180 backwards at speed — is pointing the right way again inside a fifth of a
+        // second rather than being something the player has to watch happen to them.
+        const rate = this.REALIGN_RATE * (reversing ? 2 : 1);
+        const swing = Math.sign(misalign)
+          * Math.min(Math.abs(misalign) - this.REALIGN_ANGLE, rate * dt);
+        const newFace = faceAngle + swing;
+        this.physics.setRotationY(this.chairBody, newFace);
+        fwdFlat.set(Math.sin(newFace), 0, Math.cos(newFace));
+      }
+
+      // Grip: rotate the velocity vector toward the facing, magnitude untouched. Done as a
+      // rotation through the angle rather than a lerp between vectors — a lerp toward the
+      // exact opposite vector collapses to zero length, which is precisely the case a chair
+      // that has just been spun round by a wall is in. Only an outright reversal weakens the
+      // grip: there the recovery should be the chair turning to meet the line, not the line
+      // being yanked round to meet the chair. A merely sideways slide keeps full grip, or
+      // the two rules meet in the middle and the chair drifts at the threshold angle
+      // forever — measured at a permanent 60 degree crab through every carve.
+      const grip = (1 - Math.exp(-this.GRIP_RATE * dt)) * (reversing ? 0.25 : 1);
+      const dirAngle = travelAngle - wrapPi(travelAngle - Math.atan2(fwdFlat.x, fwdFlat.z)) * grip;
+      const dir = new THREE.Vector3(Math.sin(dirAngle), 0, Math.cos(dirAngle));
+
+      // THE INVARIANT: this model never writes a velocity with a backwards component. The
+      // solver can still produce one — a head-on hit at 13 m/s has to go somewhere — but it
+      // survives exactly one frame, because the next one takes the backwards component out
+      // and leaves the sideways part. A hit that used to fire the player back across the
+      // room now skids them along it. Without this the reversal lasted as long as the chair
+      // took to turn round (4-7 frames, and up to 149 before any of this existed).
+      if (reversing) {
+        const back = dir.dot(fwdFlat);
+        if (back < 0) {
+          dir.addScaledVector(fwdFlat, -back);
+          if (dir.lengthSq() < 1e-6) {
+            // Dead astern: no sideways component to keep. Peel off the way the chair is
+            // already turning, so the recovery reads as one movement.
+            dir.set(fwdFlat.z, 0, -fwdFlat.x).multiplyScalar(Math.sign(misalign) || 1);
+          }
+          dir.normalize();
+        }
+      }
 
       // Curbs, ramp lips, stair edges and walls, resolved BEFORE the velocity is written
       // so a contact steers the line instead of ending it. `dir` comes back pointing
@@ -4504,12 +4624,28 @@ export class Game {
       // of it. Deliberate deceleration can never trigger it: braking is gated out here, and
       // the entitlement below only ever bleeds by the exact amount this model chose to
       // take, so slowing down on purpose is never mistaken for the solver taking a bite.
-      if (!intent.brake && this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.85) {
+      //
+      // THE RESTORE MAY NEVER RE-INFLATE A REVERSED LINE. Whatever survives a contact is
+      // whatever the solver left, and that can point behind the chair; handing it 93% of
+      // cruise turned a bounce into a full-speed reversal. The probe caught the exact
+      // frames: speed 8.7 -> 3.9 as the solver ate the into-wall component, then 8.8 again
+      // the next frame, pointing backwards, and it stayed there. The restore is now held
+      // back for exactly as long as the chair is pointed the wrong way, and hands the line
+      // back the moment it is facing its travel again — so a hit costs a change of line
+      // rather than the run, which is the whole point of the restore, and it can never
+      // again pay out along a direction the player did not choose.
+      if (!intent.brake && !reversing && this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.85) {
         speed = this.carriedSpeed * (contact ? 0.85 : 0.93);
       }
       const speedAfterRestore = speed;
 
-      if (intent.push) {
+      if (intent.push && reversing) {
+        // Pushing while the chair is still travelling backwards out of a hit. Feeding the
+        // accelerator here would drive the player further backwards — the wheels scrub
+        // instead, so the input the player reaches for to recover actually recovers.
+        speed -= 10 * dt;
+        if (speed < 0) speed = 0;
+      } else if (intent.push) {
         // Ease-off accel: full kick from a standstill, almost nothing left once you are
         // cruising. The residual term used to be a flat 25% of PUSH_ACCEL — 4 m/s^2 that
         // never faded, so simply holding forward on any clear straight dragged the player
@@ -4537,6 +4673,18 @@ export class Game {
         // end settles; between them a 13 m/s coast still reads 10 m/s four seconds later.
         speed -= (this.ROLL_DRAG + this.ROLL_DRAG_K * speed) * dt;
         if (speed < 0) speed = 0;
+      }
+
+      // Backwards travel scrubs. Whatever the input, a chair being dragged backwards on its
+      // casters sheds that speed fast — so a hit that spins the line round costs the player
+      // the speed rather than firing them across the room with it, and the reversal is over
+      // in a few frames instead of being a state you have to drive out of.
+      let reverseScrub = 0;
+      if (reversing) {
+        const before = speed;
+        speed -= (8 + this.REVERSE_SCRUB * speed) * dt;
+        if (speed < 0) speed = 0;
+        reverseScrub = before - speed;
       }
 
       // Gravity along the surface: ramps give speed back on the way down and cost on the
@@ -4568,7 +4716,14 @@ export class Game {
       // scraping a wall or a desk leg cost 0.3 m/s on top of whatever the solver took, so a
       // graze at 15 m/s bled out inside a second. A wall now costs a fixed slice at the
       // moment of contact plus a mild 3 m/s^2 while you stay on it, and the line survives.
-      const authoredLoss = Math.min(0, speed - speedAfterRestore);
+      // The reverse scrub is deliberately NOT counted as an authored loss. It is the model
+      // undoing something the world did, and charging the player's entitlement for it would
+      // mean every hit that spun them round also cost them the whole run: the chair would
+      // shed the reversal, come round to face its line, and then have nothing left to
+      // continue it with. Measured over a 30 s flow run, charging it took mean speed from
+      // 13.9 to 9.3 m/s and dead time from 1.5% to 10.2%. The line survives the contact;
+      // what it does not survive is being pointed backwards.
+      const authoredLoss = Math.min(0, speed - speedAfterRestore + reverseScrub);
       this.carriedSpeed = Math.min(maxSpeed, Math.max(speed,
         this.carriedSpeed + authoredLoss - (contact ? 3 : 0) * dt));
     } else if (intent.brake && currentSpeed > 0.1) {
