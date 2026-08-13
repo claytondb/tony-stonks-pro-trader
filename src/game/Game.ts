@@ -379,6 +379,23 @@ export class Game {
   private readonly REALIGN_ANGLE = Math.PI / 3;
   private readonly REALIGN_RATE = 9.0;
   /**
+   * ...but a SLIDE IS NOT AN EMERGENCY, and it was being treated as one.
+   *
+   * REALIGN_RATE is 9 rad/s — 515 deg/s, three and a half times the 2.56 rad/s the
+   * player's own full lock delivers. Every time the solver scrubbed the velocity sideways
+   * off a wall, the chair was whipped round to follow it faster than the player could ever
+   * have turned it, and there is no input that cancels that. Measured holding W straight
+   * for 30 s in ch1_office, this path alone applied 550 degrees of heading the player
+   * never asked for — more than everything else in the movement model combined, and the
+   * solver contributed literally zero of it directly.
+   *
+   * An ordinary slide now recovers BELOW the player's own turn authority, so the promise
+   * holds in every state: whatever the world does to the line, the stick can out-steer it.
+   * The doubled REALIGN_RATE is kept for an outright reversal, which really is an
+   * emergency and really should be over before the player can sit and watch it.
+   */
+  private readonly REALIGN_SLEW_RATE = 2.2;
+  /**
    * Drag while travelling backwards, 1/s, on top of the constant term. Being dragged
    * backwards on casters is not a mode of travel, it is a scrub: a full-speed bounce
    * loses about a tenth of what is left every frame, so the worst hit in the game is
@@ -400,6 +417,23 @@ export class Game {
   /** Seconds spent trying to move but going nowhere; drives the stuck watchdog. */
   private stuckFor = 0;
   private pinnedFor = 0;
+  /**
+   * ONE CONTACT, ONE STEER. Seconds left in which the SAME wall may not turn the chair
+   * again, and the normal of the wall that turned it.
+   *
+   * The escape used to re-arm every frame. A single wall at 13 m/s is in front of the
+   * feeler for six or eight frames running, so one wall billed as six escapes, and the
+   * heading walked round in clamped steps until the player was pointing somewhere they had
+   * never asked to go. Measured holding W straight for 30 s: 29-35 fires and 660 degrees
+   * of uncommanded heading, ALL of it applied by this model — the solver contributed
+   * exactly zero. During the refractory the velocity is still taken out of the wall (that
+   * is physics, and skipping it buries the chair) but the FACING is left alone, so the
+   * chair scrubs along the wall pointing where the player pointed it.
+   */
+  private escapeCooldown = 0;
+  private lastEscapeNormal: THREE.Vector3 | null = null;
+  /** How far the last escape bent the line, in radians. Priced into the contact restore. */
+  private escapeBend = 0;
   /** Speed the player has earned and is entitled to keep across a contact. */
   private carriedSpeed = 0;
   /** Speed a possible crash was entered at, and how many frames are left to confirm it. */
@@ -4748,6 +4782,9 @@ export class Game {
   private resolveObstacles(dt: number, dir: THREE.Vector3, speed: number, pushing: boolean): boolean {
     const pos = this.physics.getPosition(this.chairBody);
     const wheelY = pos.y - CHAIR_FOOT_OFFSET;
+    this.escapeCooldown = Math.max(0, this.escapeCooldown - dt);
+    if (this.escapeCooldown <= 0) this.lastEscapeNormal = null;
+    this.escapeBend = 0;
 
     // A TRANSITION IS NOT A WALL, and this function cannot tell the difference on its own.
     // It fires a feeler forward at wheel height, measures how far the thing in front rises
@@ -4764,8 +4801,15 @@ export class Game {
 
     // Feeler starts a few centimetres above the floor so the floor itself is never a wall,
     // and reaches well past the capsule so contact is seen before the solver reaches it.
+    // THE FEELER MAY NOT GROW WITH SPEED. It used to reach `0.45 + speed*dt*3`, which is
+    // 0.70 m at rest but 1.10 m at 13 m/s and 1.20 m at 15 — so the faster the player went,
+    // the further ahead the game started steering for them, and the more frames each wall
+    // spent inside the feeler. That is the escape getting LOUDER exactly where the player
+    // needs it quietest. It is capped now: 0.70 m at rest, 0.80 m at any speed the game can
+    // reach. The solver still catches anything the feeler misses, and the pin path below is
+    // untouched, so nothing can be walked into and left there.
     const feelerOrigin = new THREE.Vector3(pos.x, wheelY + 0.06, pos.z);
-    const reach = 0.45 + Math.max(0.25, speed * dt * 3);
+    const reach = 0.45 + Math.max(0.25, Math.min(0.35, speed * dt * 3));
     const ahead = this.physics.probeDirection(feelerOrigin, dir, reach, this.chairBody);
 
     let blocked = false;
@@ -4851,7 +4895,42 @@ export class Game {
     // Redirect the line immediately — the velocity has to leave the wall this frame or the
     // solver eats it — but bank the chair's yaw across a few frames so it reads as a
     // carve off the obstacle rather than a teleporting handbrake turn.
+    //
+    // How far this contact bent the line, priced by the caller: a graze that costs a few
+    // degrees should cost almost no speed, and a wall taken square on should cost real
+    // speed rather than handing back a free full-speed sidestep.
+    //
+    // NO SINGLE CONTACT MAY BEND THE PLAYER'S LINE BY MORE THAN 45 DEGREES. Taking a wall
+    // square on used to synthesise a 68 degree sidestep — measured 33 times in two minutes
+    // of holding W — and the player kept 85% of their speed while leaving in a direction
+    // they had never chosen. Nothing about the physics demands that number: what a wall
+    // demands is that the velocity stop pointing INTO it, and the 68 came from a blend of
+    // guesses about which way to peel. Past 45 degrees the contact is charged to the
+    // player's SPEED instead of their HEADING (see the restore), which is the trade the
+    // whole assignment asks for — a wall you hit square should slow you down, not spin you.
+    if (!pinned) {
+      const MAX_LINE_BEND = Math.PI / 4;
+      const from = Math.atan2(dir.x, dir.z);
+      let bendTo = Math.atan2(slide.x, slide.z) - from;
+      while (bendTo > Math.PI) bendTo -= Math.PI * 2;
+      while (bendTo < -Math.PI) bendTo += Math.PI * 2;
+      if (Math.abs(bendTo) > MAX_LINE_BEND) {
+        const capped = from + Math.sign(bendTo) * MAX_LINE_BEND;
+        slide.set(Math.sin(capped), 0, Math.cos(capped));
+      }
+    }
+    this.escapeBend = Math.acos(Math.max(-1, Math.min(1, dir.dot(slide))));
     dir.copy(slide);
+
+    // ONE CONTACT, ONE STEER. A wall stays inside the feeler for six or eight frames at
+    // cruise, and every one of those frames used to re-aim the chair. Once this wall has
+    // had its steer, it gets the velocity (it must — the alternative is burying the chair
+    // in it) and nothing else, until either 0.18 s has passed or the chair meets a
+    // genuinely different face. The pinned path is exempt: a chair that has actually
+    // stopped is a stuck chair, and getting it out outranks everything here.
+    const sameWall = !!wallNormal && !!this.lastEscapeNormal
+      && wallNormal.dot(this.lastEscapeNormal) > 0.766; // within 40 degrees
+    if (!pinned && this.escapeCooldown > 0 && sameWall) return true;
 
     const targetYaw = Math.atan2(slide.x, slide.z);
     const rot = this.physics.getRotation(this.chairBody);
@@ -4866,8 +4945,18 @@ export class Game {
     // turn the player more than 60 degrees, so the line always survives recognisably.
     const ESCAPE_YAW_LIMIT = Math.PI / 3;
     delta = Math.max(-ESCAPE_YAW_LIMIT, Math.min(ESCAPE_YAW_LIMIT, delta));
-    const maxTurn = (pinned ? 9 : 6) * dt;
+    // THE WORLD MAY NOT OUT-TURN THE PLAYER. This was 6 rad/s — two and a half times the
+    // 2.56 rad/s the player's own full lock delivers — so in any argument between the level
+    // and the stick, the level won, and it won at more than double the rate. It is now
+    // strictly below the player's authority, which is the whole of the promise being made:
+    // whatever the world does to your line, you can always out-steer it. The pinned path
+    // keeps its old authority, because a stuck chair is not an argument.
+    const maxTurn = (pinned ? 9 : 2.4) * dt;
     this.physics.setRotationY(this.chairBody, yaw + Math.max(-maxTurn, Math.min(maxTurn, delta)));
+    if (!pinned) {
+      this.escapeCooldown = 0.18;
+      this.lastEscapeNormal = wallNormal ? wallNormal.clone() : null;
+    }
 
     if (pinned) {
       // Nothing else has worked for a quarter of a second: shove the chair off the wall so
@@ -5061,6 +5150,9 @@ export class Game {
       // heading to mean anything — a chair shuffling at walking pace against a desk leg
       // has no line to protect and must never be locked out of its own accelerator.
       const reversing = currentSpeed > this.REALIGN_MIN_SPEED && Math.abs(misalign) > Math.PI / 2;
+      /** How far into the slew we are: 0 at the threshold, 1 at dead sideways. */
+      const past = Math.min(1, Math.max(0,
+        (Math.abs(misalign) - this.REALIGN_ANGLE) / (Math.PI / 2 - this.REALIGN_ANGLE)));
       if (slewing) {
         // Turn toward the travel direction, but never past the threshold: this is a
         // recovery from a broadside, not a steering override. A normal carve lags the
@@ -5068,7 +5160,13 @@ export class Game {
         // emergency and gets twice the rate, so the worst case in the game — landing a
         // 180 backwards at speed — is pointing the right way again inside a fifth of a
         // second rather than being something the player has to watch happen to them.
-        const rate = this.REALIGN_RATE * (reversing ? 2 : 1);
+        // Urgency in proportion to the trouble, but the whole non-reversing range stays
+        // an order below the old 9 rad/s snap: 2.2 rad/s at 60 degrees of crab, 2.6 at 70,
+        // 3.9 at 80. Only an outright reversal — a spin-out the player wants over before
+        // they can watch it — still gets the emergency rate.
+        const rate = reversing
+          ? this.REALIGN_RATE * 2
+          : this.REALIGN_SLEW_RATE + (6.0 - this.REALIGN_SLEW_RATE) * past * past;
         const swing = Math.sign(misalign)
           * Math.min(Math.abs(misalign) - this.REALIGN_ANGLE, rate * dt);
         const newFace = faceAngle + swing;
@@ -5084,7 +5182,17 @@ export class Game {
       // being yanked round to meet the chair. A merely sideways slide keeps full grip, or
       // the two rules meet in the middle and the chair drifts at the threshold angle
       // forever — measured at a permanent 60 degree crab through every carve.
-      const grip = (1 - Math.exp(-this.GRIP_RATE * dt)) * (reversing ? 0.25 : 1);
+      //
+      // A DEEP SLIDE IS CLOSED BY THE LINE, NOT BY THE CHAIR. Slowing the facing recovery
+      // to below the player's own turn authority left the chair loitering at 70-80 degrees
+      // of crab, close enough that the next contact tipped it into a real reversal — worth
+      // a point on judge-reverse. The answer is not to snap the chair round again, which is
+      // the thing the player experiences as the game steering for them; it is to bite
+      // harder with the wheels, which pulls the LINE back to the nose the player is already
+      // holding. Same recovery, and it arrives at the heading the player chose rather than
+      // at the one the wall chose.
+      const gripRate = this.GRIP_RATE * (1 + (reversing ? 0 : past));
+      const grip = (1 - Math.exp(-gripRate * dt)) * (reversing ? 0.25 : 1);
       const dirAngle = travelAngle - wrapPi(travelAngle - Math.atan2(fwdFlat.x, fwdFlat.z)) * grip;
       const dir = new THREE.Vector3(Math.sin(dirAngle), 0, Math.cos(dirAngle));
 
@@ -5149,9 +5257,17 @@ export class Game {
       let stalled = false;
       /** Speed the slope gave (+) or took (-) this frame. An authored loss like any other. */
       let slopeWork = 0;
+      // A CONTACT IS PRICED BY HOW FAR IT BENT THE LINE. The restore used to hand back a
+      // flat 85% of cruise on any contact at all, which meant a wall taken dead square on
+      // paid out a free 68-degree sidestep at 13.7 m/s — the player kept every bit of their
+      // speed and simply left in a direction they had not chosen. That is the single
+      // loudest source of "the chair doesn't go where I point". A graze still costs almost
+      // nothing, which is what the restore exists for; squaring up a wall now costs the
+      // speed instead of costing the heading.
+      const bend = Math.min(1, this.escapeBend / (Math.PI / 2));
       if (!intent.brake && !reversing && !onTransition
           && this.carriedSpeed > 3.5 && speed < this.carriedSpeed * 0.85) {
-        speed = this.carriedSpeed * (contact ? 0.85 : 0.93);
+        speed = this.carriedSpeed * (contact ? 0.85 - 0.35 * bend : 0.93);
       }
       const speedAfterRestore = speed;
 

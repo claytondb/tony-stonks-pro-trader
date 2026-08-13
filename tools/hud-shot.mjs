@@ -42,7 +42,7 @@ const LEVEL = String(arg('level', 'ch1_office'));
 const SCRIPT = String(arg('script', 'W:0-9'));
 const AT = Number(arg('at', 8));
 const OUT = resolve(String(arg('out', 'shots/hud.png')));
-const STAGE = String(arg('stage', 'none'));   // none | trick | storm
+const STAGE = String(arg('stage', 'none'));   // none | trick | storm | balance
 const DIST = String(arg('dist', 'dist-hud'));
 const W = Number(arg('w', 1280));
 const H = Number(arg('h', 720));
@@ -188,10 +188,18 @@ async function main() {
         if (!hud) return;
         window.__hideOther?.();
         window.setTimeout = () => 0;
-        // The render loop keeps calling setComboState(null) even while paused, which
-        // would wipe the staged line before the shutter. Detach it; the DOM stays.
+        // The render loop keeps driving the HUD even after the freeze, which would
+        // wipe any staged state before the shutter. Detach it; the DOM stays.
         window.__hud = hud;
         g.hud = null;
+        if (stage === 'balance') {
+          // A manual at low speed: the meter that used to share pixels with the
+          // bottom-right corner of the goal list.
+          hud.setBalanceMode('manual');
+          hud.setBalanceVisible(true);
+          hud.setBalance(0.62);
+          return -1;
+        }
         const speed = hud.attentionSpeed ?? -1;
         hud.setSpinCounter(540);
         hud.setComboState({
