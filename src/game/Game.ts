@@ -395,6 +395,10 @@ export class Game {
   private readonly STEP_HEIGHT = 0.42;
   /** Seconds of being stopped-while-pushing before the chair is treated as pinned. */
   private readonly PIN_SECONDS = 0.25;
+  /** Consecutive wall-escape kicks that failed to free the chair; drives the vertical escape. */
+  private failedKicks = 0;
+  /** Seconds spent trying to move but going nowhere; drives the stuck watchdog. */
+  private stuckFor = 0;
   private pinnedFor = 0;
   /** Speed the player has earned and is entitled to keep across a contact. */
   private carriedSpeed = 0;
@@ -4409,7 +4413,39 @@ export class Game {
   private updatePlayerState(dt: number): void {
     const pos = this.physics.getPosition(this.chairBody);
     const vel = this.physics.getVelocity(this.chairBody);
-    
+
+    // ---- stuck watchdog -------------------------------------------------------------
+    //
+    // Last-resort guarantee that a run can never simply end. The wall-escape system
+    // handles being pressed against a surface, but it lives on the grounded movement
+    // path — so a chair buried inside geometry, where the ground ray finds nothing and
+    // the wall feeler has no clean normal, never reaches it. A grid sweep of the office
+    // found four adjacent positions in a cubicle pocket where the player could not reach
+    // any speed from any of four headings.
+    //
+    // This runs every frame regardless of state. If the player is trying to move and has
+    // been going nowhere for a second and a half, lift the chair clear (cubicle panels are
+    // about 1.14 m, so 2 m clears them) and give it a nudge along its own heading. Not
+    // elegant, but a level edit only fixes the pockets we happen to find, and this fixes
+    // every pocket including the ones nobody has walked into yet.
+    {
+      const planar = Math.hypot(vel.x, vel.z);
+      const wantsToMove = this.intent?.push || this.carriedSpeed > 3.5;
+      if (wantsToMove && planar < 1.0) this.stuckFor += dt;
+      else this.stuckFor = 0;
+
+      if (this.stuckFor >= 1.5) {
+        const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(
+          this.physics.getRotation(this.chairBody),
+        );
+        this.physics.setPosition(this.chairBody, new THREE.Vector3(pos.x, pos.y + 2.0, pos.z));
+        this.physics.setVelocity(this.chairBody, new THREE.Vector3(fwd.x * 5, 3.0, fwd.z * 5));
+        this.carriedSpeed = 5;
+        this.stuckFor = 0;
+        this.failedKicks = 0;
+      }
+    }
+
     // THPS-style ground detection using raycasts
     const wasGrounded = this.playerState.isGrounded;
     
@@ -4841,6 +4877,33 @@ export class Game {
       this.physics.setVelocity(this.chairBody, new THREE.Vector3(slide.x * kick, v.y, slide.z * kick));
       this.carriedSpeed = kick;
       this.pinnedFor = 0;
+
+      // ESCALATE IF THE KICK KEEPS FAILING.
+      //
+      // The kick resets pinnedFor, so inside a fully ENCLOSED pocket — a cubicle boxed in
+      // on all four sides — it fires, gets nowhere, and fires again forever, with nothing
+      // ever escalating. A grid sweep of the office found exactly that: four adjacent
+      // positions where the chair could not reach ANY speed from ANY of four headings, in
+      // a cubicle pocket. That is a run-ender, and a level edit only fixes the pockets we
+      // happen to find.
+      //
+      // So count kicks that did not actually free us. Three in a row means the way out is
+      // not sideways, it is UP: hop the chair over the panel that is holding it. Cubicle
+      // walls are about 1.14 m, so 2 m of lift clears them with room to spare, and the
+      // player keeps their speed and heading rather than being teleported somewhere
+      // arbitrary.
+      this.failedKicks = speed < 1.2 ? this.failedKicks + 1 : 0;
+      if (this.failedKicks >= 3) {
+        const p = this.physics.getPosition(this.chairBody);
+        this.physics.setPosition(this.chairBody, new THREE.Vector3(p.x, p.y + 2.0, p.z));
+        this.physics.setVelocity(
+          this.chairBody,
+          new THREE.Vector3(slide.x * kick, 3.5, slide.z * kick),
+        );
+        this.failedKicks = 0;
+      }
+    } else if (speed > 4) {
+      this.failedKicks = 0;
     }
 
     return true;
