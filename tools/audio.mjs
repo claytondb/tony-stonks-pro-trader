@@ -589,7 +589,7 @@ async function main() {
   }
   const port = await freePort();
   const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
-    { cwd: ROOT, stdio: 'ignore' });
+    { cwd: ROOT, stdio: 'ignore', detached: true });
   const url = `http://127.0.0.1:${port}/`;
 
   const browser = await chromium.launch({
@@ -620,7 +620,7 @@ async function main() {
     code = 1;
   } finally {
     await browser.close().catch(() => {});
-    server.kill('SIGKILL');
+    try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); }
   }
 
   if (SAVE) {

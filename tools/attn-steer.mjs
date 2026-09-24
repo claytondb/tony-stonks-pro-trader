@@ -16,7 +16,7 @@ const waitForServer = async (url) => { for (let i = 0; i < 160; i++) { try { con
 async function main() {
   if (!existsSync(`${ROOT}/dist/index.html`)) { console.error('build first'); process.exit(2); }
   const port = await freePort();
-  const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
+  const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore', detached: true });
   const url = `http://127.0.0.1:${port}/`;
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_BIN || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
@@ -124,6 +124,6 @@ async function main() {
     });
     console.log(JSON.stringify({ out, errors }, null, 2));
   } catch (e) { console.error(String(e)); process.exitCode = 1; }
-  finally { await browser.close().catch(() => {}); server.kill('SIGKILL'); }
+  finally { await browser.close().catch(() => {}); try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); } }
 }
 main();

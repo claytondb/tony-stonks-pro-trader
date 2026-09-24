@@ -153,6 +153,7 @@ import {
   type GrindEdge,
   type LightHint,
   type PropCollider,
+  transitionShell,
 } from './OfficeProps';
 
 // ---------------------------------------------------------------------------
@@ -163,6 +164,8 @@ export interface OfficeCollider {
   position: THREE.Vector3;
   halfExtents: THREE.Vector3;
   rotationY: number;
+  /** Present for a curved collider: build a trimesh at position/rotationY instead of a box. */
+  trimesh?: { vertices: Float32Array; indices: Uint32Array };
 }
 
 export interface OfficeRail {
@@ -376,6 +379,19 @@ function place(
     for (let i = 0; i < limit; i++) {
       const col = list[i];
       if (col.size[0] <= 0 || col.size[1] <= 0 || col.size[2] <= 0) continue;
+      if (col.type === 'transition') {
+        acc.colliders.push({
+          position: new THREE.Vector3(
+            x + ROT_X(col.offset[0], col.offset[2], c, s),
+            y + col.offset[1],
+            z + ROT_Z(col.offset[0], col.offset[2], c, s),
+          ),
+          halfExtents: new THREE.Vector3(col.size[0] / 2, col.size[1] / 2, col.size[2] / 2),
+          rotationY: rotY,
+          trimesh: transitionShell(col.size[0], col.size[1], col.size[2]),
+        });
+        continue;
+      }
       acc.colliders.push({
         position: new THREE.Vector3(
           x + ROT_X(col.offset[0], col.offset[2], c, s),
@@ -948,14 +964,18 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
 
   // Quarter pipes closing both ends of the spine. A transition is the one primitive that sends
   // the player UP and turns them AROUND, which is what stops a 46 m corridor being a treadmill.
+  //
+  // makeQuarterPipe rises toward local +Z, so the curve must face the ROOM and the vertical
+  // back sit against the wall. These were authored the other way round: every quarter pipe
+  // in the office showed the player a 1.6 m plywood wall with the curve hidden behind it.
   place(acc, makeQuarterPipe({ width: 9.0, depth: 2.3, height: 1.75, seed: 811 }),
-    0, 0, -halfD + 1.4, 0, { collide: true, grind: true });
+    0, 0, -halfD + 1.4, Math.PI, { collide: true, grind: true });
   place(acc, makeQuarterPipe({ width: 7.0, depth: 2.1, height: 1.55, seed: 813 }),
-    0, 0, halfD - 1.35, Math.PI, { collide: true, grind: true });
+    0, 0, halfD - 1.35, 0, { collide: true, grind: true });
   // ...and one against each end of the cross hall, so the east/west run has the same ending.
   for (const sx of [-1, 1]) {
     place(acc, makeQuarterPipe({ width: 6.4, depth: 2.1, height: 1.55, seed: 815 + sx }),
-      sx * (halfW - 1.35), 0, 0, sx > 0 ? -Math.PI / 2 : Math.PI / 2, { collide: true, grind: true });
+      sx * (halfW - 1.35), 0, 0, sx > 0 ? Math.PI / 2 : -Math.PI / 2, { collide: true, grind: true });
   }
 
   // ====================================================== THE BREAK ROOM ====

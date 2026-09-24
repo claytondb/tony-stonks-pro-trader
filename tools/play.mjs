@@ -107,7 +107,7 @@ async function main() {
 
   const port = await freePort();
   const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'],
-    { cwd: ROOT, stdio: 'ignore' });
+    { cwd: ROOT, stdio: 'ignore', detached: true });
   const url = `http://127.0.0.1:${port}/`;
 
   const browser = await chromium.launch({
@@ -173,7 +173,7 @@ async function main() {
 
     if (FEATURES_ONLY) {
       console.log(JSON.stringify({ features: report.features }, null, 2));
-      await browser.close(); server.kill('SIGKILL'); process.exit(0);
+      await browser.close(); try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); } process.exit(0);
     }
 
     // ---- drive the SIMULATION directly, decoupled from rendering -------------
@@ -382,7 +382,7 @@ async function main() {
     code = 1;
   } finally {
     await browser.close().catch(() => {});
-    server.kill('SIGKILL');
+    try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); }
   }
 
   if (WANT_JSON) console.log(JSON.stringify(report, null, 2));

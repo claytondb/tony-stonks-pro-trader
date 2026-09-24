@@ -325,7 +325,9 @@ export class Game {
    * generous here on purpose: at the real figure a 13.5 m/s cruise cannot clear a 3 m
    * transition at all, and every quarter pipe becomes a wall you stall on.
    */
-  private readonly SLOPE_GRAVITY = 18;
+  private readonly SLOPE_GRAVITY = 8;
+  /** The same, riding DOWN a slope. */
+  private readonly SLOPE_GRAVITY_DOWN = 22;
   /**
    * Ceiling on the launch angle off a lip. The exit tangent at the coping is 90 degrees —
    * dead vertical — and honouring that exactly gives a pogo stick: you go straight up, come
@@ -2645,6 +2647,11 @@ export class Game {
     this.officeInterior = interior;
 
     for (const c of interior.colliders) {
+      if (c.trimesh) {
+        this.physics.createStaticTrimesh(c.position, c.trimesh.vertices, c.trimesh.indices,
+          new THREE.Euler(0, c.rotationY, 0), 0.0);
+        continue;
+      }
       this.physics.createStaticBox(
         c.position,
         c.halfExtents,
@@ -4508,7 +4515,10 @@ export class Game {
     {
       const planar = Math.hypot(vel.x, vel.z);
       const wantsToMove = this.intent?.push || this.carriedSpeed > 3.5;
-      if (wantsToMove && planar < 1.0) this.stuckFor += dt;
+      // Going straight up and down a vert wall is also "no planar speed"; it is not stuck.
+      // Without the vertical test the watchdog fired mid-air on every big vert and teleported
+      // the chair 2 m higher (ramp probe, qp_med_fast).
+      if (wantsToMove && planar < 1.0 && Math.abs(vel.y) < 1.0) this.stuckFor += dt;
       else this.stuckFor = 0;
 
       if (this.stuckFor >= 1.5) {
@@ -4584,7 +4594,7 @@ export class Game {
         // degrees, which on a real transition is barely two thirds of the way up the curve
         // — the chair let go mid-wall, so it never reached the tangent that makes a lip
         // launch a launch. Geometry decides now; this is only the backstop.
-        const movingUpRamp = vel.y > 2 && this.surfaceAngle > 86;
+        const movingUpRamp = vel.y > 2 && this.surfaceAngle > 72;
         if (movingUpRamp) {
           this.playerState.isGrounded = false;
         } else {
@@ -4592,6 +4602,12 @@ export class Game {
         }
       } else {
         this.playerState.isGrounded = closeEnough && notLaunching;
+      }
+      // Still going UP in the air beside a transition is not a landing. The fan of ground
+      // rays reaches the curve below a chair floating up past the coping, and grounding it
+      // there ended every vert air at half height (ramp probe: qp_med air 0.38 s).
+      if (!wasGrounded && this.surfaceAngle > this.TRANSITION_ANGLE && vel.y > 0.5) {
+        this.playerState.isGrounded = false;
       }
 
       // Stick to the surface across the crest of a ramp, a stair edge or the curve of a
@@ -4714,6 +4730,15 @@ export class Game {
         const n = this.surfaceNormal;
         const dot = vel.x * n.x + vel.y * n.y + vel.z * n.z;
         const flat = new THREE.Vector3(vel.x - n.x * dot, vel.y - n.y * dot, vel.z - n.z * dot);
+        // STRAIGHT UP, STRAIGHT BACK DOWN. A vert air comes down almost along the wall's
+        // normal, so the projection below keeps only dust and the solver used to eat the
+        // rest: the ramp probe measured 1-10% of the speed surviving a re-entry, which is a
+        // quarter pipe that stops you dead every time it works. Falling back into a
+        // transition you ride DOWN IT, so the line is the fall line — downhill on the
+        // surface, no sideways part to amplify — at the speed you fell with.
+        if (flat.length() <= 0.30 * speed3 && vel.y < -1 && n.y < 0.97) {
+          flat.set(n.x * n.y, -1 + n.y * n.y, n.z * n.y).normalize().multiplyScalar(speed3);
+        }
         // A GLANCING LANDING IS A DROP-IN; A PERPENDICULAR ONE IS A SLAM. The rule below
         // rescales whatever survives the projection back up to (nearly) the full incoming
         // speed, and when the velocity is almost parallel to the surface normal what
@@ -5106,6 +5131,15 @@ export class Game {
 
     const velocity = this.physics.getVelocity(this.chairBody);
     const planar = new THREE.Vector3(velocity.x, 0, velocity.z);
+    // On a slope the travel direction is the TANGENTIAL velocity's shadow. The raw vector
+    // also carries the ground stick, which on a steep wall is several m/s pointing straight
+    // INTO the wall — read as a heading, that is "travelling up the ramp" while the chair is
+    // dropping down it, and the reversal rules spun the rider sideways across the wall.
+    if (this.playerState.isGrounded && this.surfaceAngle > 3) {
+      const n0 = this.surfaceNormal;
+      const vn0 = velocity.x * n0.x + velocity.y * n0.y + velocity.z * n0.z;
+      if (vn0 < 0) planar.set(velocity.x - n0.x * vn0, 0, velocity.z - n0.z * vn0);
+    }
     // SPEED IS MEASURED ALONG THE SURFACE, NOT ACROSS THE FLOORPLAN.
     //
     // The model writes `alongSurface * speed` and then reads its own work back as the
@@ -5181,20 +5215,35 @@ export class Game {
       // So on a transition the chair simply turns to face where the ramp is taking it, and
       // the reversal machinery never sees a reversal at all. Only a real about-face
       // qualifies; a carve across the curve still steers normally.
-      if (this.surfaceAngle > this.TRANSITION_ANGLE
+      // Only ever to face DOWN the wall, and only on a real line: at the foot of a curve the
+      // solver can hand back one frame of planar velocity pointing up the ramp, and turning
+      // the chair to face THAT spun a clean fakie round to face the wall, which the reversal
+      // rules then peeled off sideways at 9 m/s (ramp probe, qp_med re-entry).
+      const fallH = Math.hypot(this.surfaceNormal.x, this.surfaceNormal.z);
+      const downhill = fallH > 1e-3
+        ? (rolling.x * this.surfaceNormal.x + rolling.z * this.surfaceNormal.z) / fallH : 0;
+      if (this.surfaceAngle > this.TRANSITION_ANGLE && planarLen > 1.5 && downhill > 0.3
           && currentSpeed > this.REALIGN_MIN_SPEED && Math.abs(misalign) > 1.75) {
         this.physics.setRotationY(this.chairBody, travelAngle);
         fwdFlat.set(Math.sin(travelAngle), 0, Math.cos(travelAngle));
         misalign = 0;
       }
-      const slewing = currentSpeed > this.REALIGN_MIN_SPEED
+      // ON A STEEP WALL THE PLANAR VELOCITY IS NOT A LINE. Riding up or down a transition
+      // almost all of the motion is vertical, and what is left in the horizontal plane is
+      // a few tenths of a m/s the solver can point anywhere. Treating that as the travel
+      // direction spun a chair that was dropping cleanly back into a half pipe round at
+      // 17 degrees a frame and sent it traversing the wall sideways (ramp probe, halfpipe
+      // second wall). Near vertical, the wall — not the compass — decides where you go.
+      const lineIsReal = !(this.surfaceAngle > 40 && planarLen < Math.max(2.0, 0.5 * currentSpeed));
+      const slewing = lineIsReal && currentSpeed > this.REALIGN_MIN_SPEED
         && Math.abs(misalign) > this.REALIGN_ANGLE;
       // Actually travelling backwards, as opposed to merely sliding: the only state the
       // rules below have to refuse. Judged on the body's own velocity before anything in
       // this frame has touched it, and only while the chair is moving fast enough for a
       // heading to mean anything — a chair shuffling at walking pace against a desk leg
       // has no line to protect and must never be locked out of its own accelerator.
-      const reversing = currentSpeed > this.REALIGN_MIN_SPEED && Math.abs(misalign) > Math.PI / 2;
+      const reversing = lineIsReal && currentSpeed > this.REALIGN_MIN_SPEED
+        && Math.abs(misalign) > Math.PI / 2;
       /** How far into the slew we are: 0 at the threshold, 1 at dead sideways. */
       const past = Math.min(1, Math.max(0,
         (Math.abs(misalign) - this.REALIGN_ANGLE) / (Math.PI / 2 - this.REALIGN_ANGLE)));
@@ -5391,11 +5440,15 @@ export class Game {
       if (this.surfaceAngle > 3) {
         const climb = this.physics
           .getSurfaceMovementDirection(dir, this.surfaceNormal).y;
-        speed += (30 - this.SLOPE_GRAVITY) * climb * dt;
+        // Up the wall the slope is generous (SLOPE_GRAVITY); down it, nearly the world's own
+        // pull. A symmetric figure made every drop back into a transition a slow, floaty
+        // slide that came out at half the speed it went in; this way the wall pays you back.
+        const g = climb > 0 ? this.SLOPE_GRAVITY : this.SLOPE_GRAVITY_DOWN;
+        speed += (30 - g) * climb * dt;
         if (speed < 0) speed = 0;
         // What the slope did to the line this frame: negative climbing, positive dropping.
         // The entitlement below has to see it or it will treat a climb as damage.
-        slopeWork = -this.SLOPE_GRAVITY * climb * dt;
+        slopeWork = -g * climb * dt;
 
         // ---- STALL OUT ----------------------------------------------------------------
         // You did not make it. Every other rule in this model works on a scalar speed and a

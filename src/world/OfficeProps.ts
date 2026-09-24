@@ -81,7 +81,12 @@ export interface PropOptions {
 
 /** A single physics box in prop-local space (base at y=0, centred on x/z). */
 export interface PropCollider {
-  type: 'box';
+  /**
+   * 'box' — a cuboid of `size` centred at `offset`.
+   * 'transition' — a quarter-pipe curve (see transitionShell): `size` is [width, height,
+   * depth], flat at local -Z, vertical at +Z, `offset` is the prop-local origin.
+   */
+  type: 'box' | 'transition';
   size: [number, number, number];
   offset: [number, number, number];
   /** Yaw in radians, applied about the collider centre. Absent ⇒ 0. */
@@ -2883,21 +2888,46 @@ export function makeQuarterPipe(o?: QuarterPipeOptions): THREE.Group {
 
   ctx.grinds.push({ start: [-w / 2, h + 0.06, d / 2 - 0.045], end: [w / 2, h + 0.06, d / 2 - 0.045] });
 
-  // Stepped collider under the transition.
-  const bands = 6;
-  for (let i = 0; i < bands; i++) {
-    const y0 = (i / bands) * h;
-    const y1 = ((i + 1) / bands) * h;
-    // Surface z at the MIDPOINT height of the band: half the band pokes marginally proud of
-    // the sheeting and half sits marginally inside it, which is the smallest total error.
-    const ym = (y0 + y1) / 2;
-    const th = Math.acos(Math.max(-1, Math.min(1, 1 - ym / h)));
-    const zs = -d / 2 + d * Math.sin(th);
-    const zBack = d / 2 + 0.06;
-    collide(ctx, [w, y1 - y0, Math.max(0.06, zBack - zs)], [0, (y0 + y1) / 2, (zs + zBack) / 2]);
-  }
+  // A REAL CURVE, NOT A STAIRCASE. This used to be six stacked boxes, and a staircase is
+  // exactly what the chair treated it as: it stepped up the bands or stopped dead against
+  // them, never saw a ramp normal, never rotated up the wall and never launched. Owner:
+  // "halfpipes don't work how halfpipes should". The collider is now the same curve the
+  // sheeting is drawn on, as a closed trimesh shell (see transitionShell).
+  ctx.colliders.push({ type: 'transition', size: [w, h, d], offset: [0, 0, 0] });
 
   return finish(ctx, o, { size: [w, h, d + 0.12], offset: [0, h / 2, 0] });
+}
+
+/**
+ * Closed triangle shell for a quarter-pipe transition of width `w` (X), height `h`, depth
+ * `d`: flat at z = -d/2, vertical at z = +d/2, backed by a 6 cm slab, same profile as the
+ * visual sheeting (y = h(1 - cos t), z = -d/2 + d sin t). Closed, because a Rapier trimesh
+ * has no inside and an open sheet can be ridden from behind.
+ */
+export function transitionShell(w: number, h: number, d: number, seg = 16): { vertices: Float32Array; indices: Uint32Array } {
+  const prof: Array<[number, number]> = [];             // (z, y), curve then back corners
+  for (let i = 0; i <= seg; i++) {
+    const t = (i / seg) * Math.PI / 2;
+    prof.push([-d / 2 + d * Math.sin(t), h * (1 - Math.cos(t))]);
+  }
+  const zBack = d / 2 + 0.06;
+  prof.push([zBack, h], [zBack, 0]);
+  const n = prof.length;
+  const v: number[] = [];
+  for (const x of [-w / 2, w / 2]) for (const [z, y] of prof) v.push(x, y, z);
+  const idx: number[] = [];
+  // Sides: quads between consecutive profile points (closed loop).
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    idx.push(i, j, n + j, i, n + j, n + i);
+  }
+  // End caps: fan from the bottom-back corner, which sees the whole profile.
+  const c = n - 1;
+  for (let i = 0; i < n - 2; i++) {
+    idx.push(c, i + 1, i);
+    idx.push(n + c, n + i, n + i + 1);
+  }
+  return { vertices: new Float32Array(v), indices: new Uint32Array(idx) };
 }
 
 /**

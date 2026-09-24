@@ -12,7 +12,7 @@ const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 const waitForServer = async (u) => { for (let i = 0; i < 160; i++) { try { const r = await fetch(u); if (r.ok) return; } catch {} await new Promise((r) => setTimeout(r, 250)); } throw new Error('x'); };
 const port = await freePort();
-const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
+const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore', detached: true });
 const url = `http://127.0.0.1:${port}/`;
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_BIN || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--enable-webgl', '--ignore-gpu-blocklist', '--disable-dev-shm-usage', '--no-sandbox'] });
 try {
@@ -113,4 +113,4 @@ try {
     return { buckets: out, totals: ev };
   });
   console.log(JSON.stringify({ r, errors }, null, 2));
-} finally { await browser.close().catch(() => {}); server.kill('SIGKILL'); }
+} finally { await browser.close().catch(() => {}); try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); } }

@@ -27,7 +27,7 @@ const waitForServer = async (url, ms = 30000) => {
 };
 
 const port = await freePort();
-const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
+const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore', detached: true });
 const url = `http://127.0.0.1:${port}/`;
 const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_BIN || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
@@ -68,6 +68,6 @@ try {
   console.log('LOGS:', logs.slice(-20).join('\n'));
 } finally {
   await browser.close().catch(() => {});
-  server.kill('SIGKILL');
+  try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); }
 }
 process.exit(0);

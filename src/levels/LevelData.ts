@@ -218,7 +218,10 @@ export const LEVELS: LevelData[] = [
       // water cooler in a Tony Hawk level is supposed to do — go flying.
 
       // Fun box in the south spine, between the two ledge runs and the end quarter pipe.
-      { type: 'fun_box', position: [0, 0, -18], params: { width: 7, depth: 4, height: 0.8 } },
+      // It used to stop 0.5 m short of the quarter pipe, which was invisible while the quarter
+      // pipe faced the wall and a wall once it faced the room. Shortened and pulled north so
+      // there is 2.7 m of flat carpet to set up the transition after it.
+      { type: 'fun_box', position: [0, 0, -16.5], params: { width: 7, depth: 2.5, height: 0.8 } },
     ],
 
     collectibles: [

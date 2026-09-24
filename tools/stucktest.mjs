@@ -13,7 +13,7 @@ import net from 'node:net';
 const ROOT = '/home/claude/work/game';
 const LEVEL = process.argv.includes('--level') ? process.argv[process.argv.indexOf('--level')+1] : 'ch1_office';
 const port = await new Promise(r=>{const s=net.createServer();s.listen(0,()=>{const p=s.address().port;s.close(()=>r(p))})});
-const server = spawn('npx',['vite','preview','--port',String(port),'--strictPort','--host','127.0.0.1'],{cwd:ROOT,stdio:'ignore'});
+const server = spawn('npx',['vite','preview','--port',String(port),'--strictPort','--host','127.0.0.1'],{cwd:ROOT,stdio:'ignore',detached:true});
 const url = `http://127.0.0.1:${port}/`;
 for(let i=0;i<80;i++){try{if((await fetch(url)).ok)break}catch{};await new Promise(r=>setTimeout(r,200));}
 const b = await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
@@ -56,4 +56,4 @@ const out = await pg.evaluate(async ({level}) => {
            worst: trapped.slice(0,20) };
 }, {level: LEVEL});
 console.log(JSON.stringify(out,null,1));
-await b.close(); server.kill('SIGKILL');
+await b.close(); try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); }

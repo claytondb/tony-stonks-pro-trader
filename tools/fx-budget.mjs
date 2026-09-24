@@ -51,7 +51,7 @@ async function main() {
   if (!existsSync(`${ROOT}/dist/index.html`)) { console.error('run npm run build'); process.exit(2); }
   mkdirSync(`${ROOT}/shots`, { recursive: true });
   const port = await freePort();
-  const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
+  const server = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore', detached: true });
   const url = `http://127.0.0.1:${port}/`;
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM_BIN || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
@@ -264,7 +264,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     await browser.close().catch(() => {});
-    server.kill('SIGKILL');
+    try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); }
   }
 }
 main();
