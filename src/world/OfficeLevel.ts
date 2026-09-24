@@ -137,7 +137,9 @@ import {
   makeFireExtinguisher,
   makeFluorescentPanel,
   makeGlazedScreen,
-  makeKickerRamp,
+  makeWhiteboardKicker,
+  makeScreenQuarterPipe,
+  makeLoungeTable,
   makeGrindRail,
   makeKitchenCounter,
   makeLedgeBlock,
@@ -146,7 +148,6 @@ import {
   makePoolTable,
   makePottedPlant,
   makePrinter,
-  makeQuarterPipe,
   makeScatterPaper,
   makeServerRack,
   makeStairFlight,
@@ -164,8 +165,6 @@ import {
 } from './OfficeProps';
 import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
 
-/** Hazard stripes for ledge runs, so each one reads as its own feature. */
-const LEDGE_STRIPES = [0xc0392b, 0xe7b428, 0x2f6f7d, 0x6c5ce7];
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -920,18 +919,43 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
    * INTO a quarter pipe. Everything here is the thing the sim modelled — same footprint, same
    * height, same collision rule — so the scores it was chosen on still describe what you ride.
    */
+  /**
+   * A run of lobby planters nose to tail, registered as TWO unbroken grinds (one per long
+   * edge) — the same one-rail-per-run rule as runLedge, for the same reason.
+   */
+  function runPlanters(x0: number, z0: number, x1: number, z1: number, top: number, depth: number, seed: number): void {
+    const dx = x1 - x0, dz = z1 - z0, len = Math.hypot(dx, dz);
+    if (len < 0.8) return;
+    const yaw = Math.atan2(dx, dz) - Math.PI / 2;
+    const n = Math.max(1, Math.round(len / 3.2));
+    const segLen = len / n;
+    for (let k = 0; k < n; k++) {
+      const t = (k + 0.5) / n;
+      place(acc, makePlanterLedge({ width: segLen - 0.1, depth: depth - 0.08, height: top - 0.07, seed: seed + k * 7 }),
+        x0 + dx * t, 0, z0 + dz * t, yaw, { collide: true, grind: false });
+    }
+    const px = -dz / len, pz = dx / len, off = depth / 2, ry = top + 0.02;
+    const inset = Math.min(0.5, len * 0.1), ix = (dx / len) * inset, iz = (dz / len) * inset;
+    for (const sgn of [-1, 1]) {
+      acc.rails.push({
+        start: new THREE.Vector3(x0 + ix + px * off * sgn, ry, z0 + iz + pz * off * sgn),
+        end: new THREE.Vector3(x1 - ix + px * off * sgn, ry, z1 - iz + pz * off * sgn),
+      });
+    }
+  }
+
   function buildSkateFloor(items: readonly SkateItem[]): void {
     const HALF_PI = Math.PI / 2;
     items.forEach((it, i) => {
       const zx = Math.sin(it.yaw), zz = Math.cos(it.yaw);
       switch (it.type) {
         case 'kicker':
-          place(acc, makeKickerRamp({ width: it.hw * 2, depth: it.hd * 2, height: it.h, seed: 4000 + i }),
+          place(acc, makeWhiteboardKicker({ width: it.hw * 2, depth: it.hd * 2, height: it.h, seed: 4000 + i }),
             it.x, 0, it.z, it.yaw, { collide: true, grind: true });
           acc.wear.push({ x: it.x - zx * 3, z: it.z - zz * 3, width: 3.6, depth: 4.4, rotation: it.yaw, strength: 0.45 });
           break;
         case 'qp':
-          place(acc, makeQuarterPipe({ width: it.hw * 2, depth: it.hd * 2, height: 1.75, seed: 4100 + i }),
+          place(acc, makeScreenQuarterPipe({ width: it.hw * 2, depth: it.hd * 2, height: 1.75, seed: 4100 + i }),
             it.x, 0, it.z, it.yaw, { collide: true, grind: true });
           acc.wear.push({ x: it.x - zx * 3.5, z: it.z - zz * 3.5, width: it.hw * 2, depth: 4.0, rotation: it.yaw, strength: 0.4 });
           break;
@@ -944,12 +968,12 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
           break;
         }
         case 'ledge':
-          runLedge(it.x - zx * it.hd, it.z - zz * it.hd, it.x + zx * it.hd, it.z + zz * it.hd,
-            { height: it.h, depth: it.hw * 2, seed: 4300 + i * 17, stripe: LEDGE_STRIPES[i % LEDGE_STRIPES.length] });
+          runPlanters(it.x - zx * it.hd, it.z - zz * it.hd, it.x + zx * it.hd, it.z + zz * it.hd,
+            it.h, it.hw * 2, 4300 + i * 17);
           break;
         case 'pad':
-          // A manual pad: a low platform you roll onto (under Game.STEP_HEIGHT) and manual across.
-          place(acc, makeLedgeBlock({ width: it.hd * 2, depth: it.hw * 2, height: it.h, seed: 4400 + i, stripe: 0x2f6f7d }),
+          // A manual pad: the lounge coffee table, low enough to roll onto and manual across.
+          place(acc, makeLoungeTable({ width: it.hd * 2, depth: it.hw * 2, height: it.h, seed: 4400 + i }),
             it.x, 0, it.z, it.yaw + HALF_PI, { collide: true, grind: false });
           acc.wear.push({ x: it.x, z: it.z, width: it.hw * 2 + 1.5, depth: it.hd * 2 + 1.5, rotation: it.yaw, strength: 0.3 });
           break;

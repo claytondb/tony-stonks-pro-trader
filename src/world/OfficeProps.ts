@@ -3875,3 +3875,182 @@ export function makeGlazedScreen(lengthMetres: number, o?: GlazedScreenOptions):
   collide(ctx, [L, top, 0.14], [0, top / 2, 0]);
   return finish(ctx, o, { size: [L, top, 0.14], offset: [0, top / 2, 0] });
 }
+
+// ===========================================================================
+// OFFICE-THEMED SKATE FEATURES
+//
+// Owner: "The items in this office don't really make sense, why would there be a ramp and a
+// rail and a funbox in an office?" So every skate feature on the Cubicle Chaos floor is now
+// something an office actually has, pressed into service after hours:
+//   kicker        -> a whiteboard laid over stacked copier-paper boxes
+//   quarter pipe  -> the curved town-hall projection screen, showing the STONKS chart
+//   ledge         -> the lobby planter run
+//   manual pad    -> a low lounge coffee table on a rug
+//   rail          -> the reception queue barrier (steel rail on posts)
+// Same footprints, heights and colliders as the plain features levelsim scored.
+// ===========================================================================
+
+let STONKS_SCREEN_MAT: THREE.MeshStandardMaterial | null = null;
+let WHITEBOARD_DOODLE_MAT: THREE.MeshStandardMaterial | null = null;
+
+function canvasMat(w: number, h: number, draw: (g: CanvasRenderingContext2D) => void, emissive = false): THREE.MeshStandardMaterial {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const g = cv.getContext('2d')!;
+  draw(g);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const m = new THREE.MeshStandardMaterial({ map: tex, roughness: emissive ? 0.35 : 0.6, metalness: 0.0 });
+  if (emissive) { m.emissive = new THREE.Color(0xffffff); m.emissiveMap = tex; m.emissiveIntensity = 0.55; }
+  return m;
+}
+
+/** The town-hall screen: a dark projection of a stock chart going to the moon. */
+function stonksScreenMaterial(): THREE.MeshStandardMaterial {
+  if (STONKS_SCREEN_MAT) return STONKS_SCREEN_MAT;
+  STONKS_SCREEN_MAT = canvasMat(1024, 512, (g) => {
+    const W = 1024, H = 512;
+    const grad = g.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#0b1a2e'); grad.addColorStop(1, '#10263f');
+    g.fillStyle = grad; g.fillRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(120,170,220,0.18)'; g.lineWidth = 2;
+    for (let x = 0; x <= W; x += 64) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); }
+    for (let y = 0; y <= H; y += 64) { g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); }
+    // Candles, then the line. v runs up the ramp (row 0 = the lip), so "up" is up the wall.
+    let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    let y = H * 0.8;
+    const pts: [number, number][] = [];
+    for (let x = 40; x < W - 30; x += 36) {
+      const ny = Math.max(40, y - (rnd() * 40 - 12));
+      g.fillStyle = ny < y ? '#27d17f' : '#e2504c';
+      g.fillRect(x - 8, Math.min(y, ny), 16, Math.max(6, Math.abs(ny - y)));
+      g.fillRect(x - 1, Math.min(y, ny) - 12, 2, Math.abs(ny - y) + 24);
+      pts.push([x, ny]); y = ny;
+    }
+    g.strokeStyle = '#6dffb0'; g.lineWidth = 6; g.beginPath();
+    pts.forEach(([px, py], i) => (i ? g.lineTo(px, py) : g.moveTo(px, py))); g.stroke();
+    g.fillStyle = '#ffffff'; g.font = 'bold 72px Arial';
+    g.fillText('STONKS', 48, 110);
+    g.fillStyle = '#6dffb0'; g.font = 'bold 56px Arial';
+    g.fillText('▲ +420.69%', 48, 180);
+    g.fillStyle = 'rgba(255,255,255,0.6)'; g.font = '28px Arial';
+    g.fillText('Q3 TOWN HALL  •  TONY STONKS PRO TRADER', 48, H - 28);
+  }, true);
+  return STONKS_SCREEN_MAT;
+}
+
+/** A whiteboard someone has been very enthusiastic on. */
+function whiteboardDoodleMaterial(): THREE.MeshStandardMaterial {
+  if (WHITEBOARD_DOODLE_MAT) return WHITEBOARD_DOODLE_MAT;
+  WHITEBOARD_DOODLE_MAT = canvasMat(512, 512, (g) => {
+    g.fillStyle = '#d9dee2'; g.fillRect(0, 0, 512, 512);   // not paper-white: under 60 fluorescents that blooms to a blank slab
+    g.translate(512, 0); g.scale(-1, 1);   // the board's face UVs run right-to-left seen from the run-up
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    g.strokeStyle = '#2a55a8'; g.lineWidth = 6;
+    g.beginPath(); g.moveTo(40, 470); g.lineTo(40, 60); g.moveTo(40, 470); g.lineTo(470, 470); g.stroke();
+    g.strokeStyle = '#2f8a4a'; g.lineWidth = 9;
+    g.beginPath(); g.moveTo(60, 420); g.lineTo(160, 380); g.lineTo(230, 400); g.lineTo(330, 250); g.lineTo(440, 90); g.stroke();
+    g.beginPath(); g.moveTo(400, 95); g.lineTo(445, 85); g.lineTo(440, 132); g.stroke();
+    g.fillStyle = '#c0392b'; g.font = 'bold 54px Comic Sans MS, Arial';
+    g.fillText('SYNERGY!', 110, 150);
+    g.fillStyle = '#2a55a8'; g.font = 'bold 38px Comic Sans MS, Arial';
+    g.fillText('Q3 GOALS', 250, 330);
+    g.strokeStyle = '#c0392b'; g.lineWidth = 5;
+    g.beginPath(); g.ellipse(335, 318, 110, 38, -0.1, 0, Math.PI * 2); g.stroke();
+  });
+  return WHITEBOARD_DOODLE_MAT;
+}
+
+/**
+ * KICKER: a whiteboard laid over stacked copier-paper boxes. The board is the ride surface,
+ * its aluminium tray edge is the lip (and a grind), the boxes show at the sides and back.
+ * Collider: the true wedge (see wedgeShell).
+ */
+export function makeWhiteboardKicker(o?: { width?: number; depth?: number; height?: number; seed?: number }): THREE.Group {
+  const w = o?.width ?? 3.4, d = o?.depth ?? 1.8, h = o?.height ?? 0.85;
+  const ctx = begin('whiteboardKicker', o, 4601);
+  const r = ctx.rng;
+  // Box stacks: columns across the width, rising toward the back, following the slope.
+  const bw = 0.43, bd = 0.3, bh = 0.27;
+  const cols = Math.max(2, Math.round(w / bw));
+  const rows = Math.max(2, Math.floor(d / bd));
+  for (let c = 0; c < cols; c++) {
+    const x = -w / 2 + (c + 0.5) * (w / cols);
+    for (let k = 0; k < rows; k++) {
+      const z = -d / 2 + (k + 0.5) * (d / rows);
+      const slopeY = h * ((z + d / 2) / d);
+      const n = Math.floor(slopeY / bh);
+      for (let s = 0; s < n; s++) {
+        ctx.root.add(mesh(cbox(w / cols - 0.03, bh - 0.01, d / rows - 0.02, 0.01), MAT.cardboard,
+          { pos: [x + r.range(-0.01, 0.01), bh * s + bh / 2, z], rot: [0, r.range(-0.03, 0.03), 0] }));
+      }
+    }
+  }
+  // The board itself, on the slope.
+  const len = Math.hypot(d, h);
+  const tilt = Math.atan2(h, d);
+  const board = new THREE.Group();
+  board.position.set(0, h / 2, 0);
+  board.rotation.x = -tilt;
+  board.add(mesh(cbox(w, 0.035, len, 0.008), MAT.metal, { pos: [0, -0.02, 0] }));
+  const face = mesh(quad(w - 0.08, len - 0.08), whiteboardDoodleMaterial(), { pos: [0, 0.0, 0], rot: [-Math.PI / 2, 0, 0], cast: false });
+  board.add(face);
+  ctx.root.add(board);
+  // Marker tray = the lip.
+  ctx.root.add(mesh(sbox(w, 0.035, 0.07), MAT.chrome, { pos: [0, h + 0.005, d / 2 - 0.04] }));
+  ctx.grinds.push({ start: [-w / 2, h + 0.02, d / 2 - 0.055], end: [w / 2, h + 0.02, d / 2 - 0.055] });
+  ctx.colliders.push({ type: 'wedge', size: [w, h, d], offset: [0, 0, 0] });
+  return finish(ctx, o as PropOptions, { size: [w, h, d], offset: [0, h / 2, 0] });
+}
+
+/**
+ * QUARTER PIPE: the curved town-hall projection screen. The plywood transition underneath,
+ * with the STONKS chart projected on the ride face.
+ */
+export function makeScreenQuarterPipe(o?: QuarterPipeOptions): THREE.Group {
+  const g = makeQuarterPipe(o);
+  const w = o?.width ?? 4.2, d = o?.depth ?? 1.9, h = o?.height ?? 1.5;
+  // A curved strip following the transition profile, 6 mm proud of it, with its own UVs so
+  // the chart reads the right way up: u across the width, v up the wall.
+  const seg = 16;
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+  for (let i = 0; i <= seg; i++) {
+    const t = (i / seg) * Math.PI / 2;
+    const z = -d / 2 + d * Math.sin(t), y = h * (1 - Math.cos(t));
+    // Normal of the profile (pointing out of the ramp, toward -z / +y).
+    const nz = -h * Math.sin(t), ny = d * Math.cos(t); const nl = Math.hypot(nz, ny) || 1;
+    for (const s of [-1, 1]) {
+      // 4 cm proud: the plywood under it is a FACETED arc (5-8 segments) and anything closer
+      // z-fights with the facets in horizontal bands.
+      pos.push(s * (w / 2 - 0.06), y + (ny / nl) * 0.04, z + (nz / nl) * 0.04);
+      uv.push(s < 0 ? 1 : 0, i / seg);   // viewed from the room (-z), +x is screen-left
+    }
+  }
+  for (let i = 0; i < seg; i++) { const a = i * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  const screen = new THREE.Mesh(geo, stonksScreenMaterial());
+  screen.receiveShadow = true;
+  g.add(screen);
+  return g;
+}
+
+/** MANUAL PAD: a low lounge coffee table on a rug. Top at `height`; rolled onto, manualled across. */
+export function makeLoungeTable(o?: { width?: number; depth?: number; height?: number; seed?: number }): THREE.Group {
+  const w = o?.width ?? 3.0, d = o?.depth ?? 2.0, h = o?.height ?? 0.3;
+  const ctx = begin('loungeTable', o, 4603);
+  const r = ctx.rng;
+  ctx.root.add(mesh(sbox(w + 1.2, 0.01, d + 1.0), ['cubicleFabric', { color: 0x7a4a3a }], { pos: [0, 0.005, 0], cast: false }));
+  ctx.root.add(mesh(cbox(w, 0.06, d, 0.015), MAT.deskTop, { pos: [0, h - 0.03, 0] }));
+  ctx.root.add(mesh(cbox(w - 0.2, h - 0.08, d - 0.2, 0.01), MAT.deskFrame, { pos: [0, (h - 0.06) / 2, 0] }));
+  // Magazines and a mug, flat enough never to matter.
+  for (let i = 0; i < 3; i++) {
+    ctx.root.add(mesh(sbox(0.3, 0.012, 0.22), ['darkPlastic', { color: [0xc0392b, 0x2a55a8, 0xe7b428][i] }],
+      { pos: [r.range(-w / 3, w / 3), h + 0.006 + i * 0.012, r.range(-d / 4, d / 4)], rot: [0, r.range(0, 3), 0], cast: false }));
+  }
+  collide(ctx, [w, h, d], [0, h / 2, 0]);
+  return finish(ctx, o as PropOptions, { size: [w, h, d], offset: [0, h / 2, 0] });
+}
