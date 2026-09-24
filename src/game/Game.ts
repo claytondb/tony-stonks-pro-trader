@@ -295,6 +295,8 @@ export class Game {
   }[] = [];
   private cumulativeSpinDegrees = 0;  // Track total spin during air time
   private lastAirYaw = 0;  // Chair heading last air frame, for the spin accumulator
+  /** Degrees the air-align assist turned the chair since the accumulator last ran; never scored. */
+  private airAlignDegrees = 0;
   private lastGroundedTime = 0;  // Coyote time tracking
   private lastPushSoundTime = 0;  // Cooldown for push sound
   
@@ -4592,8 +4594,10 @@ export class Game {
       // wrap point is a 360-degree jump that never happened, and a 540 that crossed it read
       // as a 180.
       const currentRotation = yawOf(this.chair.quaternion);
-      this.cumulativeSpinDegrees
-        += Math.abs(wrapPi(currentRotation - this.lastAirYaw)) * (180 / Math.PI);
+      // Rotation the air-align assist did is the game tidying up, not a trick: never scored.
+      this.cumulativeSpinDegrees += Math.max(0,
+        Math.abs(wrapPi(currentRotation - this.lastAirYaw)) * (180 / Math.PI) - this.airAlignDegrees);
+      this.airAlignDegrees = 0;
       this.lastAirYaw = currentRotation;
       
       // Update HUD with spin counter (only show if >= 90 degrees)
@@ -5523,6 +5527,31 @@ export class Game {
       new THREE.Vector3(0, Math.abs(newRate) < 1e-3 ? 0 : newRate, 0)
     );
 
+    // AIR STEER. Holding A/D through a hop used to rotate the chair and nothing else — the
+    // trajectory is ballistic — so a player who simply kept steering landed crabbing or
+    // backwards (judge-reverse: 26% of air frames in a player-like run, 1 s streaks). Most
+    // players read A/D as "steer", so in the air the line now follows the nose at 60% of
+    // the turn: enough to feel like you carved the jump, never enough to look like flying.
+    // Z/C are the pure spins; they turn the rider and leave the line alone, as before.
+    if (this.playerState.isAirborne && Math.abs(intent.turn) > 0.05
+        && Math.abs(intent.spin) < 0.05 && Math.abs(newRate) > 1e-3) {
+      const th = 0.6 * newRate * dt;
+      const av = this.physics.getVelocity(this.chairBody);
+      const c = Math.cos(th), sn = Math.sin(th);
+      const nv = new THREE.Vector3(av.x * c + av.z * sn, av.y, -av.x * sn + av.z * c);
+      this.physics.setVelocity(this.chairBody, nv);
+      // Steering may never turn the rider's back to the line. Against a wall the line
+      // can't follow the nose (the wall owns it), and holding the turn used to wind the
+      // chair round past 90 degrees while it slid along the wall. Past 70 degrees of
+      // crab, further turning AWAY from the line is simply refused; turning back is free.
+      if (Math.hypot(nv.x, nv.z) > 1.0) {
+        const err = wrapPi(Math.atan2(nv.x, nv.z) - Math.atan2(fwdFlat.x, fwdFlat.z));
+        if (Math.abs(err) > 1.22 && Math.sign(newRate) === -Math.sign(err)) {
+          this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+        }
+      }
+    }
+
     // OLLIE — fires on the PRESS, then keeps lifting for as long as the button is held.
     //
     // The old shape charged on the button and fired on release, which meant the height a
@@ -5638,6 +5667,39 @@ export class Game {
       this.physics.applyTorque(this.chairBody, new THREE.Vector3(0, this.spinRotation, 0));
     } else if (this.playerState.isAirborne) {
       this.spinRotation = 0;
+    }
+
+    // AIR ALIGN — the chair flies the way it is pointed.
+    //
+    // Owner report: "the player bounces off things and rolls backwards". The ground model
+    // already refuses backwards travel, but judge-reverse's 60 s run found half of all
+    // backwards frames in the AIR: leave a wall graze or a ledge edge crabbing sideways
+    // and the chair sailed for up to 1.5 s with its back to its own trajectory, then
+    // landed into the ground model's emergency spin-out. Nobody asked for that rotation
+    // and nobody can steer out of it — there is no traction in the air.
+    //
+    // So, only when the player is NOT turning, NOT spinning and has not spun on this jump
+    // (a 180 you chose must land fakie, untouched), a chair more than 50 degrees off its
+    // line eases round to face it. The rate grows with the error and tops out below the
+    // player's own air turn, so it reads as the rider squaring up, not as a snap. The
+    // degrees it turns are subtracted from the spin accumulator: tidying up is not a trick.
+    if (this.playerState.isAirborne && !this.grindSystem.isGrinding()
+        && Math.abs(intent.turn) < 0.05 && Math.abs(intent.spin) < 0.05
+        && this.cumulativeSpinDegrees < 45) {
+      const av = this.physics.getVelocity(this.chairBody);
+      const hs = Math.hypot(av.x, av.z);
+      if (hs > 2.0) {
+        const face = Math.atan2(fwdFlat.x, fwdFlat.z);
+        const err = wrapPi(Math.atan2(av.x, av.z) - face);
+        const ALIGN_FROM = 0.87;               // 50 degrees: a carve's lag never wakes it
+        if (Math.abs(err) > ALIGN_FROM) {
+          const k = Math.min(1, (Math.abs(err) - ALIGN_FROM) / (Math.PI / 2 - ALIGN_FROM));
+          const rate = 1.2 + 0.8 * k;          // rad/s, below the 2.1 air turn
+          const swing = Math.sign(err) * Math.min(Math.abs(err) - ALIGN_FROM * 0.5, rate * dt);
+          this.physics.setRotationY(this.chairBody, face + swing);
+          this.airAlignDegrees += Math.abs(swing) * (180 / Math.PI);
+        }
+      }
     }
   }
 

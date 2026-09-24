@@ -660,6 +660,15 @@ export class PhysicsWorld {
         normal = new THREE.Vector3(hitNormal.normal.x, hitNormal.normal.y, hitNormal.normal.z);
       }
 
+      // A ray pointing straight DOWN cannot land on a vertical face from outside it. When it
+      // reports one, the ray started INSIDE a wall (the chair was shoved a few centimetres
+      // into it) and the "surface" is the wall itself, 0 m away. That used to make a wall
+      // count as ground at 90 degrees — a transition — so hugging a wall stood the chair
+      // on it, carried it up the face and fired it off the top backwards: the owner's
+      // "bounces off things". Such a ray has seen no floor at all; the rest of the fan has.
+      if (normal.y < 0.5 && toi < 0.05) return null;
+      if (normal.y < 0.02) return null;
+
       return {
         hit: true,
         // Reported as the gap under the wheels, not the distance from the body centre.
