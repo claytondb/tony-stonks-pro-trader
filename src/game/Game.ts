@@ -139,9 +139,9 @@ export class Game {
   /** A pop pressed this long before touchdown is remembered and fired on contact. */
   private readonly OLLIE_BUFFER_MS = 170;
   /** Upward acceleration applied while the ollie button stays held after the pop. */
-  private readonly OLLIE_LIFT = 11;
+  private readonly OLLIE_LIFT = 12;
   /** How long that lift lasts — the cap beyond which holding buys nothing more. */
-  private readonly OLLIE_LIFT_SECONDS = 0.45;
+  private readonly OLLIE_LIFT_SECONDS = 0.28;
   /**
    * The floor of vertical speed a pop guarantees ON TOP of whatever the chair already had.
    * `Math.max(v.y, impulse)` alone made a pop off a ramp lip, or inside the coyote window
@@ -166,7 +166,12 @@ export class Game {
   // to fall into. Widths chosen so the integrated assist (3.2 full + half of 3.3 fading =
   // 4.85) is a shade stronger than the old 4.5-wide switch, which holds the airtime of a
   // pop where it was rather than paying for the smoothing out of the player's hang time.
-  private readonly HANG_ACCEL = 11;
+  // TIGHTENED (owner: "the controls feel floaty ... I want it to feel more tight like a real
+  // THPS game"). The apex assist was bleeding over a third of gravity; now it is a trace, and
+  // AIR_GRAVITY_EXTRA makes a flat pop a brisk up-and-down. Transition airs keep their float.
+  private readonly HANG_ACCEL = 3;
+  /** Extra downward pull while airborne off FLAT ground (fades out for transition launches). */
+  private readonly AIR_GRAVITY_EXTRA = 9;
   private readonly HANG_FULL_SPEED = 3.2;
   private readonly HANG_FADE_SPEED = 6.5;
   
@@ -347,6 +352,21 @@ export class Game {
   private lastSurfaceAngle = 0;
   /** 0..1, how much of a transition the last take-off was. Drives the extra hang time. */
   private transitionLaunch = 0;
+  /** Surface normal of the last grounded frame (the lip you just left, on a take-off). */
+  private lastGroundNormal = new THREE.Vector3(0, 1, 0);
+  /**
+   * VERT AIR: launched off a wall steeper than VERT_ANGLE. The camera swings up over the
+   * coping to look back at the rider (and where they will land), and A/D drift the rider
+   * along the wall so they can TRANSFER to the next ramp. `vertNormal` is horizontal and
+   * points away from the wall, into the room.
+   */
+  private vertAir = false;
+  private vertCoping = new THREE.Vector3();
+  private vertNormal = new THREE.Vector3();
+  private readonly VERT_ANGLE = 50;
+  /** Lateral air-drift for transfers: acceleration m/s^2 and cap m/s along the coping. */
+  private readonly TRANSFER_ACCEL = 10;
+  private readonly TRANSFER_MAX = 5.5;
   /** sin(slope along travel) while grounded: + climbing, - descending. Visual pitch source. */
   private surfaceClimb = 0;
   /** Smoothed visual pitch of the chair on a transition and in the air, radians. */
@@ -4003,6 +4023,7 @@ export class Game {
     this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
     this.cameraController.setTrickZoom(this.playerState.isAirborne, this.playerState.airTime);
     this.cameraController.setManualing(this.playerState.isManualing);
+    this.cameraController.setVertAir(this.vertAir && this.playerState.isAirborne, this.vertCoping, this.vertNormal);
 
     // ---- 11. HUD COMBO + BALANCE ------------------------------------------------------
     const comboState = this.score.state;
@@ -4620,7 +4641,7 @@ export class Game {
         // degrees, which on a real transition is barely two thirds of the way up the curve
         // — the chair let go mid-wall, so it never reached the tangent that makes a lip
         // launch a launch. Geometry decides now; this is only the backstop.
-        const movingUpRamp = vel.y > 2 && this.surfaceAngle > 72;
+        const movingUpRamp = vel.y > 2 && this.surfaceAngle > 70;
         if (movingUpRamp) {
           this.playerState.isGrounded = false;
         } else {
@@ -4717,7 +4738,11 @@ export class Game {
       // above (correctly) made climbing a kicker cost speed where it used to pay, and the
       // pop off one dropped from 0.69 m to 0.49. Widening the hang here puts the height
       // back without putting the physics error back.
-      this.transitionLaunch = Math.max(0, Math.min(1,
+      // Only a chair going UP the surface is launching. Losing contact on the way DOWN a
+      // transition (the curve falls away under a fast re-entry) used to run this same code
+      // and assert an upward launch angle: the ramp probe caught a drop-in at -5.9 m/s turned
+      // into a +5.2 m/s pop off the middle of the wall — a trampoline in every re-entry.
+      this.transitionLaunch = vel.y <= 0.5 ? 0 : Math.max(0, Math.min(1,
         (this.lastSurfaceAngle - this.TRANSITION_ANGLE) / 30));
       if (this.transitionLaunch > 0) {
         const speed3 = Math.hypot(vel.x, vel.y, vel.z);
@@ -4737,6 +4762,28 @@ export class Game {
             planarSpeed > 0.05 ? vel.z * k : Math.cos(yaw) * wantPlanar,
           ));
         }
+      }
+
+      // ---- VERT: STRAIGHT UP, AND BACK INTO THE SAME WALL -------------------------------
+      // These quarter pipes stand against the building wall: there is no deck to clear, so
+      // the THPS answer is the right one — a vert air goes up and comes back down into the
+      // ramp. What survives of the line is only its component ALONG the wall (that is what
+      // carries you into a transfer); anything into or out of the wall is dropped, instead of
+      // the old 74-degree launch amplifying a few cm/s of noise into 3 m/s in any direction.
+      const nH = new THREE.Vector3(this.lastGroundNormal.x, 0, this.lastGroundNormal.z);
+      if (this.lastSurfaceAngle > this.VERT_ANGLE && vel.y > 0.5 && nH.lengthSq() > 1e-4) {
+        nH.normalize();
+        const v0 = this.physics.getVelocity(this.chairBody);
+        const speed3 = Math.hypot(v0.x, v0.y, v0.z);
+        const along = v0.x * nH.x + v0.z * nH.z;
+        const tx = v0.x - nH.x * along, tz = v0.z - nH.z * along;
+        const tLen = Math.min(Math.hypot(tx, tz), speed3 * 0.5);
+        const scale = Math.hypot(tx, tz) > 1e-4 ? tLen / Math.hypot(tx, tz) : 0;
+        const vy = Math.sqrt(Math.max(0, speed3 * speed3 - tLen * tLen));
+        this.physics.setVelocity(this.chairBody, new THREE.Vector3(tx * scale, Math.max(v0.y, vy * 0.96), tz * scale));
+        this.vertAir = true;
+        this.vertCoping.copy(pos);
+        this.vertNormal.copy(nH);
       }
     }
 
@@ -4795,6 +4842,7 @@ export class Game {
         }
       }
       this.transitionLaunch = 0;
+      this.vertAir = false;
 
       const landingIntensity = Math.min(1, this.playerState.airTime / 1500);
       proceduralSounds.playLand(landingIntensity);
@@ -4864,6 +4912,7 @@ export class Game {
     // transition cast above and the lip launch need it, and by the time either fires the
     // live value has already been cleared.
     this.lastSurfaceAngle = this.playerState.isGrounded ? this.surfaceAngle : 0;
+    if (this.playerState.isGrounded) this.lastGroundNormal.copy(this.surfaceNormal);
   }
 
   /**
@@ -5144,7 +5193,7 @@ export class Game {
     }
 
     // THPS-style physics - snappy and responsive. Upgrade multipliers from story mode.
-    const jumpImpulse = 12.5 * this.jumpMultiplier;
+    const jumpImpulse = 14.5 * this.jumpMultiplier;
     const spinTorque = 6 * this.spinMultiplier;
     const cruiseSpeed = this.CRUISE_SPEED * this.speedMultiplier;
     const maxSpeed = this.MAX_SPEED * this.speedMultiplier;
@@ -5608,8 +5657,8 @@ export class Game {
     // the hard guarantee that the original bug cannot come back through any input path
     // (including an analog stick slammed over): the commanded rate can never move more than
     // that in one frame, whatever the lead term asks for.
-    const turnSpeed = 2.56;     // rad/s, grounded, and now actually delivered
-    const airTurnSpeed = 2.1;   // rad/s, airborne
+    const turnSpeed = 3.0;      // rad/s, grounded (was 2.56: tightened, owner found it floaty)
+    const airTurnSpeed = 2.5;   // rad/s, airborne
     const TURN_CHASE = 30;      // 1/s, exponential approach while turning in
     const TURN_SETTLE = 20;     // 1/s, exponential return to straight on release
     const TURN_LEAD = 2.0;      // gap feed-forward: the bite
@@ -5653,7 +5702,17 @@ export class Game {
     // players read A/D as "steer", so in the air the line now follows the nose at 60% of
     // the turn: enough to feel like you carved the jump, never enough to look like flying.
     // Z/C are the pure spins; they turn the rider and leave the line alone, as before.
-    if (this.playerState.isAirborne && Math.abs(intent.turn) > 0.05
+    // VERT TRANSFER: in a vert air, A/D drift you along the wall (screen left/right from the
+    // camera that is now looking back from over the coping), so you can come down in the
+    // NEXT ramp. The rider still spins with the input; only the line is moved.
+    if (this.playerState.isAirborne && this.vertAir && Math.abs(intent.turn) > 0.05) {
+      const av = this.physics.getVelocity(this.chairBody);
+      const tx = -this.vertNormal.z, tz = this.vertNormal.x;        // screen-right from over the coping
+      const cur = av.x * tx + av.z * tz;
+      const want = intent.turn * this.TRANSFER_MAX;
+      const dv = Math.max(-this.TRANSFER_ACCEL * dt, Math.min(this.TRANSFER_ACCEL * dt, want - cur));
+      this.physics.setVelocity(this.chairBody, new THREE.Vector3(av.x + tx * dv, av.y, av.z + tz * dv));
+    } else if (this.playerState.isAirborne && Math.abs(intent.turn) > 0.05
         && Math.abs(intent.spin) < 0.05 && Math.abs(newRate) > 1e-3) {
       const th = 0.6 * newRate * dt;
       const av = this.physics.getVelocity(this.chairBody);
@@ -5774,7 +5833,16 @@ export class Game {
           : (this.TRANSITION_HANG_FADE - rising) / (this.TRANSITION_HANG_FADE - this.HANG_FULL_SPEED);
         assist += this.TRANSITION_HANG_ACCEL * this.transitionLaunch * k;
       }
+      // Heavier air off the flat: the THPS snap. Not while grinding (the grind owns velocity).
+      if (!this.grindSystem.isGrinding()) {
+        assist -= this.AIR_GRAVITY_EXTRA * (1 - Math.min(1, this.transitionLaunch * 2.5));
+      }
       if (assist > 0) {
+        this.physics.setVelocity(
+          this.chairBody, new THREE.Vector3(v.x, v.y + assist * dt, v.z),
+        );
+      }
+      if (assist < 0) {
         this.physics.setVelocity(
           this.chairBody, new THREE.Vector3(v.x, v.y + assist * dt, v.z),
         );
@@ -5803,7 +5871,7 @@ export class Game {
     // line eases round to face it. The rate grows with the error and tops out below the
     // player's own air turn, so it reads as the rider squaring up, not as a snap. The
     // degrees it turns are subtracted from the spin accumulator: tidying up is not a trick.
-    if (this.playerState.isAirborne && !this.grindSystem.isGrinding()
+    if (this.playerState.isAirborne && !this.grindSystem.isGrinding() && !this.vertAir
         && Math.abs(intent.turn) < 0.05 && Math.abs(intent.spin) < 0.05
         && this.cumulativeSpinDegrees < 45) {
       const av = this.physics.getVelocity(this.chairBody);

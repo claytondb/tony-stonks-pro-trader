@@ -37,10 +37,10 @@ export interface SkateItem {
 export const CUBICLE_CHAOS_LAYOUT: readonly SkateItem[] = [
   { type: 'ledge', x: 11.68, z: 16.08, yaw: 2.0944, hw: 0.6, hd: 3.25, h: 0.42 },
   { type: 'ledge', x: 13.04, z: -10.06, yaw: -0.7854, hw: 0.6, hd: 1.5, h: 0.42 },
-  { type: 'qp', x: 16.68, z: -21.85, yaw: 3.1416, hw: 5.31, hd: 1.15, h: 1.6 },
+  { type: 'qp', x: 16.68, z: -21.25, yaw: 3.1416, hw: 5.31, hd: 1.15, h: 1.6 },
   { type: 'ledge', x: 8.72, z: -14.84, yaw: 2.0944, hw: 0.6, hd: 1.5, h: 0.42 },
   { type: 'pad', x: -15.48, z: 11.65, yaw: -2.3562, hw: 1, hd: 2.64, h: 0.3 },
-  { type: 'qp', x: 5.65, z: -21.85, yaw: 3.1416, hw: 4.42, hd: 1.15, h: 1.6 },
+  { type: 'qp', x: 5.65, z: -21.25, yaw: 3.1416, hw: 4.42, hd: 1.15, h: 1.6 },
   { type: 'ledge', x: -13.45, z: 1.92, yaw: -2.8798, hw: 0.6, hd: 7.5, h: 0.42 },
   { type: 'rail', x: -8.37, z: -2.08, yaw: -1.8326, hw: 0.08, hd: 2.94, h: 0.8 },
   { type: 'rail', x: 5.68, z: -1.71, yaw: 1.0472, hw: 0.08, hd: 7.69, h: 0.8 },
@@ -48,7 +48,7 @@ export const CUBICLE_CHAOS_LAYOUT: readonly SkateItem[] = [
   { type: 'ledge', x: -0.87, z: 0.53, yaw: -2.0944, hw: 0.6, hd: 2.12, h: 0.42 },
   { type: 'rail', x: -9.61, z: -11.39, yaw: 0, hw: 0.08, hd: 3.51, h: 0.8 },
   { type: 'rail', x: -15.56, z: -13.62, yaw: 2.3562, hw: 0.08, hd: 4.15, h: 0.8 },
-  { type: 'qp', x: -7.64, z: -21.85, yaw: 3.1416, hw: 3.09, hd: 1.15, h: 1.6 },
+  { type: 'qp', x: -7.64, z: -21.25, yaw: 3.1416, hw: 3.09, hd: 1.15, h: 1.6 },
   { type: 'kicker', x: -2.58, z: -15.41, yaw: 1.309, hw: 1.7, hd: 0.9, h: 0.85 },
   { type: 'ledge', x: 4.89, z: -10.05, yaw: 0, hw: 0.6, hd: 1.98, h: 0.42 },
 ];

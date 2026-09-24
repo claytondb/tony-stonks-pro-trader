@@ -61,7 +61,10 @@ function wallQP(side = pick([0, 2, 3]), off = (rnd() * 2 - 1) * 14, w = 6 + rnd(
   if (side === 1) side = 0;
   if (side >= 2) off = Math.min(off, 5 - w / 2 - 0.5);
   // yaw points INTO the wall (the vertical side is local +z).
-  const P = [[off, -B + d / 2, Math.PI], [off, B - d / 2, 0], [-B + d / 2, off, -Math.PI / 2], [B - d / 2, off, Math.PI / 2]][side];
+  // 0.6 m off the building wall: flush, the coping sits inside the wall's own face and the
+  // chair's capsule hits the wall before it can reach vertical (it crawls up and never launches).
+  const e = d / 2 + 0.6;
+  const P = [[off, -B + e, Math.PI], [off, B - e, 0], [-B + e, off, -Math.PI / 2], [B - e, off, Math.PI / 2]][side];
   return { type: 'qp', x: P[0], z: P[1], yaw: P[2], hw: w / 2, hd: d / 2, h: 1.6, side, off };
 }
 const KINDS = ['kicker', 'kicker', 'rail', 'rail', 'rail', 'ledge', 'ledge', 'pad', 'qp', 'block'];

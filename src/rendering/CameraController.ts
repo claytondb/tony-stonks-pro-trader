@@ -114,7 +114,8 @@ const FRAMING: Record<RideState, Framing> = {
   cruise: {
     dist: 3.40, height: 1.70, lateral: 0.50,
     lookHeight: 0.66, lookLateral: 0.16, lookAhead: 0.50,
-    yawFollow: 8.0, yawLag: 0.60, yawCatch: 1.0, yawLead: 0.50, posFollow: 18,
+    // Tightened for the "floaty" report: the boom follows harder and trails less.
+    yawFollow: 10.0, yawLag: 0.50, yawCatch: 1.0, yawLead: 0.60, posFollow: 22,
     fovBias: 0, rollScale: 1.0, speedShape: 1.0,
   },
   // Back and down. The drop is the important half: from below the chair's own height the
@@ -123,7 +124,7 @@ const FRAMING: Record<RideState, Framing> = {
   air: {
     dist: 4.15, height: 1.24, lateral: 0.34,
     lookHeight: 0.98, lookLateral: 0.10, lookAhead: 0.12,
-    yawFollow: 4.0, yawLag: 0.95, yawCatch: 0.0, yawLead: 0.0, posFollow: 13,
+    yawFollow: 5.5, yawLag: 0.85, yawCatch: 0.0, yawLead: 0.0, posFollow: 17,
     fovBias: 3.0, rollScale: 0.15, speedShape: 0.35,
   },
   // Swung out and aimed down the line. `lookAhead` is what makes a grind readable: the
@@ -242,6 +243,20 @@ export class CameraController {
   private rollCurrent = 0;
   private readonly maxRoll = 0.075;   // ~4.3 degrees
   private readonly rollQuat = new THREE.Quaternion();
+
+  // ---- vert air ---------------------------------------------------------------
+  private vertActive = false;
+  private vertBlend = 0;
+  private vertCoping = new THREE.Vector3();
+  private vertNormal = new THREE.Vector3(0, 0, 1);
+  private _vertPos = new THREE.Vector3();
+  private _vertLook = new THREE.Vector3();
+
+  /** Game tells the rig when the rider is in a vert air, where the lip is and which way the room is. */
+  setVertAir(active: boolean, coping?: THREE.Vector3, normal?: THREE.Vector3): void {
+    this.vertActive = active;
+    if (active && coping && normal) { this.vertCoping.copy(coping); this.vertNormal.copy(normal); }
+  }
 
   // Current state
   private currentOffset = new THREE.Vector3();
@@ -640,7 +655,36 @@ export class CameraController {
       .addScaledVector(this._forward, lookAhead);
 
     // ---- 7. the bail overlay -------------------------------------------------
-    const posFollow = this.updateBail(dt);
+    let posFollow = this.updateBail(dt);
+
+    // ---- 7b. vert air: over the coping, looking back ----------------------------
+    // Owner: "the camera should flip around to view them from the top of the ramp while
+    // they are in the air." Up a vert wall the chase cam sees the rider's back and a wall;
+    // THPS lifts the camera over the lip and looks back down past the rider into the park,
+    // so you can see the ramp you are coming back into — and the one next to it, for a
+    // transfer. Blended in and out, so it is a swing, not a cut.
+    this.vertBlend += ((this.vertActive ? 1 : 0) - this.vertBlend) * damp(this.vertActive ? 6.0 : 3.0, dt);
+    if (this.vertBlend > 0.002) {
+      const n = this.vertNormal;
+      // Just in front of the building wall, above the rider: the rider sits low in the
+      // frame with the ramp and the room opening out below them.
+      // Along the wall by 1.8 m so the lens is ~3 m from the rider rather than on top of them
+      // (the building wall leaves no room to back off any further).
+      this._vertPos.copy(this.vertCoping).addScaledVector(n, -0.5);
+      this._vertPos.x += -n.z * 1.8;
+      this._vertPos.z += n.x * 1.8;
+      this._vertPos.y = Math.max(this.vertCoping.y + 2.4, this.target.position.y + 2.3);
+      this._vertLook.copy(this.target.position).addScaledVector(n, 1.6);
+      this._vertLook.y = this.target.position.y - 1.0;
+      const b = this.vertBlend * this.vertBlend * (3 - 2 * this.vertBlend);   // smoothstep
+      this._desiredPos.lerp(this._vertPos, b);
+      this._desiredLookAt.lerp(this._vertLook, b);
+      posFollow = Math.max(posFollow, 10);
+      // Keep the boom's yaw in step with where the lens now is, so the hand-back after the
+      // landing (the rider now faces the room) is behind them rather than a 180 swing.
+      const toward = Math.atan2(n.x, n.z);
+      this.camYaw += angleDelta(toward, this.camYaw) * damp(3, dt) * this.vertBlend;
+    }
 
     // ---- 8. chase ------------------------------------------------------------
     this.camera.position.lerp(this._desiredPos, damp(posFollow, dt));
