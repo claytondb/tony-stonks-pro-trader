@@ -45,6 +45,8 @@ export type GoalKind =
   | 'time';
 
 /** World-space position, matching the [x, y, z] tuples used everywhere in level data. */
+import { OFFICE_LETTERS, OFFICE_GAPS, OFFICE_COOLERS, OFFICE_CASH, OFFICE_HIDDEN } from '../world/CubicleChaosGoals';
+
 export type Vec3 = [number, number, number];
 
 /** Which of the three score tiers a `scoreTier` goal represents. */
@@ -1885,104 +1887,43 @@ register({
 });
 
 // =========================================================================
-// FREE SKATE — ch1_office. 48x48 cubicle farm. buildOfficeInterior() carves a SPINE corridor
-// along Z (|x| < 5.2) and a CROSS corridor along X (|z| < 4.6), both walled with continuous
-// grindable cubicle cap rails at y = 1.4, meeting at the spawn. Inside the spine sit floor rails
-// at x = +/-4.0 (z -21.5..-5.5 and +5.5..+21.5), four kickers facing ALONG Z at (+/-2.4, -/+8.5)
-// and (+/-2.4, -/+13.0), the conference-table fun box at z = -18 and the stairs at z = +20.
+// FREE SKATE — ch1_office. The ground floor is a skatepark laid out by tools/levelsim (see
+// src/world/CubicleChaosLayout.ts); the mezzanine above keeps the offices and the boardroom.
 //
-// GOAL ORDER IS THE TUTORIAL. The checklist is read top-down, so it is authored as a route:
-// grind the rails two metres either side of spawn, bank the first tier off it, take the two
-// water coolers that sit in the spine, learn the kickers through the gap list, then let the
-// letters walk you around the whole loop before the checklist starts asking for real lines.
-// Nothing above position 7 requires a skill the goal above it has not already taught.
+// EVERY PLACEMENT BELOW IS DERIVED FROM THAT LAYOUT (src/world/CubicleChaosGoals.ts): letters
+// sit in the arc of a kicker air or on the line of a grind, going round the plate in order;
+// every kicker and quarter pipe is a named gap; the coolers stand beside lines, never in them.
+// Re-optimise the layout and the checklist follows it.
+//
+// GOAL ORDER IS THE TUTORIAL: grind (the E prompt teaches it), bank HIGH, knock the coolers,
+// learn the airs through the gap list, then let the letters walk you round the whole loop.
 // =========================================================================
 register({
   levelId: 'ch1_office',
   levelName: 'Cubicle Chaos',
-  // MEASURED, not guessed — see the tier note above GOAL_SETS.
-  // 120 s sessions driven through tools/play.mjs: pushing with a few ollies and flips banks 3,766;
-  // holding the grind button through the whole session with no linking at all banks 53,329.
-  // So HIGH is set where "you landed something" lands, PRO is set ABOVE the entire button-holding
-  // ceiling so it cannot be reached without linking features into a line, and SICK needs three or
-  // four genuinely good lines (one 12 s linked line prices at ~47,000).
   highScore: 8000,
   proScore: 75000,
   sickScore: 150000,
   goals: [
-    // 1. The first thing you should ever do here: grind. The spine cap rails are 2 m either side
-    //    of the spawn point, so this completes itself if the player just points at a wall.
     trickAtGoal(
       'grind_desk_rails',
-      'Grind 3 desk rails',
-      { id: 'desk_rails', label: 'the desk rails', center: [0, 1.0, 0], radius: 24, height: 8 },
+      'Grind 3 rails or ledges',
+      { id: 'desk_rails', label: 'the rails', center: [0, 1.0, 0], radius: 30, height: 8 },
       GRIND_TRICK_IDS,
       3,
       1500
     ),
-
-    // 2. HIGH SCORE falls out of doing goal 1 properly.
     scoreTierGoal('high', 8000, 2000),
-
-    // 3. Both coolers stand in the spine corridor, on the line the player is already riding.
-    smashGoal('Smash both water coolers', 2, 1000, [
-      { id: 'cooler_nw', label: 'Water Cooler', position: [-4.6, 0, -6.6] },
-      { id: 'cooler_se', label: 'Water Cooler', position: [4.6, 0, 6.6] },
-    ]),
-
-    // 4. The gaps ARE the kickers. Two kicker-to-kicker hops (the ramps face each other 4.5 m
-    //    apart, one pair per spine direction), the conference table, and the stairs — i.e. every
-    //    piece of air the level actually contains, named so the player learns where it is.
-    gapListGoal(
-      [
-        { id: 'kicker_gap_n', name: 'Kicker Gap', bonus: 750, from: [2.4, 0, -8.5], to: [2.4, 0, -13.0], radius: 3.5 },
-        { id: 'kicker_gap_s', name: 'Kicker Gap South', bonus: 750, from: [-2.4, 0, 8.5], to: [-2.4, 0, 13.0], radius: 3.5 },
-        { id: 'table_gap', name: 'Conference Table Gap', bonus: 600, from: [0, 0, -21], to: [0, 0, -15], radius: 4 },
-        { id: 'stair_gap', name: 'Stairwell Gap', bonus: 900, from: [0, 0, 17.5], to: [0, 0, 23], radius: 4 },
-      ],
-      1500
-    ),
-
-    // 5. The letters trace the level's main loop in order, so collecting them IS the line:
-    //    kicker -> floor rail -> conference table -> floor rail back -> kicker -> stairs.
-    lettersGoal(
-      letters([
-        [2.4, 2.0, -8.5], // S — over the north kicker, where you pop
-        [4.0, 1.8, -16], // T — down the north-east floor rail
-        [0, 2.2, -18], // O — on the conference table
-        [-4.0, 1.8, -13.5], // N — the north-west floor rail, coming back
-        [-2.4, 2.0, 8.5], // K — over the south kicker
-        [0, 1.8, 19], // S — the top of the stairs
-      ]),
-      2000
-    ),
-
-    // 6. Paper money, strung along the same spine so it pays for riding the line cleanly.
-    cashGoal('office_papers', 'Collect all shredded documents', 2000, [
-      { id: 'doc_a', label: 'Shredded Document', position: [-4.2, 1, -10], value: 100 },
-      { id: 'doc_b', label: 'Shredded Document', position: [4.2, 1, -10], value: 100 },
-      { id: 'doc_c', label: 'Shredded Document', position: [0, 2, 14], value: 250 },
-      { id: 'cash_w', label: 'Petty Cash', position: [-3, 1, 0], value: 500 },
-      { id: 'cash_e', label: 'Petty Cash', position: [3, 1, 0], value: 500 },
-    ]),
-
-    // 7. The first goal that demands a LINE. Holding the grind button for two solid minutes
-    //    produced a best combo of 10,710; 25,000 needs features linked through manuals and
-    //    reverts, which is exactly the skill everything above has been building toward.
+    smashGoal('Smash both water coolers', 2, 1000,
+      OFFICE_COOLERS.map((p, i) => ({ id: i === 0 ? 'cooler_nw' : 'cooler_se', label: 'Water Cooler', position: p }))),
+    gapListGoal(OFFICE_GAPS, 1500),
+    lettersGoal(letters(OFFICE_LETTERS), 2000),
+    cashGoal('office_papers', 'Collect all shredded documents', 2000,
+      OFFICE_CASH.map((c, i) => ({ id: `doc_${i}`, label: c.value >= 500 ? 'Petty Cash' : 'Shredded Document', position: c.pos, value: c.value }))),
     comboGoal(25000, 4000, 'Land a $25,000 combo in one line'),
-
-    // 8. PRO SCORE. Unreachable without goal 7's skill.
     scoreTierGoal('pro', 75000, 6000),
-
-    // 9. Hidden, and deliberately NOT on the floor: the pickup sphere sits 3.9 m up at the far
-    //    end of the north-west cap rail, out of reach of a chair on the carpet. You get it by
-    //    riding that rail to its end. A secret should cost a line, not a stroll.
-    hiddenFileGoal([-5.2, 2.8, -20.6], 3000, 'ride the north-west cubicle rail to the end'),
-
-    // 10. SICK SCORE.
+    hiddenFileGoal(OFFICE_HIDDEN, 3000, 'ride the longest grind out to its very end'),
     scoreTierGoal('sick', 150000, 15000),
-
-    // 11. Stay out for the full session.
     timeGoal('survive', 120, 1500, 'Skate the full 2 minute session'),
   ],
 });

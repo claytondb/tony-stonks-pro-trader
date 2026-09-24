@@ -4,6 +4,19 @@
  */
 
 import RAPIER from '@dimforge/rapier3d-compat';
+
+/**
+ * Rapier collision groups: high 16 bits = what a collider IS, low 16 = what it collides WITH.
+ *
+ * KNOCKABLE PROPS DO NOT BODY-CHECK THE CHAIR. They used to be ordinary dynamic bodies the
+ * chair's capsule collided with, so an 18 kg water cooler took a 15 m/s chair to 6 m/s and
+ * threw it 1.4 m into the air — the owner's "the player bounces off of things". The prop
+ * system already has its own impact test (Destructibles.testPlayerImpact) that knocks the
+ * prop and reports a controlled drag back to the player; the rigid-body contact on top of it
+ * was double counting, and the violent half. Props still collide with the world and each other.
+ */
+export const COLLISION_GROUP_CHAIR = (0x0002 << 16) | (0xffff & ~0x0004);
+export const COLLISION_GROUP_PROPS = (0x0004 << 16) | (0xffff & ~0x0002);
 import * as THREE from 'three';
 
 /**
@@ -105,7 +118,9 @@ export class PhysicsWorld {
       // Min makes a graze remove the into-the-wall component and nothing more, which is
       // what lets resolveObstacles steer the line out instead of rebuilding it.
       .setRestitution(0.0)
-      .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min);
+      .setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Min)
+      // The chair does not PHYSICALLY touch knockable props (see COLLISION_GROUP_PROPS).
+      .setCollisionGroups(COLLISION_GROUP_CHAIR);
     
     this.world.createCollider(bodyCollider, body);
 
@@ -627,6 +642,14 @@ export class PhysicsWorld {
    * THPS-style ground raycast - detect surface below player
    * Returns surface info or null if airborne
    */
+  /** Generic ray cast: distance to the first collider hit along `dir` (unit), or null. */
+  castRay(origin: { x: number; y: number; z: number }, dir: { x: number; y: number; z: number },
+    maxDist: number, exclude?: RAPIER.RigidBody): number | null {
+    if (!this.initialized) return null;
+    const hit = this.world.castRay(new RAPIER.Ray(origin, dir), maxDist, true, undefined, undefined, undefined, exclude);
+    return hit ? hit.toi : null;
+  }
+
   raycastGround(
     origin: THREE.Vector3,
     maxGap: number = 2.0,

@@ -39,6 +39,8 @@ import { storyProgress, getStoryLevelById, StoryLevelData, StoryCheckpoint } fro
 import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
 import { ChaseHUD } from '../ui/ChaseHUD';
 import { DialogueBox } from '../ui/DialogueBox';
+import { CUBICLE_CHAOS_LAYOUT } from '../world/CubicleChaosLayout';
+import { inSkateLane } from '../world/SkateLayoutUtil';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -2238,12 +2240,20 @@ export class Game {
     //    puts every prop back exactly where it was.
     const half = Math.max(24, (level.groundSize ?? 60) * 0.42);
     const seed = hashString(level.id);
-    defs.push(...scatterDestructibles(
+    const scattered = scatterDestructibles(
       new THREE.Vector3(spawnPos.x, groundY, spawnPos.z),
       half * 2, half * 2,
       this.currentLevelId === 'ch1_office' ? 30 : 20,
       seed,
-    ));
+    );
+    if (this.currentLevelId === 'ch1_office') {
+      // Owner: "too chaotic". Thirty loose props dropped at random landed in the kicker lanes
+      // and on the rail approaches — the obstacles nobody placed. Keep the ones that sit off
+      // the lines levelsim laid out, and at most a dozen of those.
+      defs.push(...scattered.filter((d) => !inSkateLane(CUBICLE_CHAOS_LAYOUT, d.position.x, d.position.z)).slice(0, 12));
+    } else {
+      defs.push(...scattered);
+    }
 
     this.destructibles.spawnMany(defs);
   }
@@ -2256,7 +2266,9 @@ export class Game {
     // 110 sheets over a 30 m disc is 0.04 sheets/m2 — the player crossed one every few
     // seconds and the wake had nothing to pick up. Tighter disc, denser scatter.
     const radius = Math.min(26, Math.max(14, (level.groundSize ?? 60) * 0.22));
-    this.paperStorm.addFloorLitter(new THREE.Vector3(spawnPos.x, 0, spawnPos.z), radius, 420);
+    // Owner: "a little too chaotic". 420 loose sheets turned the whole floor into confetti
+    // that hid the lines; a light scatter still gives the wake something to pick up.
+    this.paperStorm.addFloorLitter(new THREE.Vector3(spawnPos.x, 0, spawnPos.z), radius, 90);
   }
 
   /**
@@ -4006,6 +4018,20 @@ export class Game {
 
     // ---- 12. WORLD SYSTEMS ------------------------------------------------------------
     this.destructibles?.update(dt, this.chair.position, currentVel);
+    // Knocking a prop costs a little speed — the momentum the prop took, as the prop system
+    // prices it — and never more than a fifth of the line. (The chair no longer collides with
+    // props as rigid bodies; this is the whole of the hit.)
+    {
+      const drag = this.destructibles?.consumeImpactDrag() ?? 0;
+      if (drag > 0) {
+        const v = this.physics.getVelocity(this.chairBody);
+        const sp = Math.hypot(v.x, v.z);
+        if (sp > 0.1) {
+          const k = Math.max(0.8, 1 - (drag / 50) / sp);
+          this.physics.setVelocity(this.chairBody, new THREE.Vector3(v.x * k, v.y, v.z * k));
+        }
+      }
+    }
     this.paperStorm?.update(dt, this.chair.position, currentVel);
     this.updateCollectibles(dt);
 

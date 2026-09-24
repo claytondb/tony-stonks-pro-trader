@@ -138,7 +138,7 @@ async function main() {
   let code = 0;
   try {
     await waitForServer(url);
-    const page = await (await browser.newContext({ viewport: arg('shot') ? { width: 1280, height: 720 } : { width: 320, height: 180 } })).newPage();
+    const page = await (await browser.newContext({ viewport: arg('shot') ? (arg('square') ? { width: 1000, height: 1000 } : { width: 1280, height: 720 }) : { width: 320, height: 180 } })).newPage();
     page.on('pageerror', (e) => report.errors.push(String(e).slice(0, 200)));
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !!window.game, null, { timeout: 90000 });

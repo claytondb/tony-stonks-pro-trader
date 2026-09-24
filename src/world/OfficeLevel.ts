@@ -1,6 +1,13 @@
 /**
  * OfficeLevel — CUBICLE CHAOS, rebuilt as a real office FLOOR PLAN over two storeys.
  *
+ * >>> 2026-09 UPDATE: THE GROUND FLOOR BELOW IS HISTORY. The owner found the room-by-room floor
+ * >>> plan "too chaotic" with "level design majorly lacking", and asked for the layout to be
+ * >>> found by simulation. The ground floor is now a skatepark laid out by tools/levelsim (see
+ * >>> buildSkateFloor and src/world/CubicleChaosLayout.ts). The shell, the mezzanine, the stairs
+ * >>> and the lift described here are unchanged; the break room, boardroom, cubicle farm and server
+ * >>> room on the ground floor are gone (their props now dress the walls).
+ *
  * ---------------------------------------------------------------------------
  * WHY THIS FILE WAS REWRITTEN. THE OWNER PLAYED IT AND SAID, VERBATIM:
  *
@@ -131,9 +138,9 @@ import {
   makeFluorescentPanel,
   makeGlazedScreen,
   makeKickerRamp,
+  makeGrindRail,
   makeKitchenCounter,
   makeLedgeBlock,
-  makeMonitor,
   makePendantLamp,
   makePlanterLedge,
   makePoolTable,
@@ -149,12 +156,16 @@ import {
   makeWaterCooler,
   makeWhiteboard,
   mergePropsByMaterial,
-  POD_FABRIC_TINTS,
   type GrindEdge,
   type LightHint,
   type PropCollider,
   transitionShell,
+  wedgeShell,
 } from './OfficeProps';
+import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
+
+/** Hazard stripes for ledge runs, so each one reads as its own feature. */
+const LEDGE_STRIPES = [0xc0392b, 0xe7b428, 0x2f6f7d, 0x6c5ce7];
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -379,7 +390,7 @@ function place(
     for (let i = 0; i < limit; i++) {
       const col = list[i];
       if (col.size[0] <= 0 || col.size[1] <= 0 || col.size[2] <= 0) continue;
-      if (col.type === 'transition') {
+      if (col.type === 'transition' || col.type === 'wedge') {
         acc.colliders.push({
           position: new THREE.Vector3(
             x + ROT_X(col.offset[0], col.offset[2], c, s),
@@ -388,7 +399,9 @@ function place(
           ),
           halfExtents: new THREE.Vector3(col.size[0] / 2, col.size[1] / 2, col.size[2] / 2),
           rotationY: rotY,
-          trimesh: transitionShell(col.size[0], col.size[1], col.size[2]),
+          trimesh: col.type === 'wedge'
+            ? wedgeShell(col.size[0], col.size[1], col.size[2])
+            : transitionShell(col.size[0], col.size[1], col.size[2]),
         });
         continue;
       }
@@ -474,9 +487,6 @@ function blocked(rects: KeepClearRect[], x: number, z: number, halfX: number, ha
 // spawn went 10.5 m -> 17.4 m and the 25 m-line share 80.4% -> 93.7%.
 // ===========================================================================
 
-const HALL = 6.0;          // perimeter hallway clear width
-const OUT = 23.0;          // inner face of the building wall
-const RING = OUT - HALL;   // 17.0 — the room block line
 const SPINE = 8.0;         // half-width of the main spine
 // THE CROSS IS 10 m WIDE, AND THE NUMBER IS DERIVED. Game's turn rate is 3.6 rad/s, so the
 // minimum turn radius at the measured 15 m/s cruise is 4.2 m and a U-turn needs 8.4 m of
@@ -904,6 +914,93 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     soffit(x0, x1, z0, z1, DECK_Y - DECK_T);
   }
 
+  /**
+   * Build a levelsim layout (tools/levelsim) as office-themed skate features. Axes are the
+   * sim's: an item's local +z is the way you ride OFF a kicker, ALONG a rail or ledge, and
+   * INTO a quarter pipe. Everything here is the thing the sim modelled — same footprint, same
+   * height, same collision rule — so the scores it was chosen on still describe what you ride.
+   */
+  function buildSkateFloor(items: readonly SkateItem[]): void {
+    const HALF_PI = Math.PI / 2;
+    items.forEach((it, i) => {
+      const zx = Math.sin(it.yaw), zz = Math.cos(it.yaw);
+      switch (it.type) {
+        case 'kicker':
+          place(acc, makeKickerRamp({ width: it.hw * 2, depth: it.hd * 2, height: it.h, seed: 4000 + i }),
+            it.x, 0, it.z, it.yaw, { collide: true, grind: true });
+          acc.wear.push({ x: it.x - zx * 3, z: it.z - zz * 3, width: 3.6, depth: 4.4, rotation: it.yaw, strength: 0.45 });
+          break;
+        case 'qp':
+          place(acc, makeQuarterPipe({ width: it.hw * 2, depth: it.hd * 2, height: 1.75, seed: 4100 + i }),
+            it.x, 0, it.z, it.yaw, { collide: true, grind: true });
+          acc.wear.push({ x: it.x - zx * 3.5, z: it.z - zz * 3.5, width: it.hw * 2, depth: 4.0, rotation: it.yaw, strength: 0.4 });
+          break;
+        case 'rail': {
+          // makeGrindRail runs along its local X, the sim's rails along local z.
+          // No collider: a floor rail is something you grind or ride past, never a tripwire,
+          // exactly as the sim (and the game's LevelData rails) treat it.
+          place(acc, makeGrindRail(it.hd * 2, { seed: 4200 + i }), it.x, 0, it.z, it.yaw + HALF_PI,
+            { collide: false, grind: true });
+          break;
+        }
+        case 'ledge':
+          runLedge(it.x - zx * it.hd, it.z - zz * it.hd, it.x + zx * it.hd, it.z + zz * it.hd,
+            { height: it.h, depth: it.hw * 2, seed: 4300 + i * 17, stripe: LEDGE_STRIPES[i % LEDGE_STRIPES.length] });
+          break;
+        case 'pad':
+          // A manual pad: a low platform you roll onto (under Game.STEP_HEIGHT) and manual across.
+          place(acc, makeLedgeBlock({ width: it.hd * 2, depth: it.hw * 2, height: it.h, seed: 4400 + i, stripe: 0x2f6f7d }),
+            it.x, 0, it.z, it.yaw + HALF_PI, { collide: true, grind: false });
+          acc.wear.push({ x: it.x, z: it.z, width: it.hw * 2 + 1.5, depth: it.hd * 2 + 1.5, rotation: it.yaw, strength: 0.3 });
+          break;
+        case 'block':
+          // The one thing you ollie OVER: the break-room pool table, grindable down both rails.
+          place(acc, makePoolTable({ seed: 4500 + i }), it.x, 0, it.z, it.yaw + HALF_PI, { collide: true, grind: true });
+          break;
+      }
+    });
+
+    // CORNER CHAMFERS. A square corner is the one thing a swerving line hits head-on: in the
+    // in-game swerve test the north-west corner alone took a third of all hard hits. A 45-degree
+    // partition across each free corner turns the hit into a deflection (and a grind). Corners
+    // with a quarter pipe running into them are left alone.
+    const CH = 4.0;
+    for (const [sx, sz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]] as [number, number][]) {
+      const cx = sx * halfW, cz = sz * halfD;
+      const clash = items.some((it) => it.type === 'qp' && Math.abs(it.x - cx) < it.hw + CH + 0.5 && Math.abs(it.z - cz) < CH + 2);
+      if (clash) continue;
+      runWall(cx - sx * CH, cz, cx, cz - sz * CH, { grind: true });
+    }
+
+    // WALL DRESSING — the office, pushed to the walls. Only north of the balcony (the atrium
+    // walls belong to the quarter pipes) and only where no feature's approach comes near.
+    const nearFeature = (x: number, z: number, r: number) => items.some((it) => Math.hypot(it.x - x, it.z - z) < r + Math.max(it.hw, it.hd));
+    const WALL = halfW - 0.5;
+    // Vending bank against the west wall, one collider for the rank (see rankCollider).
+    if (!nearFeature(-WALL, 16.2, 3)) {
+      for (let k = 0; k < 3; k++) {
+        place(acc, makeVendingMachine({ seed: 921 + k }), -WALL + 0.05, 0, 15.2 + k * 0.96, -Math.PI / 2,
+          { collide: false, lights: true, lightPriority: 2 });
+      }
+      rankCollider(-WALL + 0.05, 16.16, 0.39, 0.95, 1.53);
+      place(acc, makeWaterCooler({ seed: 913 }), -WALL + 0.2, 0, 13.3, -Math.PI / 2, { collide: false });
+    }
+    // Server racks along the east wall, cold blue light: the "server room" is a wall now.
+    if (!nearFeature(WALL, 16, 3)) {
+      for (let k = 0; k < 6; k++) {
+        place(acc, makeServerRack({ variant: k % 3 === 0 ? 0 : 1, seed: 981 + k }), WALL - 0.1, 0, 12.5 + k * 0.64,
+          Math.PI / 2, { collide: false, lights: k === 2, lightPriority: 3 });
+      }
+      rankCollider(WALL - 0.1, 14.1, 0.5, 1.1, 1.95);
+    }
+    // Copier and printer against the north wall.
+    if (!nearFeature(-12, halfD - 0.6, 3)) {
+      place(acc, makeCopier({ seed: 961 }), -12, 0, halfD - 0.6, 0, { collide: false });
+      place(acc, makePrinter({ variant: 1, seed: 965 }), -13.4, 0, halfD - 0.5, 0, { collide: false });
+    }
+    place(acc, makeCorkBoard({ seed: 931 }), -halfW + 0.06, 1.55, 11.6, -Math.PI / 2, { collide: false });
+  }
+
   // ================================================== THE UPPER FLOOR SLAB ===
   // Seven rectangles tiling z = [4, 23] minus the stair void and the lift void. The stair void
   // is exactly the flight's width, so there is no slot between the deck and the stair cheek.
@@ -945,243 +1042,29 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // crossing). Both are cut out of the ROOM, so a 9 m room side gives up 3.5 m at one end and
   // 4.5 m at the other and still has room for a 4.4 m doorway in what is left. That is why the
   // numbers are what they are: any bigger and a room side cannot hold a door.
-  const CHAM = 3.5;
-  const SPLAY = 4.5;
 
-  // The hallway edge along the cubicle farm, which has no room wall of its own: a low planter
-  // run that says "this is the corridor" and grinds, without closing the farm off.
-  for (let z = -11.0; z < -CROSS - 3.2; z += 4.4) {
-    place(acc, makePlanterLedge({ width: 3.2, depth: 1.0, seed: iseed(-RING, z, 51) }),
-      -RING + 0.6, 0, z + 1.6, Math.PI / 2, { collide: true, grind: true });
-  }
-
-  // ============================================================ THE SPINE ===
-  // 16 m of main street from the south wall to the balcony edge, and under the deck beyond it.
-  // Two ledge runs flank the centre lane and leave 5.8 m of clear carpet down the middle plus
-  // 4.4 m outboard of each: three lanes, and the outer two have a grind on both sides.
-  runLedge(-5.0, -19.0, -5.0, -9.0, { seed: 3100, stripe: 0xc0392b });
-  runLedge(5.0, -19.0, 5.0, -9.0, { seed: 3200, stripe: 0xc0392b });
-
-  // Quarter pipes closing both ends of the spine. A transition is the one primitive that sends
-  // the player UP and turns them AROUND, which is what stops a 46 m corridor being a treadmill.
+  // ======================================================== THE SKATE FLOOR ==
   //
-  // makeQuarterPipe rises toward local +Z, so the curve must face the ROOM and the vertical
-  // back sit against the wall. These were authored the other way round: every quarter pipe
-  // in the office showed the player a 1.6 m plywood wall with the curve hidden behind it.
-  place(acc, makeQuarterPipe({ width: 9.0, depth: 2.3, height: 1.75, seed: 811 }),
-    0, 0, -halfD + 1.4, Math.PI, { collide: true, grind: true });
-  place(acc, makeQuarterPipe({ width: 7.0, depth: 2.1, height: 1.55, seed: 813 }),
-    0, 0, halfD - 1.35, 0, { collide: true, grind: true });
-  // ...and one against each end of the cross hall, so the east/west run has the same ending.
-  for (const sx of [-1, 1]) {
-    place(acc, makeQuarterPipe({ width: 6.4, depth: 2.1, height: 1.55, seed: 815 + sx }),
-      sx * (halfW - 1.35), 0, 0, sx > 0 ? Math.PI / 2 : -Math.PI / 2, { collide: true, grind: true });
-  }
-
-  // ====================================================== THE BREAK ROOM ====
-  // North-west block, 9 x 12 m. FOUR doorways, one on every side, so it is a room you cut
-  // THROUGH on a line from the spine to the west hallway — not a dead end you visit.
+  // THE GROUND FLOOR IS A SKATEPARK NOW, AND ITS LAYOUT WAS SEARCHED FOR, NOT DRAWN.
   //
-  // Its two splayed corners do two different jobs: the SE one opens the spawn crossing into an
-  // octagon, and the NW one IS the perimeter hallway's north-west chamfer.
-  const BR_X0 = -RING, BR_X1 = -SPINE, BR_Z0 = CROSS, BR_Z1 = RING;
-  room(BR_X0, BR_X1, BR_Z0, BR_Z1, [
-    { side: 's', at: -14.8, width: 4.4 },
-    { side: 'n', at: -10.7, width: 5.6 },
-    { side: 'w', at: 8.5, width: 6.0 },
-    { side: 'e', at: 13.0, width: 6.0 },
-  ], {
-    tint: POD_FABRIC_TINTS[5],
-    splay: [{ corner: 'se', size: SPLAY }, { corner: 'nw', size: CHAM }],
-  });
-
-  {
-    // THE POOL TABLE is the centrepiece and, mechanically, a manual pad with a grind down both
-    // long rails at 0.87 m. It sits square in the middle of the room with 3 m of clear carpet
-    // all round it, because a centrepiece you cannot get a run at is a piece of scenery.
-    place(acc, makePoolTable({ seed: 901 }), -13.5, 0, 12.7, 0, { collide: true, grind: true });
-    acc.wear.push({ x: -13.5, z: 12.7, width: 6.4, depth: 4.6, strength: 0.42 });
-
-    // THE COUCH. Seat at exactly Game.STEP_HEIGHT, back 0.46 m proud of it: roll on, hit the
-    // back, and it kicks. It faces the pool table across the room, so the line in over the
-    // couch and onto the table exists and is obvious.
-    place(acc, makeCouch({ length: 2.4, seed: 903, tint: 0x8f6f58 }), -15.8, 0, 8.4, Math.PI / 2,
-      { collide: true, grind: true });
-    place(acc, makeArmchair({ seed: 905 }), -13.0, 0, 7.6, -1.9, { collide: false });
-    place(acc, makeArmchair({ seed: 907, tint: 0x93b1ab }), -10.6, 0, 13.6, -1.2, { collide: false });
-    place(acc, makeLedgeBlock({ width: 1.1, depth: 0.7, height: 0.36, seed: 909 }), -14.2, 0, 8.4, 0.2,
-      { collide: false });
-
-    // THE KITCHEN. A free-standing island rather than a run of units against a wall, because
-    // every wall of this room has a doorway in it — and because an island at 0.92 m is a grind
-    // you can take from either side, which a counter shoved against plasterboard is not.
-    place(acc, makeKitchenCounter({ length: 3.6, seed: 911 }), -13.2, 0, 8.6, 0, { collide: true, grind: true });
-    place(acc, makeKitchenCounter({ length: 3.0, kitchen: false, seed: 912 }), -12.6, 0, 15.6, 0,
-      { collide: true, grind: true });
-    place(acc, makeWaterCooler({ seed: 913 }), -9.0, 0, 15.5, Math.PI, { collide: false });
-
-    // Dressing: seen, never touched.
-    for (const [px, pz] of [[-9.6, 13.4], [-9.4, 15.2], [-16.2, 14.4], [-16.2, 6.4]] as [number, number][]) {
-      place(acc, makePottedPlant({ seed: iseed(px, pz, 61) }), px, 0, pz, rand(0, 6.28), { collide: false });
-    }
-    place(acc, makeCorkBoard({ seed: 931 }), -8.06, 1.55, 11.6, -Math.PI / 2, { collide: false });
-    place(acc, makeWallClock({ seed: 933 }), -8.06, 2.15, 9.4, -Math.PI / 2, { collide: false });
-    place(acc, makeTrashCan({ seed: 925, accent: true }), -16.3, 0, 15.9, 0, { collide: false });
-    acc.paperSeeds.push({ x: -14.4, z: 9.6, radius: 1.4 });
-  }
-
-  // THE VENDING BANK lives in the SPINE, not in the break room, hard against the break room's
-  // east wall. Two reasons, and neither is decoration: the machines are the landmark that tells
-  // you which end of a 46 m corridor you are looking down, and the wall behind them is a
-  // wallride. Inside the room they would have stood in one of its four doorways.
+  // Owner, after the floor-plan rebuild: "it's a little too chaotic ... the level design is
+  // majorly lacking. Run simulations to figure out the best level design — if the player were
+  // to move in swerving lines around the level, what's the optimal placement for rails,
+  // obstacles, etc.? I want it to be more spacious, and invite the user to do tricks off of
+  // things, go off of jumps."
   //
-  // One collider for the whole bank — see rankCollider. Three machines side by side leave two
-  // 11 cm slots between them, and a slot narrower than the chair is a place to be wedged.
-  for (let i = 0; i < 3; i++) {
-    place(acc, makeVendingMachine({ seed: 921 + i }), -SPINE + 0.45, 0, 10.6 + i * 0.96, -Math.PI / 2,
-      { collide: false, lights: true, lightPriority: 2 });
-  }
-  rankCollider(-SPINE + 0.45, 11.56, 0.39, 0.95, 1.53);
-
-  // ======================================================== THE BOARDROOM ===
-  // North-east block, GLAZED on every side so the hero feature is visible from the hallway —
-  // which is the entire point of putting an 8 m grind inside a glass box.
-  const BD_X0 = SPINE, BD_X1 = RING, BD_Z0 = CROSS, BD_Z1 = RING;
-  room(BD_X0, BD_X1, BD_Z0, BD_Z1, [
-    { side: 's', at: 14.8, width: 4.4 },
-    { side: 'n', at: 10.7, width: 5.6 },
-    { side: 'w', at: 13.0, width: 6.0 },
-    { side: 'e', at: 8.5, width: 6.0 },
-  ], { glazed: true, splay: [{ corner: 'sw', size: SPLAY }, { corner: 'ne', size: CHAM }] });
-
-  {
-    // THE HERO FEATURE. An 8 m table at 0.74 m with a steel trim down both long edges, both
-    // registered as single unbroken grinds. It is fed by a kicker at the south end standing in
-    // the room's own doorway, so the line is: cross hall -> kicker -> table -> 8 m of grind ->
-    // out of the north doorway into the north hallway. Nothing else in the building is that
-    // long, and nothing else in the building is behind glass.
-    const TABLE_X = 13.6;
-    place(acc, makeBoardTable({ length: 8.0, width: 1.85, seed: 941 }), TABLE_X, 0, 11.0, Math.PI / 2,
-      { collide: true, grind: true });
-    place(acc, makeKickerRamp({ width: 3.0, depth: 1.8, height: 0.82, seed: 943 }), TABLE_X, 0, 6.4, 0,
-      { collide: true, grind: true });
-    acc.wear.push({ x: TABLE_X, z: 6.2, width: 4.2, depth: 3.6, strength: 0.5 });
-
-    // Chairs down both sides, tucked under, non-colliding: you skate over them, not into them.
-    for (let i = 0; i < 6; i++) {
-      const z = 7.9 + i * 1.25;
-      for (const sgn of [-1, 1]) {
-        place(acc, makeDeskChair({ variant: 1, seed: iseed(sgn, z, 71) }), TABLE_X + sgn * 1.55, 0, z,
-          sgn > 0 ? -Math.PI / 2 : Math.PI / 2, { collide: false });
-      }
-    }
-    place(acc, makeWhiteboard({ seed: 947 }), 10.2, 1.4, RING - 0.14, Math.PI, { collide: false });
-    place(acc, makePottedPlant({ variant: 0, seed: 949 }), 9.0, 0, 14.8, 0, { collide: false });
-    place(acc, makeMonitor({ variant: 1, seed: 951 }), TABLE_X, 0.75, 14.4, Math.PI, { collide: false });
-  }
-
-  // ===================================================== THE CUBICLE FARM ===
-  // South-west block. IT STAYS, BUT AS ONE ZONE AMONG SEVERAL AND AS OPEN-PLAN BENCHING RATHER
-  // THAN AS POCKETS.
+  // tools/levelsim models the chair as the game measures it (13 m/s cruise, 2.48 rad/s turn,
+  // kicker and quarter-pipe airs from tools/ramp-probe.mjs) and rides it with swerving players,
+  // half of whom line up whatever they can see ahead. tools/levelsim/optimize.mjs then evolved
+  // feature layouts against: weighted tricks per minute, time spent inside a combo, air per
+  // minute, variety, every feature getting used, open floor — minus collisions, hard hits and
+  // bad landings. Every candidate had to leave kickers an 11 m landing lane, quarter pipes 7 m
+  // of floor in front, and rails 3 m off each end. The winner is CUBICLE_CHAOS_LAYOUT; the
+  // numbers against the previous build are in its header.
   //
-  // The old farm was built from makeCubiclePod: a cross of panels with four workstations round
-  // it, which is a ring of collision with an INSIDE. That is exactly the thing the owner got
-  // stuck in, and it is not fixable by spacing the pods further apart — a pod is a trap at any
-  // pitch. What is here now is what a modern office floor actually looks like: parallel BENCH
-  // RUNS with a low spine screen and desks either side, 3 m of open aisle between them, both
-  // ends of every aisle open, and no enclosing geometry of any kind. There is nothing to be
-  // inside of, and the screens are 1.10 m to the grind line so you can see the whole zone over
-  // the top of it.
-  {
-    const rows = [-6.4, -9.4];
-    for (const rz of rows) {
-      const tint = POD_FABRIC_TINTS[Math.abs(Math.round(rz)) % 4];
-      runWall(-16.4, rz, -8.8, rz, { height: 1.02, tint });
-      for (let i = 0; i < 5; i++) {
-        const dx = -15.8 + i * 1.6;
-        for (const sgn of [-1, 1]) {
-          place(acc, makeDesk({ variant: 1, seed: iseed(dx, rz * sgn, 81) }), dx, 0, rz + sgn * 0.92,
-            sgn > 0 ? 0 : Math.PI, { collide: false });
-          if (chance(0.7)) {
-            place(acc, makeMonitor({ variant: 1, seed: iseed(dx, rz * sgn, 83) }), dx - 0.1, 0.76, rz + sgn * 0.55,
-              sgn > 0 ? 0 : Math.PI, { collide: false });
-          }
-          if (chance(0.55)) {
-            place(acc, makeDeskChair({ variant: 1, seed: iseed(dx, rz * sgn, 85), knocked: chance(0.25) }),
-              dx + 0.25, 0, rz + sgn * 1.75, rand(0, 6.28), { collide: false });
-          }
-        }
-      }
-      acc.paperSeeds.push({ x: rand(-15.5, -10.5), z: rz + rand(-1.6, 1.6), radius: 1.3 });
-      acc.wear.push({ x: -12.6, z: rz + 1.5, width: 8.0, depth: 2.4, strength: 0.24 });
-    }
-
-    // The copier bank and the recycling pile against the spine wall line: the bit of the floor
-    // nobody photographs, and the thing that tells you which end of the farm you are at.
-    for (let i = -1; i <= 1; i++) {
-      place(acc, makeCopier({ seed: 961 + i }), -8.9, 0, -6.0 + i * 1.5, -Math.PI / 2, { collide: false });
-    }
-    place(acc, makePrinter({ variant: 1, seed: 965 }), -8.9, 0, -11.0, -Math.PI / 2, { collide: false });
-    for (const [px, pz] of [[-9.2, -13.6], [-16.0, -6.0]] as [number, number][]) {
-      place(acc, makeBoxStack({ seed: iseed(px, pz, 87) }), px, 0, pz, rand(0, 6.28), { collide: false });
-    }
-
-    // ---- THE GROUND-FLOOR CORNER OFFICE ---------------------------------------------------
-    // The manager's corner, glazed on its two inboard sides and splayed on the third so that
-    // ITS wall is the hallway's south-west chamfer. Two doorways, and the desk ledge inside is
-    // a grind. A corner office in a skate level has to be a feature, not a diorama.
-    room(-RING, -11.5, -RING, -11.5, [
-      { side: 'n', at: -14.5, width: 3.6 },
-      { side: 'e', at: -14.5, width: 3.2 },
-    ], { glazed: true, splay: [{ corner: 'sw', size: CHAM }] });
-    place(acc, makeDesk({ variant: 0, seed: 971 }), -14.2, 0, -13.4, 0.5, { collide: false });
-    place(acc, makeLedgeBlock({ width: 2.6, depth: 0.9, height: KERB_H, seed: 973, stripe: 0x2f6f7d }),
-      -13.4, 0, -13.2, 0, { collide: true, grind: true });
-    place(acc, makeDeskChair({ variant: 0, seed: 975 }), -14.2, 0, -14.4, 3.0, { collide: false });
-    place(acc, makePottedPlant({ seed: 977 }), -12.4, 0, -15.4, 0, { collide: false });
-    place(acc, makeWhiteboard({ seed: 979 }), -15.5, 1.4, -11.64, Math.PI, { collide: false });
-  }
-
-  // ======================================================== THE SERVER ROOM ==
-  // South-east block. NARROW BY DESIGN — this is the level's technical section — but never
-  // closed. Three rack rows with a 1.5 m aisle between them, a 2.3 m gap punched straight
-  // through the middle of every row so there is a clean north/south lane as well, four
-  // doorways, and the raised-floor plinths pushed out to the walls so they never pinch that
-  // lane. Cold blue light off the racks themselves: the only colour in the level that is not
-  // warm, and the reason you can find this room from the far end of the spine.
-  const SR_X0 = SPINE, SR_X1 = RING, SR_Z0 = -RING, SR_Z1 = -CROSS;
-  room(SR_X0, SR_X1, SR_Z0, SR_Z1, [
-    { side: 'w', at: -13.0, width: 6.0 },
-    { side: 'n', at: 14.8, width: 4.4 },
-    { side: 's', at: 10.7, width: 5.6 },
-    { side: 'e', at: -9.5, width: 6.0 },
-  ], { tint: POD_FABRIC_TINTS[3], splay: [{ corner: 'nw', size: SPLAY }, { corner: 'se', size: CHAM }] });
-
-  {
-    let rackN = 0;
-    for (const rz of [-9.6, -12.2, -14.8]) {
-      for (const rx of [8.9, 9.6, 10.3, 13.2, 13.9, 14.6, 15.3]) {
-        // The east block stops short of the splayed south-east corner; the racks stop with it.
-        if (rx > 12 && rz < -14.0) continue;
-        rackN++;
-        place(acc, makeServerRack({ variant: rackN % 3 === 0 ? 0 : 1, seed: 981 + rackN }),
-          rx, 0, rz, 0, { collide: false, lights: rackN % 5 === 1, lightPriority: 3 });
-      }
-      // ONE collider per BLOCK of racks, not per rack — see rankCollider. Seven racks in a row
-      // leave six 8 cm slots, and tools/stuck.mjs found the player wedged in one of them.
-      rankCollider(9.6, rz, 1.01, 1.0, 0.53);
-      if (rz > -14.0) rankCollider(14.25, rz, 1.36, 1.0, 0.53);
-    }
-    // Raised-floor plinths against the two side walls. 0.42 m, so they are ridden over as well
-    // as grinded — and OUT of the central lane, which is the room's escape route.
-    runLedge(8.6, -16.2, 8.6, -10.4, { seed: 3300, depth: 0.7, height: KERB_H, wear: false });
-    runLedge(16.3, -13.0, 16.3, -6.4, { seed: 3400, depth: 0.7, height: KERB_H, wear: false });
-    acc.wear.push({ x: 11.8, z: -11.5, width: 2.3, depth: 9.0, strength: 0.36 });
-
-    place(acc, makeFireExtinguisher({ seed: 991 }), SPINE + 0.35, 0, -7.4, Math.PI / 2, { collide: false });
-    place(acc, makeCardboardBox({ variant: 1, seed: 993 }), 16.2, 0, -15.0, 0.6, { collide: false });
-    place(acc, makeBoxStack({ seed: 995 }), 11.8, 0, -6.6, 1.2, { collide: false });
-  }
+  // The rooms that used to fill this floor are gone from it — they were the chaos (17 collisions
+  // a minute in the model) and the upper floor still has the offices and the boardroom.
+  buildSkateFloor(CUBICLE_CHAOS_LAYOUT);
 
   // ============================================================ THE STAIRS ===
   // 14 treads, 4.20 m over 10 m: 0.30 m risers, under Game.STEP_HEIGHT, so the flight is
@@ -1338,7 +1221,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // ============================================================ FLOOR DRESS ==
   // Loose paperwork, CLUSTERED. Paper piles where it was dropped; a uniform dusting of white
   // quads over a whole plate reads as a broken decal system, not as blown paperwork.
-  place(acc, makeScatterPaper(200, W - 8, D - 8, { seed: 7, clusters: acc.paperSeeds }), 0, 0, 0, 0,
+  place(acc, makeScatterPaper(60, W - 8, D - 8, { seed: 7, clusters: acc.paperSeeds }), 0, 0, 0, 0,
     { collide: false });
 
   // Traffic-lane wear down the spine and the cross, plus the point stains collected above.

@@ -155,9 +155,11 @@ export const LEVELS: LevelData[] = [
     groundSize: 50,
     groundColor: '#6b5f4c',
 
+    // Spawn on open carpet looking straight down the level's longest rail (15 m, the diagonal
+    // across the atrium): the first thing a new player sees is a line, lined up for them.
     spawnPoint: {
-      position: [0, 0.5, 0],
-      rotation: 0
+      position: [-6.2, 0.5, -8.6],
+      rotation: 60
     },
 
     bounds: {
@@ -181,48 +183,9 @@ export const LEVELS: LevelData[] = [
     // the stair flight and the lift shaft now stand, and a floor rail through a staircase is
     // a run-ender. The old 'stairs' object at z = 20 is gone for the same reason — the level
     // has a real 14-tread flight now, and two staircases 4 m apart is one too many.
-    objects: [
-      // Floor rails down the south spine, one lane inboard of the ledge runs, so the player
-      // can transfer ledge -> rail -> ledge without touching the carpet.
-      { type: 'rail', position: [-4.0, 0, -13.5], rotation: [0, 90, 0], params: { length: 16 } },
-      { type: 'rail', position: [4.0, 0, -13.5], rotation: [0, 90, 0], params: { length: 16 } },
-
-      // Hallway rails: one down the north hallway, one down the west hallway. These are what
-      // make the perimeter loop a grind line as well as a speed corridor.
-      { type: 'rail', position: [0.0, 0, 20.0], rotation: [0, 0, 0], params: { length: 16 } },
-      { type: 'rail', position: [-20.0, 0, 9.0], rotation: [0, 90, 0], params: { length: 14 } },
-
-      // A rail in each arm of the cross hall, offset from the kicker lane.
-      { type: 'rail', position: [13.0, 0, -2.6], rotation: [0, 0, 0], params: { length: 11 } },
-      { type: 'rail', position: [-13.0, 0, 2.6], rotation: [0, 0, 0], params: { length: 11 } },
-
-      // Kickers facing ALONG the spine, each with a landing run and a rail to transfer onto.
-      { type: 'ramp', position: [2.4, 0, -8.5], rotation: [0, 180, 0] },
-      { type: 'ramp', position: [2.4, 0, -13.0], rotation: [0, 0, 0] },
-
-      // ...and a pair in the east hallway, facing along it.
-      { type: 'ramp', position: [20.0, 0, -8.0], rotation: [0, 90, 0] },
-      { type: 'ramp', position: [20.0, 0, -13.0], rotation: [0, 270, 0] },
-
-      // Water coolers: DELIBERATELY NOT HERE ANY MORE.
-      //
-      // They were spawned twice. GoalSystem's "Smash both water coolers" publishes smash targets
-      // at exactly these two positions, and Game.spawnDestructibles builds a knockable coolers
-      // there — so these entries only ever added a SECOND, immovable one inside it, because
-      // createLevelObject('water_cooler') makes a static physics box.
-      //
-      // They sit 0.6 m from the spine floor rails at |x| = 4.0, and the chair is a 0.4 m capsule:
-      // a run holding that rail overlaps the box every time. Measured in tools/play.mjs: 13.9 m/s
-      // to 0.0 m/s in one frame at (-4.5, -6.0), and the 13-trick line it was carrying cashed out.
-      // The knockable versions still stand here, still complete the goal, and now they do what a
-      // water cooler in a Tony Hawk level is supposed to do — go flying.
-
-      // Fun box in the south spine, between the two ledge runs and the end quarter pipe.
-      // It used to stop 0.5 m short of the quarter pipe, which was invisible while the quarter
-      // pipe faced the wall and a wall once it faced the room. Shortened and pulled north so
-      // there is 2.7 m of flat carpet to set up the transition after it.
-      { type: 'fun_box', position: [0, 0, -16.5], params: { width: 7, depth: 2.5, height: 0.8 } },
-    ],
+    // No level-data objects: the ground floor's skate features are CUBICLE_CHAOS_LAYOUT,
+    // built by OfficeLevel.buildSkateFloor (see src/world/CubicleChaosLayout.ts).
+    objects: [],
 
     collectibles: [
       { type: 'document', position: [-4.2, 1, -10], value: 100 },

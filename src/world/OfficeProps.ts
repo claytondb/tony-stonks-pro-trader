@@ -86,7 +86,7 @@ export interface PropCollider {
    * 'transition' — a quarter-pipe curve (see transitionShell): `size` is [width, height,
    * depth], flat at local -Z, vertical at +Z, `offset` is the prop-local origin.
    */
-  type: 'box' | 'transition';
+  type: 'box' | 'transition' | 'wedge';
   size: [number, number, number];
   offset: [number, number, number];
   /** Yaw in radians, applied about the collider centre. Absent ⇒ 0. */
@@ -2796,10 +2796,11 @@ export function makeKickerRamp(o?: KickerOptions): THREE.Group {
   );
 
   ctx.grinds.push({ start: [-w / 2, h + 0.02, d / 2 - 0.055], end: [w / 2, h + 0.02, d / 2 - 0.055] });
-  // The collider is a thin slab lying ON the slope, not the whole prism: the chair rides the
-  // surface, it does not need the volume underneath.
-  collide(ctx, [w, 0.18, Math.hypot(d, h)], [0, h / 2, 0], undefined);
-  ctx.colliders[0].rotationY = undefined;
+  // THE COLLIDER IS THE WEDGE ITSELF. It used to be an UNPITCHED slab 0.18 m thick hovering
+  // at half height (PropCollider can only yaw), so every kicker built from this prop was a
+  // 0.5 m step you hit, never a ramp you launched off. A closed trimesh wedge (wedgeShell) is
+  // the ramp you see.
+  ctx.colliders.push({ type: 'wedge', size: [w, h, d], offset: [0, 0, 0] });
   return finish(ctx, o, { size: [w, h, d], offset: [0, h / 2, 0] });
 }
 
@@ -2896,6 +2897,20 @@ export function makeQuarterPipe(o?: QuarterPipeOptions): THREE.Group {
   ctx.colliders.push({ type: 'transition', size: [w, h, d], offset: [0, 0, 0] });
 
   return finish(ctx, o, { size: [w, h, d + 0.12], offset: [0, h / 2, 0] });
+}
+
+/**
+ * Closed triangle shell for a kicker wedge: width `w` (X), rising from 0 at z = -d/2 to `h`
+ * at z = +d/2, vertical back. Same profile as `wedge()`.
+ */
+export function wedgeShell(w: number, h: number, d: number): { vertices: Float32Array; indices: Uint32Array } {
+  const prof: Array<[number, number]> = [[-d / 2, 0], [d / 2, h], [d / 2, 0]];
+  const v: number[] = [];
+  for (const x of [-w / 2, w / 2]) for (const [z, y] of prof) v.push(x, y, z);
+  const idx: number[] = [];
+  for (let i = 0; i < 3; i++) { const j = (i + 1) % 3; idx.push(i, j, 3 + j, i, 3 + j, 3 + i); }
+  idx.push(0, 2, 1, 3, 4, 5);
+  return { vertices: new Float32Array(v), indices: new Uint32Array(idx) };
 }
 
 /**

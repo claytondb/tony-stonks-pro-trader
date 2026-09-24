@@ -196,6 +196,10 @@ interface KindProfile {
   fallbackColor: number;
 }
 
+/** Same value as PhysicsWorld.COLLISION_GROUP_PROPS (this module stays self-contained): props
+    collide with the world and each other but never body-check the chair. */
+const COLLISION_GROUP_PROPS = (0x0004 << 16) | (0xffff & ~0x0002);
+
 const PROFILES: Record<DestructibleKind, KindProfile> = {
   // Tips on the lightest brush and rolls forever — the signature THPS street prop.
   trashCan: {
@@ -1181,7 +1185,8 @@ export class DestructibleManager {
       colliderDesc
         .setMass(inst.mass)
         .setFriction(profile.friction)
-        .setRestitution(profile.restitution);
+        .setRestitution(profile.restitution)
+        .setCollisionGroups(COLLISION_GROUP_PROPS);
 
       inst.colliders.push(this.world.createCollider(colliderDesc, body));
       inst.body = body;
