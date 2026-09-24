@@ -362,7 +362,7 @@ export class Game {
    * cost a 13 m/s cruise about a quarter of its speed over three and a half seconds,
    * which is the THPS-ish "you can still set up the next feature" budget.
    */
-  private readonly ROLL_DRAG = 0.42;
+  private readonly ROLL_DRAG = 0.78;
   /** Extra drag proportional to speed, 1/s. Sets where a free coast settles. */
   private readonly ROLL_DRAG_K = 0.035;
   /** How fast velocity is redirected to the way the chair points, 1/s. Carving keeps speed. */

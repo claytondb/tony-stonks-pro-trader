@@ -49,7 +49,7 @@ const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
 const waitForServer = async (url, ms = 30000) => { const t = Date.now(); while (Date.now() - t < ms) { try { if ((await fetch(url)).ok) return true; } catch {} await new Promise((r) => setTimeout(r, 200)); } throw new Error('no server'); };
 
-const KEYMAP = { W: 'KeyW', A: 'KeyA', S: 'KeyS', D: 'KeyD', Space: 'Space', L: 'KeyL' };
+const KEYMAP = { W: 'KeyW', A: 'KeyA', S: 'KeyS', D: 'KeyD', Space: 'Space', L: 'KeyE' };
 
 async function main() {
   if (!existsSync(`${ROOT}/dist/index.html`)) { console.error('dist/ missing'); process.exit(2); }

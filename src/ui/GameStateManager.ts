@@ -1624,18 +1624,24 @@ export class GameStateManager {
         <div style="text-align: right; color: #FFD700; font-size: 16px;">SPACE</div>
         <div style="color: #fff; font-size: 16px;">Jump (Ollie)</div>
         
-        <div style="text-align: right; color: #FFD700; font-size: 16px;">↑ near rail</div>
-        <div style="color: #fff; font-size: 16px;">Grind</div>
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">E near rail</div>
+        <div style="color: #fff; font-size: 16px;">Grind (hold near a rail or ledge)</div>
         
-        <div style="text-align: right; color: #FFD700; font-size: 16px;">← + W/A/S/D</div>
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">Q + W/A/S/D</div>
         <div style="color: #fff; font-size: 16px;">Flip Tricks (in air)</div>
         
-        <div style="text-align: right; color: #FFD700; font-size: 16px;">→ + W/A/S/D</div>
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">R + W/A/S/D</div>
         <div style="color: #fff; font-size: 16px;">Grab Tricks (in air)</div>
         
-        <div style="text-align: right; color: #FFD700; font-size: 16px;">Q / E</div>
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">Z / C</div>
         <div style="color: #fff; font-size: 16px;">Spin Left / Right (in air)</div>
         
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">F</div>
+        <div style="color: #fff; font-size: 16px;">Revert (on landing from a ramp)</div>
+
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">S then W</div>
+        <div style="color: #fff; font-size: 16px;">Manual (balance with W / S)</div>
+
         <div style="text-align: right; color: #FFD700; font-size: 16px;">Mouse Drag</div>
         <div style="color: #fff; font-size: 16px;">Rotate Camera</div>
         

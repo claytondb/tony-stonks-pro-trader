@@ -80,9 +80,9 @@ const waitForServer = async (url, timeoutMs = 30000) => {
 
 const KEYMAP = {
   W: 'KeyW', A: 'KeyA', S: 'KeyS', D: 'KeyD',
-  Space: 'Space', Shift: 'ShiftLeft', Ctrl: 'ControlLeft',
-  J: 'KeyJ', K: 'KeyK', L: 'KeyL', E: 'KeyE', Q: 'KeyQ',
-  Up: 'ArrowUp', Down: 'ArrowDown', Left: 'ArrowLeft', Right: 'ArrowRight',
+  Space: 'Space', Shift: 'KeyF', Ctrl: 'ControlLeft',
+  J: 'KeyQ', K: 'KeyR', L: 'KeyE', E: 'KeyC', Q: 'KeyZ',
+  Up: 'KeyW', Down: 'KeyS', Left: 'KeyA', Right: 'KeyD',
 };
 
 async function main() {

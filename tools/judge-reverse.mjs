@@ -334,7 +334,7 @@ async function runPass({ level }) {
       // Drive at the rail with the grind button held.
       g.physics.setVelocity(g.chairBody, { x: dir.x * 10, y: 0, z: dir.z * 10 });
       g.carriedSpeed = 10;
-      down('KeyW'); down('KeyL');
+      down('KeyW'); down('KeyE');
       let started = null, ended = null;
       for (let i = 0; i < 900; i++) {
         step(); s.tick(started === null ? 'approach' : (ended === null ? 'grinding' : 'exit'));
@@ -364,7 +364,7 @@ async function runPass({ level }) {
     settle(rail.start.x - dir.x * 4, rail.height + 0.9, rail.start.z - dir.z * 4, head, 200);
     g.physics.setVelocity(g.chairBody, { x: dir.x * 10, y: 0, z: dir.z * 10 });
     g.carriedSpeed = 10;
-    down('KeyW'); down('KeyL');
+    down('KeyW'); down('KeyE');
     let started = false, ended = false;
     const s = makeSampler();
     for (let i = 0; i < 900; i++) {
@@ -522,7 +522,7 @@ async function runPass({ level }) {
     reset();
     down('KeyW'); step(120); up('KeyW');
     down('Space'); step(2); up('Space');
-    down('KeyQ');
+    down('KeyZ');
     let maxSplit = 0, airFrames = 0, splitAtLanding = null, wasAir = false;
     let bodyYawStart = null, visYawStart = null, bodyYawEnd = null, visYawEnd = null;
     for (let i = 0; i < 200; i++) {
@@ -533,7 +533,7 @@ async function runPass({ level }) {
         airFrames++; maxSplit = Math.max(maxSplit, split);
       } else if (wasAir) { splitAtLanding = split; bodyYawEnd = bodyYaw(); visYawEnd = visYaw(); break; }
     }
-    up('KeyQ'); releaseAll(); step(1);
+    up('KeyZ'); releaseAll(); step(1);
     out.airSpinVisualSplit = {
       airFrames,
       maxBodyVsVisualYawDeg: round(maxSplit * 180 / Math.PI, 1),
@@ -569,7 +569,7 @@ async function runPass({ level }) {
       }
       turnLeft--;
       if (i % 90 === 0) down('Space'); else if (i % 90 === 3) up('Space');
-      if (i % 150 === 0) down('KeyL'); else if (i % 150 === 60) up('KeyL');
+      if (i % 150 === 0) down('KeyE'); else if (i % 150 === 60) up('KeyE');
       step(); s.tick('freerun');
     }
     releaseAll(); step(1);
@@ -604,7 +604,7 @@ async function runPass({ level }) {
       // The only difference from probe 12.
       if (turnKey) { if (grounded()) down(turnKey); else up(turnKey); }
       if (i % 90 === 0) down('Space'); else if (i % 90 === 3) up('Space');
-      if (i % 150 === 0) down('KeyL'); else if (i % 150 === 60) up('KeyL');
+      if (i % 150 === 0) down('KeyE'); else if (i % 150 === 60) up('KeyE');
       step(); s.tick('freerunNoAirTurn');
     }
     releaseAll(); step(1);

@@ -9,8 +9,8 @@
  *   top-left      STONKS hero counter + gain/loss ticker
  *   top-centre    COMBO readout — the most important element on screen
  *   top-right     WANTED stars, then the GOAL panel
- *   right-centre  MANUAL balance meter (VERTICAL — matches the ↑/↓ axis that corrects it)
- *   bottom-centre GRIND balance meter (HORIZONTAL — matches the ←/→ axis) above the minimap
+ *   right-centre  MANUAL balance meter (VERTICAL — matches the W/S axis that corrects it)
+ *   bottom-centre GRIND balance meter (HORIZONTAL — matches the A/D axis) above the minimap
  *   bottom-left   SPEED bar (+ controls hint while learning)
  *   bottom-right  BOOST bar
  *
@@ -717,8 +717,8 @@ export class HUD {
 
       /* ---- BALANCE METERS ------------------------------------------------- */
       /* Two separate widgets, and which one you get IS the instruction:
-         a horizontal bar for grinds (corrected with ← / →) and a vertical bar for
-         manuals (corrected with ↑ / ↓). The arrow you must press lights up. */
+         a horizontal bar for grinds (corrected with A / D) and a vertical bar for
+         manuals (corrected with W / S). The key you must press lights up. */
       .hud-bal {
         position: absolute;
         opacity: 0;
@@ -1087,14 +1087,14 @@ export class HUD {
     this.balanceH.innerHTML = `
       <div class="hud-bal-label">GRIND BALANCE</div>
       <div class="hud-bal-h-row">
-        <div class="hud-bal-key hud-bal-left">&#9664;</div>
+        <div class="hud-bal-key hud-bal-left">A</div>
         <div class="hud-bal-h-track">
           <div class="hud-bal-zone-bad"></div>
           <div class="hud-bal-zone-ok"></div>
           <div class="hud-bal-zone-bad"></div>
           <div class="hud-bal-pip"></div>
         </div>
-        <div class="hud-bal-key hud-bal-right">&#9654;</div>
+        <div class="hud-bal-key hud-bal-right">D</div>
       </div>
     `;
     this.balanceHLabel = this.balanceH.querySelector('.hud-bal-label') as HTMLElement;
@@ -1106,14 +1106,14 @@ export class HUD {
     this.balanceV = document.createElement('div');
     this.balanceV.className = 'hud-bal hud-bal-v hud-panel';
     this.balanceV.innerHTML = `
-      <div class="hud-bal-key hud-bal-up">&#9650;</div>
+      <div class="hud-bal-key hud-bal-up">W</div>
       <div class="hud-bal-v-track">
         <div class="hud-bal-zone-bad"></div>
         <div class="hud-bal-zone-ok"></div>
         <div class="hud-bal-zone-bad"></div>
         <div class="hud-bal-pip"></div>
       </div>
-      <div class="hud-bal-key hud-bal-down">&#9660;</div>
+      <div class="hud-bal-key hud-bal-down">S</div>
       <div class="hud-bal-label">MANUAL</div>
     `;
     this.balanceVLabel = this.balanceV.querySelector('.hud-bal-label') as HTMLElement;
@@ -1203,13 +1203,12 @@ export class HUD {
     this.controlsHint = document.createElement('div');
     this.controlsHint.className = 'hud-controls hud-panel';
     this.controlsHint.innerHTML = `
-      W - Push &nbsp; S - Brake &nbsp; A/D - Turn<br>
-      SPACE - Ollie (hold to charge)<br>
-      J - Flip &nbsp; K - Grab (hold) &nbsp; L - Grind<br>
-      Arrows - Trick direction &amp; balance<br>
-      ↓ then ↑ - Manual &nbsp; ↑ then ↓ - Nose manual<br>
-      SHIFT - Revert &nbsp; Q/E - Spin<br>
-      J+K - Special (meter full) &nbsp; ESC - Pause
+      W - Push &nbsp; S - Brake &nbsp; A/D - Turn &nbsp; (let go of W to coast to a stop)<br>
+      SPACE - Ollie (hold to charge) &nbsp; E - Grind (near a rail or ledge)<br>
+      Q - Flip &nbsp; R - Grab (hold) &nbsp; + W/A/S/D for different tricks<br>
+      Z/C - Spin &nbsp; F - Revert &nbsp; S then W - Manual<br>
+      Balance: A/D on a grind, W/S in a manual<br>
+      Q+R - Special (meter full) &nbsp; ESC - Pause
     `;
     const hasPlayed = localStorage.getItem(STORAGE_KEY_HAS_PLAYED) === 'true';
     if (hasPlayed) {

@@ -54,8 +54,8 @@ const ROOT = resolve(dirname(new URL(import.meta.url).pathname), '..');
 
 const KEYMAP = {
   W: 'KeyW', A: 'KeyA', S: 'KeyS', D: 'KeyD', Space: 'Space',
-  Shift: 'ShiftLeft', Ctrl: 'ControlLeft', J: 'KeyJ', K: 'KeyK', L: 'KeyL',
-  E: 'KeyE', Q: 'KeyQ', Up: 'ArrowUp', Down: 'ArrowDown', Left: 'ArrowLeft', Right: 'ArrowRight',
+  Shift: 'KeyF', Ctrl: 'ControlLeft', J: 'KeyQ', K: 'KeyR', L: 'KeyE',
+  E: 'KeyC', Q: 'KeyZ', Up: 'KeyW', Down: 'KeyS', Left: 'KeyA', Right: 'KeyD',
 };
 
 function parseScript(s) {

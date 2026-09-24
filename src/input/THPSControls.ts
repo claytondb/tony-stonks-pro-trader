@@ -388,8 +388,10 @@ interface ProfileDef {
 }
 
 /**
- * THPS keyboard defaults: WASD move, Space ollie (hold to charge), J flip, K grab,
- * L grind, Q/E spin, Shift revert, arrow keys = trick direction + manual taps.
+ * THPS keyboard defaults, everything within reach of WASD:
+ * W push, S brake, A/D steer, Space ollie (hold to charge), E grind, Q flip,
+ * R grab, F revert, Z/C spin. Trick directions reuse WASD (flip + A = kickflip);
+ * manual = tap S then W. Balance: W/S in a manual, A/D on a grind.
  */
 const THPS_KEYBOARD: Record<ControlAction, string[]> = {
   push: ['KeyW'],
@@ -397,16 +399,16 @@ const THPS_KEYBOARD: Record<ControlAction, string[]> = {
   turnLeft: ['KeyA'],
   turnRight: ['KeyD'],
   ollie: ['Space'],
-  flip: ['KeyJ'],
-  grab: ['KeyK'],
-  grind: ['KeyL'],
-  spinLeft: ['KeyQ'],
-  spinRight: ['KeyE'],
-  revert: ['ShiftLeft', 'ShiftRight'],
-  dirUp: ['ArrowUp'],
-  dirDown: ['ArrowDown'],
-  dirLeft: ['ArrowLeft'],
-  dirRight: ['ArrowRight'],
+  flip: ['KeyQ'],
+  grab: ['KeyR'],
+  grind: ['KeyE'],
+  spinLeft: ['KeyZ'],
+  spinRight: ['KeyC'],
+  revert: ['KeyF'],
+  dirUp: ['KeyW'],
+  dirDown: ['KeyS'],
+  dirLeft: ['KeyA'],
+  dirRight: ['KeyD'],
   pause: ['Escape'],
 };
 

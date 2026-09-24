@@ -54,9 +54,9 @@ try {
 
     // a plausible 70 s line: push, carve both ways, ollie, grind attempts, spins
     const script = [
-      ['KeyW', 300], ['KeyW KeyD', 40], ['KeyW', 120], ['Space', 8], ['KeyW KeyJ', 20],
-      ['KeyW', 100], ['KeyW KeyA', 45], ['KeyW', 90], ['KeyW KeyL', 60], ['KeyW', 120],
-      ['KeyW KeyD', 50], ['KeyW', 150], ['Space', 10], ['KeyW KeyK', 25], ['KeyW', 130],
+      ['KeyW', 300], ['KeyW KeyD', 40], ['KeyW', 120], ['Space', 8], ['KeyW KeyQ', 20],
+      ['KeyW', 100], ['KeyW KeyA', 45], ['KeyW', 90], ['KeyW KeyE', 60], ['KeyW', 120],
+      ['KeyW KeyD', 50], ['KeyW', 150], ['Space', 10], ['KeyW KeyR', 25], ['KeyW', 130],
       ['KeyW KeyA', 60], ['KeyW', 200], ['KeyW KeyE', 30], ['KeyW', 180],
       ['KeyW KeyD', 40], ['KeyW', 250], ['KeyW KeyA', 40], ['KeyW', 300],
       ['KeyW', 300], ['KeyW KeyD', 60], ['KeyW', 400],
