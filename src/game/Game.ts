@@ -823,7 +823,7 @@ export class Game {
     if (!this.playerState.isAirborne) return;
     if (this.bailRecovery > 0) return;
 
-    const key = Game.dirKey(intent.dir);
+    const key = Game.dirKey(intent.trickDir);
 
     // SPECIAL: two buttons at once, gated behind a full meter, and it SPENDS the meter.
     if (intent.special) {
@@ -4038,16 +4038,57 @@ export class Game {
    * tryStartGrind() unconditionally every frame, so rails grabbed you whether you wanted
    * them or not and no grind trick was ever named.
    */
+  /** GrindSystem's lock-on window reaches this far BELOW the rail's ride height (0.85 * 0.6). */
+  private readonly GRIND_LOCK_BELOW = 0.51;
+  private grindCoachCache: number | null = null;
+  /** Grinds still to land before the "E to grind" coaching retires itself. */
+  private grindCoachLeft(): number {
+    if (this.grindCoachCache === null) {
+      let n = 0;
+      try { n = parseInt(localStorage.getItem('tsp_grinds_landed') ?? '0', 10) || 0; } catch { /* private mode */ }
+      this.grindCoachCache = Math.max(0, 6 - n);
+    }
+    return this.grindCoachCache;
+  }
+  private noteGrindLanded(): void {
+    const left = this.grindCoachLeft();
+    if (left <= 0) return;
+    this.grindCoachCache = left - 1;
+    try { localStorage.setItem('tsp_grinds_landed', String(6 - this.grindCoachCache)); } catch { /* ignore */ }
+    if (this.grindCoachCache === 0) this.hud?.setGrindPrompt('none');
+  }
+
   private updateGrind(dt: number, intent: ControlIntent, speed: number): void {
     if (!this.grindSystem.isGrinding()) {
-      if (!intent.grind || this.bailRecovery > 0) return;
-
       const pos = this.physics.getPosition(this.chairBody);
       const vel = this.physics.getVelocity(this.chairBody);
+
+      // GRIND COACHING + ASSISTED HOP. Owner: "I don't know how to grind a rail." Two
+      // things were in the way: nothing ever told you a rail was grindable, and a rail
+      // above knee height can't be locked onto from the floor, so pressing the grind key
+      // next to one silently did nothing. Now a rail in reach puts the key on screen
+      // (until you've landed a handful of grinds), and pressing E beside a rail you
+      // can't reach from the floor pops you up onto it — keep holding E and you lock on.
+      const probe = this.bailRecovery > 0 ? null : this.grindSystem.probeRail(pos, vel);
+      const tooHigh = !!probe && probe.heightDiff <= -this.GRIND_LOCK_BELOW;
+      if (this.grindCoachLeft() > 0) {
+        this.hud?.setGrindPrompt(!probe ? 'none'
+          : probe.capturable || !this.playerState.isGrounded ? 'grind'
+          : tooHigh ? 'ollie' : 'grind');
+      }
+      if (intent.grindEdge && probe && tooHigh && this.playerState.isGrounded
+          && probe.horizontalDist < 1.7 && !intent.olliePopped) {
+        intent.olliePopped = true;
+      }
+
+      if (!intent.grind || this.bailRecovery > 0) return;
+
       const rail = this.grindSystem.tryStartGrind(pos, vel, true);
       if (!rail) return;
 
       this.playerState.isGrinding = true;
+      this.hud?.setGrindPrompt('none');
+      this.noteGrindLanded();
 
       // Name the grind from the approach angle. detectGrindType() has been implemented and
       // uncalled since it was written; this is the call site.
@@ -4057,8 +4098,8 @@ export class Game {
       let def = this.trickDetector.detectGrindType(approach) ?? TrickRegistry.get('50_50') ?? null;
       // Holding a vertical direction as you lock on picks the two grinds the angle table
       // cannot reach, so all eight grind entries are live.
-      if (intent.dir.y > 0) def = TrickRegistry.get('crooked') ?? def;
-      else if (intent.dir.y < 0) def = TrickRegistry.get('bluntslide') ?? def;
+      if (intent.trickDir.y > 0) def = TrickRegistry.get('crooked') ?? def;
+      else if (intent.trickDir.y < 0) def = TrickRegistry.get('bluntslide') ?? def;
 
       this.grindTrick = def;
       const base = def?.basePoints ?? 300;

@@ -101,6 +101,13 @@ export interface ControlIntent {
    * y = +1 is UP (nose), y = -1 is DOWN (tail). x = +1 is RIGHT.
    */
   dir: { x: number; y: number };
+  /**
+   * The direction for PICKING a trick. Same as `dir`, except that W/S only count when
+   * they were pressed within the last 0.4 s: W is also the push, and a push you have
+   * been holding since before the jump must not turn every kickflip into an impossible,
+   * every ollie into a nollie and every grind into a crooked.
+   */
+  trickDir: { x: number; y: number };
 
   /** Edge: exactly one update when the tap sequence completes. */
   manualEdge: 'none' | 'manual' | 'noseManual';
@@ -653,6 +660,12 @@ export class THPSControls {
     let dirY = (sig('dirUp').down ? 1 : 0) - (sig('dirDown').down ? 1 : 0);
     if (dirX === 0 && Math.abs(lx) >= cfg.dirThreshold) dirX = Math.sign(lx);
     if (dirY === 0 && Math.abs(ly) >= cfg.dirThreshold) dirY = -Math.sign(ly);
+    const FRESH_S = 0.4;
+    const upFresh = sig('dirUp').down && sig('dirUp').heldTime <= FRESH_S;
+    const downFresh = sig('dirDown').down && sig('dirDown').heldTime <= FRESH_S;
+    let trickY = (upFresh ? 1 : 0) - (downFresh ? 1 : 0);
+    if (trickY === 0 && !sig('dirUp').down && !sig('dirDown').down
+        && Math.abs(ly) >= cfg.dirThreshold) trickY = -Math.sign(ly);
 
     // --- 5. ollie charge / pop ---------------------------------------------
     const ollie = sig('ollie');
@@ -661,12 +674,12 @@ export class THPSControls {
 
     if (ollie.pressed) {
       this.ollieChargeMs = 0;
-      this.nollieArmed = dirY > 0;
+      this.nollieArmed = trickY > 0;
       this.nollieLatched = false;
     }
 
     if (ollie.down) {
-      if (dirY > 0) this.nollieArmed = true;
+      if (trickY > 0 && ollie.heldTime <= FRESH_S) this.nollieArmed = true;
       // The press frame is charge 0 by definition; time only accrues on later frames,
       // so the same number of held frames always yields the same charge.
       if (!ollie.pressed) this.ollieChargeMs += dt * 1000;
@@ -742,6 +755,7 @@ export class THPSControls {
       grindHeld: grindSig.down,
       spin: (sig('spinRight').down ? 1 : 0) - (sig('spinLeft').down ? 1 : 0),
       dir: { x: dirX, y: dirY },
+      trickDir: { x: dirX, y: trickY },
       manualEdge,
       revertEdge: sig('revert').pressed,
       nollie: this.nollieLatched,
@@ -1234,6 +1248,7 @@ function makeEmptyIntent(): ControlIntent {
     grindHeld: false,
     spin: 0,
     dir: { x: 0, y: 0 },
+    trickDir: { x: 0, y: 0 },
     manualEdge: 'none',
     revertEdge: false,
     nollie: false,

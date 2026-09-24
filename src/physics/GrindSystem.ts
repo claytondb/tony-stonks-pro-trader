@@ -329,6 +329,39 @@ export class GrindSystem {
   }
   
   /**
+   * Read-only look for the rail a player is most plausibly lining up for — the same tests
+   * as tryStartGrind, without the height window, so the HUD can say "E to grind" before the
+   * lock-on is possible and the game can offer an assisted pop onto a rail that is too
+   * high to reach from the floor. Rails behind the player are ignored.
+   */
+  probeRail(playerPos: THREE.Vector3, playerVel: THREE.Vector3, radius = 2.2): {
+    rail: Rail; horizontalDist: number; heightDiff: number; capturable: boolean;
+  } | null {
+    if (this.grindState.isGrinding) return null;
+    const speed = Math.hypot(playerVel.x, playerVel.z);
+    if (speed < this.MIN_SPEED_TO_GRIND) return null;
+    const velDir = new THREE.Vector3(playerVel.x, 0, playerVel.z).normalize();
+    let best: { rail: Rail; horizontalDist: number; heightDiff: number; capturable: boolean } | null = null;
+    for (const rail of this.rails) {
+      const r = this.getClosestPointOnRail(playerPos, rail);
+      const travelSign = velDir.dot(rail.direction) >= 0 ? 1 : -1;
+      const remaining = (travelSign > 0 ? 1 - r.progress : r.progress) * rail.length;
+      if (remaining < 1.2) continue;
+      const dx = r.point.x - playerPos.x, dz = r.point.z - playerPos.z;
+      const hd = Math.hypot(dx, dz);
+      if (hd > radius) continue;
+      // Behind you and moving away: not a line you are taking.
+      if (hd > 0.6 && (dx * velDir.x + dz * velDir.z) / hd < -0.3) continue;
+      const heightDiff = playerPos.y - (rail.height + this.RIDE_HEIGHT);
+      if (heightDiff < -1.6 || heightDiff > 2.5) continue;
+      const capturable = this.grindCooldown <= 0 && hd < this.SNAP_DISTANCE
+        && heightDiff < this.SNAP_HEIGHT_TOLERANCE && heightDiff > -this.SNAP_HEIGHT_TOLERANCE * 0.6;
+      if (!best || hd < best.horizontalDist) best = { rail, horizontalDist: hd, heightDiff, capturable };
+    }
+    return best;
+  }
+
+  /**
    * Get closest point on a rail to a position
    */
   private getClosestPointOnRail(pos: THREE.Vector3, rail: Rail): { point: THREE.Vector3; progress: number } {

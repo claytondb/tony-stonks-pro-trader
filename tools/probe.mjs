@@ -137,12 +137,17 @@ async function main() {
   let code = 0;
   try {
     await waitForServer(url);
-    const page = await (await browser.newContext({ viewport: { width: 320, height: 180 } })).newPage();
+    const page = await (await browser.newContext({ viewport: arg('shot') ? { width: 1280, height: 720 } : { width: 320, height: 180 } })).newPage();
     page.on('pageerror', (e) => report.errors.push(String(e).slice(0, 200)));
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => !!window.game, null, { timeout: 90000 });
     await page.waitForTimeout(400);
     report.probes = await page.evaluate(runPass, { level: LEVEL, snippet: readFileSync(arg('snippet'),'utf8') });
+    if (arg('shot')) {
+      await page.evaluate(() => { const g = window.game; g.render?.(1); });
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: arg('shot') });
+    }
     await page.context().close().catch(() => {});
   } catch (e) {
     report.errors.push(`HARNESS: ${String(e).slice(0, 400)}`);

@@ -1941,6 +1941,7 @@ export class HUD {
    * Reset HUD for new level
    */
   reset(): void {
+    this.setGrindPrompt('none');
     this.currentScore = 0;
     this.displayedScore = 0;
     this.specialAmount = 0;
@@ -2029,6 +2030,35 @@ export class HUD {
    * Hide controls hint and mark player as having played
    * Called on first input to remember the player knows the controls
    */
+  private grindPrompt?: HTMLElement;
+  private grindPromptMode: 'none' | 'ollie' | 'grind' = 'none';
+  /**
+   * Contextual "how do I grind" coaching, shown near a rail until the player has landed a
+   * few grinds. 'ollie' = rail in reach but too high to lock onto from where you are;
+   * 'grind' = press/hold E now and you lock on.
+   */
+  setGrindPrompt(mode: 'none' | 'ollie' | 'grind'): void {
+    if (mode === this.grindPromptMode) return;
+    this.grindPromptMode = mode;
+    if (!this.grindPrompt) {
+      const el = document.createElement('div');
+      el.className = 'hud-grind-prompt';
+      el.style.cssText = 'position:absolute;left:50%;bottom:calc(var(--u,10px)*11.5);transform:translateX(-50%);'
+        + 'font-family:Kanit,sans-serif;font-weight:700;letter-spacing:0.04em;color:#fff;'
+        + 'font-size:calc(var(--u,10px)*1.25);padding:calc(var(--u,10px)*0.35) calc(var(--u,10px)*0.9);'
+        + 'background:rgba(10,14,20,0.62);border:2px solid #FFD23F;border-radius:999px;'
+        + 'pointer-events:none;opacity:0;transition:opacity 0.15s ease-out;white-space:nowrap;'
+        + 'text-shadow:0 1px 2px rgba(0,0,0,0.6)';
+      (this.controlsHint?.parentElement ?? document.body).appendChild(el);
+      this.grindPrompt = el;
+    }
+    const key = (k: string) => `<span style="display:inline-block;min-width:1.4em;padding:0 0.35em;margin:0 0.15em;`
+      + `border-radius:0.25em;background:#FFD23F;color:#111;text-align:center">${k}</span>`;
+    if (mode === 'ollie') this.grindPrompt.innerHTML = `Press ${key('E')} to hop on the rail`;
+    else if (mode === 'grind') this.grindPrompt.innerHTML = `Hold ${key('E')} to GRIND`;
+    this.grindPrompt.style.opacity = mode === 'none' ? '0' : '1';
+  }
+
   hideControlsHint(): void {
     if (this.controlsHidden) return;
 
