@@ -2707,7 +2707,7 @@ export class Game {
     }));
 
     // Floor collider + out-of-bounds walls.
-    this.physics.createGround(interior.size.width / 2);
+    this.physics.createGround(interior.groundHalf);
 
     console.log(
       `[OfficeLevel] ${interior.triangles} tris, ${interior.colliders.length} colliders, ` +

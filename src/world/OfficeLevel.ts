@@ -163,6 +163,7 @@ import {
   transitionShell,
   wedgeShell,
 } from './OfficeProps';
+import { buildWellnessWing } from './WellnessWing';
 import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
 
 
@@ -254,6 +255,8 @@ export interface OfficeInterior {
   /** Already parented under `root`. Kept out of the merge so they stay movable. */
   lights: THREE.PointLight[];
   size: { width: number; depth: number; height: number };
+  /** Half-extent the physics ground slab must cover (the Wellness Wing reaches past the plate). */
+  groundHalf: number;
   triangles: number;
 }
 
@@ -596,11 +599,16 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   const dadoMat = MaterialLibrary.get('drywall', { repeat: WALL_REPEAT, color: 0x33405c });
   const railMat = MaterialLibrary.get('deskLaminate', { color: 0xc9a877 });
   const skirtMat = MaterialLibrary.get('cubicleTrim');
+  // The east wall is two runs either side of the corridor to the Wellness Wing (see
+  // WellnessWing.ts), with a lintel over the opening.
+  const wing = buildWellnessWing();
+  const { z0: DZ0, z1: DZ1, height: DOOR_HT } = wing.door;
   const wallSpecs: { w: number; x: number; z: number; rotY: number }[] = [
     { w: W, x: 0, z: -halfD, rotY: 0 },
     { w: W, x: 0, z: halfD, rotY: Math.PI },
     { w: D, x: -halfW, z: 0, rotY: Math.PI / 2 },
-    { w: D, x: halfW, z: 0, rotY: -Math.PI / 2 },
+    { w: DZ0 + halfD, x: halfW, z: (-halfD + DZ0) / 2, rotY: -Math.PI / 2 },
+    { w: halfD - DZ1, x: halfW, z: (DZ1 + halfD) / 2, rotY: -Math.PI / 2 },
   ];
   for (const spec of wallSpecs) {
     const nx = Math.sin(spec.rotY);
@@ -635,6 +643,20 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     });
   }
 
+  // Lintel over the corridor opening: plaster above the door, collided.
+  {
+    const lw = DZ1 - DZ0, lh = H - DOOR_HT;
+    const lintel = new THREE.Mesh(plane(lw, lh, WALL_UV), wallMat);
+    place(acc, lintel, halfW, DOOR_HT + lh / 2, (DZ0 + DZ1) / 2, -Math.PI / 2, { collide: false });
+    acc.colliders.push({
+      position: new THREE.Vector3(halfW + 0.3, DOOR_HT + lh / 2 + 0.5, (DZ0 + DZ1) / 2),
+      halfExtents: new THREE.Vector3(0.3, lh / 2 + 0.5, lw / 2), rotationY: 0,
+    });
+    root.add(wing.root);
+    acc.colliders.push(...wing.colliders);
+    acc.rails.push(...wing.rails);
+  }
+
   // ---------------------------------------------------- BUILDING SHELL ------
   // An inverted box enclosing the plate with room above it, so the moment the camera climbs
   // above the ceiling plane it reveals the inside of a building rather than the clear colour.
@@ -642,7 +664,8 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // normal pointing INWARD, so the sun never lights the underside of the roof.
   const SHELL_H = H + 6;
   const shell = new THREE.Mesh(
-    withUV1(new THREE.BoxGeometry(W + 4, SHELL_H, D + 4)),
+    // Wide enough to take in the Wellness Wing off the east wall.
+    withUV1(new THREE.BoxGeometry(W / 2 + wing.maxX + 4, SHELL_H, D + 4)),
     MaterialLibrary.get('drywall', {
       repeat: [6, 3],
       color: 0xb3ad9f,
@@ -651,7 +674,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     }),
   );
   shell.material.side = THREE.BackSide;
-  shell.position.set(0, SHELL_H / 2 - 0.6, 0);
+  shell.position.set((wing.maxX - W / 2) / 2, SHELL_H / 2 - 0.6, 0);
   shell.name = 'officeBuildingShell';
   shell.castShadow = false;
   shell.receiveShadow = false;
@@ -1352,6 +1375,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     movers,
     lights,
     size: { width: W, depth: D, height: H },
+    groundHalf: Math.max(W / 2, wing.maxX + 1),
     triangles: Math.round(triangles),
   };
 }
