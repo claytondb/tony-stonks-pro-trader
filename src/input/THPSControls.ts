@@ -103,7 +103,7 @@ export interface ControlIntent {
   dir: { x: number; y: number };
   /**
    * The direction for PICKING a trick. Same as `dir`, except that W/S only count when
-   * they were pressed within the last 0.4 s: W is also the push, and a push you have
+   * they were pressed within the last 0.22 s: W is also the push, and a push you have
    * been holding since before the jump must not turn every kickflip into an impossible,
    * every ollie into a nollie and every grind into a crooked.
    */
@@ -660,7 +660,7 @@ export class THPSControls {
     let dirY = (sig('dirUp').down ? 1 : 0) - (sig('dirDown').down ? 1 : 0);
     if (dirX === 0 && Math.abs(lx) >= cfg.dirThreshold) dirX = Math.sign(lx);
     if (dirY === 0 && Math.abs(ly) >= cfg.dirThreshold) dirY = -Math.sign(ly);
-    const FRESH_S = 0.4;
+    const FRESH_S = 0.22;   // push W right before a pop is normal: only a W pressed WITH the trick counts
     const upFresh = sig('dirUp').down && sig('dirUp').heldTime <= FRESH_S;
     const downFresh = sig('dirDown').down && sig('dirDown').heldTime <= FRESH_S;
     let trickY = (upFresh ? 1 : 0) - (downFresh ? 1 : 0);
@@ -674,12 +674,16 @@ export class THPSControls {
 
     if (ollie.pressed) {
       this.ollieChargeMs = 0;
-      this.nollieArmed = trickY > 0;
+      // NOLLIE IS A CHORD: W and Space pressed together (within ~60 ms). W is also the push,
+      // and "pushed, then popped" is how every ordinary ollie starts; counting that made most
+      // kickflips come out as Caster Kicks.
+      const upSig = sig('dirUp');
+      this.nollieArmed = upSig.down && this.timeMs - upSig.pressTime <= 60;
       this.nollieLatched = false;
     }
 
     if (ollie.down) {
-      if (trickY > 0 && ollie.heldTime <= FRESH_S) this.nollieArmed = true;
+      if (sig('dirUp').pressed && ollie.heldTime <= 0.06) this.nollieArmed = true;
       // The press frame is charge 0 by definition; time only accrues on later frames,
       // so the same number of held frames always yields the same charge.
       if (!ollie.pressed) this.ollieChargeMs += dt * 1000;
