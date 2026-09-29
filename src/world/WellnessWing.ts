@@ -142,10 +142,10 @@ export function buildWellnessWing(): WellnessWing {
   const poolTileMat = new THREE.MeshStandardMaterial({ map: tileTexture('#3f93c0', '#9fb8c2', 32), roughness: 0.35 });
   poolTileMat.map!.repeat.set(1, 1);
   const floorTileMat = new THREE.MeshStandardMaterial({ map: tileTexture('#2a6f99', '#9fb8c2', 32, true), roughness: 0.4 });
-  const deckTileMat = new THREE.MeshStandardMaterial({ map: tileTexture('#9a9487', '#7b7569', 64), roughness: 0.7 });
+  const deckTileMat = new THREE.MeshStandardMaterial({ map: tileTexture('#9a9487', '#7b7569', 64), roughness: 0.8, color: 0x9c9990 });
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x6fa9b0, roughness: 0.9 });
   const corridorWallMat = new THREE.MeshStandardMaterial({ color: 0xd6cfc2, roughness: 0.9 });
-  const ceilMat = new THREE.MeshStandardMaterial({ color: 0xc9cfd1, roughness: 0.95 });
+  const ceilMat = new THREE.MeshStandardMaterial({ color: 0xc9cfd1, roughness: 0.95, emissive: 0x2a3033 });
   const copingMat = new THREE.MeshStandardMaterial({ color: 0xcfc8b8, roughness: 0.6 });
   const steelMat = new THREE.MeshStandardMaterial({ color: 0xc9ced4, metalness: 0.8, roughness: 0.3 });
   const carpetMat = new THREE.MeshStandardMaterial({ color: 0x8f7a5a, roughness: 1.0 });
@@ -306,7 +306,7 @@ export function buildWellnessWing(): WellnessWing {
   // Ceiling + lights.
   const ceil = new THREE.Mesh(new THREE.PlaneGeometry(roomW, roomD), ceilMat);
   ceil.rotation.x = Math.PI / 2; ceil.position.set(rcx, ROOM_CEIL, rcz); root.add(ceil);
-  for (const [lx, lz] of [[POOL_CX, POOL_CZ - 7], [POOL_CX, POOL_CZ + 3], [POOL_CX, POOL_CZ + 12]]) {
+  for (const [lx, lz] of [[POOL_CX, POOL_CZ - 6], [POOL_CX, POOL_CZ + 8]]) {
     const l = new THREE.PointLight(0xdff6ff, 0.7, 16, 2);
     l.position.set(lx, ROOM_CEIL - 0.6, lz); root.add(l);
     const panel = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.06, 1.2), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xeaf8ff, emissiveIntensity: 0.9 }));
