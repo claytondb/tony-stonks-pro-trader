@@ -564,6 +564,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // Floor: commercial loop-pile carpet. The repeat stays at one map tile per 2.6 m on purpose —
   // MaterialLibrary's officeCarpet spec applies repeatScale 2.9 on top of it.
   const carpetMat = MaterialLibrary.get('officeCarpet', { repeat: [W / 2.6, D / 2.6], color: 0xb99a6c });
+  const deckFloorMat = MaterialLibrary.get('concreteFloor', { repeat: [1, 1], color: 0xc9c4ba });
   const floor = new THREE.Mesh(plane(W, D), carpetMat);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -959,7 +960,9 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     const cx = (x0 + x1) / 2;
     const cz = (z0 + z1) / 2;
 
-    const surf = new THREE.Mesh(plane(w, d, [w / 2.6, d / 2.6]), carpetMat);
+    // Polished concrete, not the atrium's carpet: from the balcony the two floors were the same
+    // colour and the 4.2 m drop read as more floor. (Hardwood was tried: too orange against it.)
+    const surf = new THREE.Mesh(plane(w, d, [w / 4, d / 4]), deckFloorMat);
     surf.receiveShadow = true;
     surf.castShadow = false;
     place(acc, surf, cx, DECK_Y + 0.002, cz, 0, { collide: false });
