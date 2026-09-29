@@ -4045,6 +4045,7 @@ export class Game {
     this.cameraController.setTrickZoom(this.playerState.isAirborne, this.playerState.airTime);
     this.cameraController.setManualing(this.playerState.isManualing);
     this.cameraController.setVertAir(this.vertAir && this.playerState.isAirborne, this.vertCoping, this.vertNormal);
+    this.cameraController.setWallride(this.wallriding, this.wallN);
 
     // ---- 11. HUD COMBO + BALANCE ------------------------------------------------------
     const comboState = this.score.state;

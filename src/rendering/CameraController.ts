@@ -247,12 +247,21 @@ export class CameraController {
   // ---- vert air ---------------------------------------------------------------
   private vertActive = false;
   private vertBlend = 0;
+  private wallActive = false;
+  private wallBlend = 0;
+  private wallN = new THREE.Vector3();
   private vertCoping = new THREE.Vector3();
   private vertNormal = new THREE.Vector3(0, 0, 1);
   private _vertPos = new THREE.Vector3();
   private _vertLook = new THREE.Vector3();
 
   /** Game tells the rig when the rider is in a vert air, where the lip is and which way the room is. */
+  /** Wallride framing: swing the lens out from the wall so the rider is not shot from inside it. */
+  setWallride(active: boolean, normal?: THREE.Vector3): void {
+    this.wallActive = active;
+    if (active && normal) this.wallN.copy(normal);
+  }
+
   setVertAir(active: boolean, coping?: THREE.Vector3, normal?: THREE.Vector3): void {
     this.vertActive = active;
     if (active && coping && normal) { this.vertCoping.copy(coping); this.vertNormal.copy(normal); }
@@ -684,6 +693,14 @@ export class CameraController {
       // landing (the rider now faces the room) is behind them rather than a 180 swing.
       const toward = Math.atan2(n.x, n.z);
       this.camYaw += angleDelta(toward, this.camYaw) * damp(3, dt) * this.vertBlend;
+    }
+
+    // ---- 7c. wallride: the chase boom sits almost in the wall; step it out into the room.
+    this.wallBlend += ((this.wallActive ? 1 : 0) - this.wallBlend) * damp(this.wallActive ? 7.0 : 3.0, dt);
+    if (this.wallBlend > 0.002) {
+      const b = this.wallBlend * this.wallBlend * (3 - 2 * this.wallBlend);
+      this._desiredPos.addScaledVector(this.wallN, 1.8 * b);
+      this._desiredPos.y += 0.5 * b;
     }
 
     // ---- 8. chase ------------------------------------------------------------
