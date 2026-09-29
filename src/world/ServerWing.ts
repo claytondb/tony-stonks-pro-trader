@@ -36,7 +36,7 @@ export interface ServerWing {
   root: THREE.Group;
   colliders: ServerWingCollider[];
   rails: { start: THREE.Vector3; end: THREE.Vector3 }[];
-  door: { z0: number; z1: number; height: number };
+  door: { z0: number; z1: number; height: number; roomX: number };
   minX: number;
 }
 
@@ -287,5 +287,5 @@ export function buildServerWing(): ServerWing {
   const merged = mergePropsByMaterial(meshes);
   merged.name = 'serverWingMerged';
   root.add(merged);
-  return { root, colliders, rails, door: { z0: DOOR_Z0, z1: DOOR_Z1, height: DOOR_H }, minX: RX0 };
+  return { root, colliders, rails, door: { z0: DOOR_Z0, z1: DOOR_Z1, height: DOOR_H, roomX: RX1 }, minX: RX0 };
 }

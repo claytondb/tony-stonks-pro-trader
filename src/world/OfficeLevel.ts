@@ -675,6 +675,25 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     acc.rails.push(...server.rails);
   }
 
+  // DOOR BEVELS. A square door jamb is a convex corner at chair height on the busiest line in
+  // the level (everyone rides the corridors), and a swerve that clips one stops dead. A square
+  // prism turned 45 degrees and centred on the jamb puts a 45-degree face across the corner
+  // (its other faces are buried in the wall), so a clipped jamb deflects you into the doorway.
+  {
+    const A = 0.75;                                              // bevel reach along each wall
+    const side = A / Math.SQRT2;                                 // prism side = A * sqrt(2); half = A / sqrt(2)
+    const jambs: [number, number, number][] = [
+      [halfW, DZ0, DOOR_HT], [halfW, DZ1, DOOR_HT], [-halfW, SZ0, SDOOR_HT], [-halfW, SZ1, SDOOR_HT],
+      [server.door.roomX, SZ0, SDOOR_HT], [server.door.roomX, SZ1, SDOOR_HT],
+    ];
+    for (const [x, z, h] of jambs) {
+      const m = new THREE.Mesh(box(side * 2, h, side * 2), wallMat);
+      m.castShadow = m.receiveShadow = true;
+      place(acc, m, x, h / 2, z, Math.PI / 4, { collide: false });
+      acc.colliders.push({ position: new THREE.Vector3(x, h / 2, z), halfExtents: new THREE.Vector3(side, h / 2, side), rotationY: Math.PI / 4 });
+    }
+  }
+
   // ---------------------------------------------------- BUILDING SHELL ------
   // An inverted box enclosing the plate with room above it, so the moment the camera climbs
   // above the ceiling plane it reveals the inside of a building rather than the clear colour.
