@@ -4361,8 +4361,16 @@ export class Game {
     const pull = (WALL_DIST - back.toi) * Math.min(1, 12 * dt);
     np.x += nn.x * pull; np.z += nn.z * pull;
     // Something ahead on the wall (a return, a rack end): come off it.
-    const aheadHit = this.physics.castRayNormal({ x: np.x, y: np.y - 0.1, z: np.z }, { x: this.wallT.x, y: 0, z: this.wallT.z }, 0.75, this.chairBody, true);
-    const ahead = aheadHit ? aheadHit.toi : null;
+    // (Three heights: the chair is 1.4 m tall and the body is moved by hand, so nothing else
+    // would stop it sliding into a sign or a rack top.)
+    let ahead: number | null = null;
+    for (const dy of [-0.5, -0.1, 0.5]) {
+      const h = this.physics.castRayNormal({ x: np.x, y: np.y + dy, z: np.z }, { x: this.wallT.x, y: 0, z: this.wallT.z }, 0.75, this.chairBody, true);
+      if (h && (ahead === null || h.toi < ahead)) ahead = h.toi;
+    }
+    // A ceiling (the corridors are 3.6 m): stop climbing.
+    const lid = this.physics.castRayNormal({ x: np.x, y: np.y, z: np.z }, { x: 0, y: 1, z: 0 }, 1.0, this.chairBody, true);
+    if (lid && this.wallVy > 0) { this.wallVy = 0; np.y = pos.y; }
     const floor = this.physics.raycastGround(np.clone(), 3, this.chairBody);
     if (ahead !== null || (floor && np.y - floor.point.y < 0.85)) {
       end(this.wallT.x * s * (ahead !== null ? 0.3 : 1) + this.wallN.x, Math.min(this.wallVy, 0), this.wallT.z * s * (ahead !== null ? 0.3 : 1) + this.wallN.z);
