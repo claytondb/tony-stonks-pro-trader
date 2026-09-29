@@ -22,7 +22,7 @@
  *      z=-20 ======== cooling duct QP (faces north) ========
  */
 import * as THREE from 'three';
-import { makeServerRack, makeQuarterPipe, transitionShell, mergePropsByMaterial } from './OfficeProps';
+import { makeServerRack, mergePropsByMaterial } from './OfficeProps';
 
 export interface ServerWingCollider {
   position: THREE.Vector3;
@@ -47,6 +47,7 @@ const WALL_T = 0.3;
 const ROWS_X = [-38.5, -43.5];                  // rack row centres
 const ROW_HALF_W = 0.55;                        // rack depth / 2
 const QP_D = 2.3, QP_H = 1.6, QP_GAP = 0.6;
+const DUCT_RC = 2.6, DUCT_LEG = 2.0, DUCT_TAPER = 3.0;   // duct corner radius, side-wall leg, taper length
 const ROW_Z = [[-15.2, -8.3], [1.3, 9.2]] as const;   // row runs (south block, north block)
 
 /** Named gaps for GoalSystem. */
@@ -54,6 +55,20 @@ export const SERVER_GAPS = [
   { id: 'duct_air_n', name: 'Cooling Duct Air', bonus: 800, from: [-41.0, 0, 9.0] as [number, number, number], to: [-41.0, 0, 9.0] as [number, number, number], radius: 6.0 },
   { id: 'duct_air_s', name: 'Cold Aisle Air', bonus: 800, from: [-41.0, 0, -15.0] as [number, number, number], to: [-41.0, 0, -15.0] as [number, number, number], radius: 6.0 },
 ];
+
+function ductTexture(): THREE.CanvasTexture {
+  // Galvanised sheet: riveted seams every 1.2 m, a faint spangle.
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const g = cv.getContext('2d')!;
+  g.fillStyle = '#9aa2ab'; g.fillRect(0, 0, 128, 128);
+  let seed = 11; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 90; i++) { g.fillStyle = rnd() < 0.5 ? '#a6aeb7' : '#8f97a0'; g.fillRect(rnd() * 128, rnd() * 128, 6 + rnd() * 10, 4 + rnd() * 8); }
+  g.fillStyle = '#6c737b'; g.fillRect(0, 0, 3, 128);
+  for (let y = 6; y < 128; y += 16) { g.fillStyle = '#c5ccd3'; g.fillRect(6, y, 3, 3); }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 
 function floorTexture(): THREE.CanvasTexture {
   // Raised access floor: 600 mm panels, a perforated one every so often.
@@ -91,6 +106,7 @@ export function buildServerWing(): ServerWing {
   const steelMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, metalness: 0.75, roughness: 0.35 });
   const padMat = new THREE.MeshStandardMaterial({ color: 0x4a525b, roughness: 0.6 });
   const carpetMat = new THREE.MeshStandardMaterial({ color: 0x8f7a5a, roughness: 1.0 });
+  const ductMat = new THREE.MeshStandardMaterial({ map: ductTexture(), color: 0xb4bcc6, metalness: 0.55, roughness: 0.4 });
   const floorMat = new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 0.6, color: 0x8a9099 });
 
   const plane = (w: number, h: number, mat: THREE.Material, x: number, y: number, z: number, rx: number, ry: number) => {
@@ -141,7 +157,7 @@ export function buildServerWing(): ServerWing {
   }
 
   // ---- cable trays: a grind down the middle of each OUTER aisle, full length between the ducts
-  const trayZ0 = RZ0 + QP_GAP + QP_D + 1.2, trayZ1 = RZ1 - QP_GAP - QP_D - 1.2;
+  const trayZ0 = RZ0 + QP_GAP + DUCT_RC + DUCT_LEG + 0.8, trayZ1 = RZ1 - QP_GAP - DUCT_RC - DUCT_LEG - 0.8;
   const aisleCentres = [(RX1 + ROWS_X[0] + ROW_HALF_W) / 2, (RX0 + ROWS_X[1] - ROW_HALF_W) / 2];
   for (const ax of aisleCentres) {
     // Broken at the cross aisle so you can ride across it, i.e. two trays per aisle.
@@ -168,22 +184,70 @@ export function buildServerWing(): ServerWing {
     for (const s of [-1, 1]) rails.push({ start: new THREE.Vector3(midX + s * w / 2, h + 0.02, z0 + 0.2), end: new THREE.Vector3(midX + s * w / 2, h + 0.02, z1 - 0.2) });
   }
 
-  // ---- the cooling ducts: a quarter pipe across each end wall
-  for (const [zWall, yaw] of [[RZ1, 0], [RZ0, Math.PI]] as [number, number][]) {
-    const w = rw - 0.4;
-    const zc = zWall - Math.cos(yaw) * (QP_GAP + QP_D / 2);
-    const qp = makeQuarterPipe({ width: w, depth: QP_D, height: QP_H, seed: 7100 + Math.round(zWall) });
-    qp.position.set(rcx, 0, zc); qp.rotation.y = yaw; qp.updateMatrixWorld(true);
-    add(qp);
+  // ---- the cooling ducts: a quarter pipe across each end wall that WRAPS the corners
+  // A straight full-width QP ended in the side walls: carve along it and you rode straight into
+  // a wall at 12 m/s. So the coping follows a U — across the end wall, round a 2.6 m corner,
+  // then 2 m down each side wall with the transition shrinking to nothing — and a carve along
+  // the duct comes off it as a run back down the outer aisle.
+  for (const s of [1, -1]) buildDuct(s);
+  function buildDuct(s: number) {
+    const zWall = s > 0 ? RZ1 : RZ0;
+    // Local plan coords (x, b): b = distance in from the end wall. World z = zWall - s*b.
+    const g = QP_GAP, rc = DUCT_RC, L = DUCT_LEG, T = DUCT_TAPER;
+    const xa = RX0 + g, xb = RX1 - g;
+    const path: { x: number; b: number; nx: number; nb: number }[] = [];
+    const push = (x: number, b: number, nx: number, nb: number) => path.push({ x, b, nx, nb });
+    for (let i = 0; i <= 6; i++) push(xa, g + rc + L * (1 - i / 6), 1, 0);                    // west leg, heading to the wall
+    for (let i = 1; i <= 10; i++) { const th = Math.PI + (i / 10) * Math.PI / 2; push(xa + rc + rc * Math.cos(th), g + rc + rc * Math.sin(th), -Math.cos(th), -Math.sin(th)); }
+    const xs0 = xa + rc, xs1 = xb - rc;
+    for (let i = 1; i < 8; i++) push(xs0 + (xs1 - xs0) * (i / 8), g, 0, 1);                    // across the end wall
+    for (let i = 0; i <= 10; i++) { const th = 1.5 * Math.PI + (i / 10) * Math.PI / 2; push(xb - rc + rc * Math.cos(th), g + rc + rc * Math.sin(th), -Math.cos(th), -Math.sin(th)); }
+    for (let i = 1; i <= 6; i++) push(xb, g + rc + L * (i / 6), -1, 0);                        // east leg, away from the wall
+    // Arc length along the coping, and the taper: full size except the last T metres of each leg.
+    const acc = [0];
+    for (let i = 1; i < path.length; i++) acc.push(acc[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].b - path[i - 1].b));
+    const tot = acc[acc.length - 1];
+    const size = (i: number) => { const u = Math.min(1, Math.min(acc[i], tot - acc[i]) / T); return Math.max(0.03, u * u * (3 - 2 * u)); };
+    const wz = (b: number) => zWall - s * b;
+    const SEG = 12;
+    const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+    const row = SEG + 2;                                   // profile points + the wall-side deck point
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i], f = size(i), H = QP_H * f, D = QP_D * f;
+      for (let k = 0; k <= SEG; k++) {
+        const t = (k / SEG) * Math.PI / 2;                 // 0 = floor edge, π/2 = coping
+        const d = D * (1 - Math.sin(t));
+        pos.push(p.x + p.nx * d, H * (1 - Math.cos(t)), wz(p.b + p.nb * d));
+        uv.push(acc[i] / 1.2, (t * Math.max(H, 0.2)) / 1.2);
+      }
+      // Deck: from the coping straight back to whichever wall is nearer along -n.
+      const tx = p.nx > 1e-3 ? (p.x - RX0) / p.nx : p.nx < -1e-3 ? (RX1 - p.x) / -p.nx : 1e9;
+      const tb = p.nb > 1e-3 ? p.b / p.nb : 1e9;
+      const tw = Math.min(tx, tb);
+      pos.push(p.x - p.nx * tw, H, wz(p.b - p.nb * tw));
+      uv.push(acc[i] / 1.2, (Math.PI / 2 * Math.max(H, 0.2) + tw) / 1.2);
+    }
+    for (let i = 0; i < path.length - 1; i++) for (let k = 0; k < row - 1; k++) {
+      const a = i * row + k, b2 = a + 1, c = a + row, e = c + 1;
+      if (s > 0) idx.push(a, b2, c, b2, e, c); else idx.push(a, c, b2, b2, c, e);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, ductMat); mesh.castShadow = mesh.receiveShadow = true; add(mesh);
     colliders.push({
-      position: new THREE.Vector3(rcx, 0, zc), halfExtents: new THREE.Vector3(w / 2, QP_H / 2, QP_D / 2), rotationY: yaw,
-      trimesh: transitionShell(w, QP_H, QP_D),
+      position: new THREE.Vector3(0, 0, 0), halfExtents: new THREE.Vector3(rw / 2, QP_H / 2, QP_D / 2), rotationY: 0,
+      trimesh: { vertices: new Float32Array(pos), indices: new Uint32Array(idx) },
     });
-    // Duct grille above the coping, and the coping itself as a grind.
-    const grille = new THREE.Mesh(new THREE.BoxGeometry(w, 1.2, 0.1), steelMat);
-    grille.position.set(rcx, QP_H + 1.1, zWall - Math.cos(yaw) * 0.12); add(grille);
-    const cz = zc + Math.cos(yaw) * (QP_D / 2 - 0.045);
-    rails.push({ start: new THREE.Vector3(RX0 + 0.5, QP_H + 0.06, cz), end: new THREE.Vector3(RX1 - 0.5, QP_H + 0.06, cz) });
+    // Coping pipe the whole way round; the straight run is the grind.
+    const cop = path.map((p, i) => new THREE.Vector3(p.x, QP_H * size(i) + 0.02, wz(p.b)));
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(cop), 96, 0.045, 6, false), steelMat);
+    tube.castShadow = true; add(tube);
+    rails.push({ start: new THREE.Vector3(xs0, QP_H + 0.06, wz(g + 0.045)), end: new THREE.Vector3(xs1, QP_H + 0.06, wz(g + 0.045)) });
+    // Duct grille above the coping.
+    const grille = new THREE.Mesh(new THREE.BoxGeometry(xs1 - xs0 + 2 * rc, 1.2, 0.1), steelMat);
+    grille.position.set(rcx, QP_H + 1.1, wz(0.12)); add(grille);
   }
 
   // ---- the NOC wall: the dead end of the cross aisle gets something to look at

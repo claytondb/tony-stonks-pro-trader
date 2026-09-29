@@ -1039,6 +1039,27 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     // walls belong to the quarter pipes) and only where no feature's approach comes near.
     const nearFeature = (x: number, z: number, r: number) => items.some((it) => Math.hypot(it.x - x, it.z - z) < r + Math.max(it.hw, it.hd));
     const WALL = halfW - 0.5;
+    // LOUNGE CORNERS — the office, in the places nobody skates. levelsim's traffic heatmap
+    // (96 simulated players x 60 s over this layout) puts the quietest floor in the corners
+    // behind the chamfers and in front of the lift; that is where the furniture goes, so
+    // the atrium reads as an office without putting a sofa in anyone's line. The couches are
+    // grindable (seat at STEP_HEIGHT, back 0.46 m proud), like everything else here.
+    const lounges: [number, number, number][] = [[17.2, 17.2, -Math.PI * 0.75], [-17.2, -17.2, Math.PI * 0.25], [-17.2, 17.2, Math.PI * 0.75]];
+    for (const [lx, lz, face] of lounges) {
+      if (nearFeature(lx, lz, 2.5)) continue;
+      const fx = Math.sin(face), fz = Math.cos(face);
+      place(acc, makeCouch({ length: 2.4, seed: 5000 + Math.round(lx), tint: 0x6f82a8 }), lx - fx * 1.2, 0, lz - fz * 1.2, face,
+        { collide: true, grind: true });
+      place(acc, makeArmchair({ seed: 5010 + Math.round(lz), tint: 0x93b1ab }), lx + fz * 1.8, 0, lz - fx * 1.8, face - 0.6, { collide: false });
+      place(acc, makePottedPlant({ seed: 5020 + Math.round(lx + lz) }), lx - fz * 2.0, 0, lz + fx * 2.0, 0, { collide: false });
+      acc.wear.push({ x: lx, z: lz, width: 4.2, depth: 3.4, rotation: face, strength: 0.25 });
+    }
+    // A coffee point in front of the lift: an island counter, grindable both sides.
+    if (!nearFeature(6.5, 8.2, 2.0)) {
+      place(acc, makeKitchenCounter({ length: 3.6, kitchen: false, seed: 5031 }), 6.8, 0, 8.2, 0, { collide: true, grind: true });
+      place(acc, makeWaterCooler({ seed: 5033 }), 9.4, 0, 8.4, Math.PI, { collide: false });
+    }
+
     // Vending bank against the west wall, one collider for the rank (see rankCollider).
     if (!nearFeature(-WALL, 16.2, 3)) {
       for (let k = 0; k < 3; k++) {

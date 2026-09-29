@@ -22,7 +22,8 @@ for (let a = 0; a < AGENTS; a++) {
   // Spawn on open floor, random heading.
   let x = 0, z = 0;
   for (let k = 0; k < 60; k++) {
-    x = (rnd() * 2 - 1) * 20; z = (rnd() * 2 - 1) * 20;
+    const R = window.__REGION ?? [-20, 20, -20, 20];   // [x0, x1, z0, z1]
+    x = R[0] + rnd() * (R[1] - R[0]); z = R[2] + rnd() * (R[3] - R[2]);
     const hit = g.physics.raycastGround(new V(x, 3.6, z), 4);
     if (hit && hit.point.y < 0.1 && [0, 1.57, 3.14, -1.57].every((h) => g.physics.castRay({ x, y: 0.9, z }, { x: Math.sin(h), y: 0, z: Math.cos(h) }, 1.5) === null)) break;
   }
