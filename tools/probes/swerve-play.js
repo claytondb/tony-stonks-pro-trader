@@ -24,10 +24,11 @@ for (let a = 0; a < AGENTS; a++) {
   for (let k = 0; k < 60; k++) {
     const R = window.__REGION ?? [-20, 20, -20, 20];   // [x0, x1, z0, z1]
     x = R[0] + rnd() * (R[1] - R[0]); z = R[2] + rnd() * (R[3] - R[2]);
-    const hit = g.physics.raycastGround(new V(x, 3.6, z), 4);
-    if (hit && hit.point.y < 0.1 && [0, 1.57, 3.14, -1.57].every((h) => g.physics.castRay({ x, y: 0.9, z }, { x: Math.sin(h), y: 0, z: Math.cos(h) }, 1.5) === null)) break;
+    const FY = window.__FLOOR_Y ?? 0;   // spawn on this floor (4.2 = the mezzanine)
+    const hit = g.physics.raycastGround(new V(x, FY + 3.2, z), 4);
+    if (hit && Math.abs(hit.point.y - FY) < 0.1 && [0, 1.57, 3.14, -1.57].every((h) => g.physics.castRay({ x, y: FY + 0.9, z }, { x: Math.sin(h), y: 0, z: Math.cos(h) }, 1.5) === null)) break;
   }
-  clearPlayerState(); place(x, 0.75, z, rnd() * 6.28 - 3.14); step(10);
+  clearPlayerState(); place(x, (window.__FLOOR_Y ?? 0) + 0.75, z, rnd() * 6.28 - 3.14); step(10);
   down('KeyW');
   let turnKey = null, segLeft = 0, target = 0, wasAir = false, airT = 0, takeoffTrans = false;
   let prevSurf = 0, wasBail = false, wasGrind = false, wasManual = false, lastTrick = -99, prevSpeed = 0, slowT = 0, inHit = false;
