@@ -40,7 +40,7 @@ import { ChaseMechanic, ChaseState } from '../story/ChaseMechanic';
 import { ChaseHUD } from '../ui/ChaseHUD';
 import { DialogueBox } from '../ui/DialogueBox';
 import { CUBICLE_CHAOS_LAYOUT } from '../world/CubicleChaosLayout';
-import { inSkateLane } from '../world/SkateLayoutUtil';
+import { inSkateLane, officeMinimapFootprints } from '../world/SkateLayoutUtil';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -2212,7 +2212,9 @@ export class Game {
 
     // Reset HUD
     this.hud?.reset();
-    this.hud?.setMinimapLayout(minimapFootprints(this.levelObjects));
+    this.hud?.setMinimapLayout(this.currentLevelId === 'ch1_office'
+      ? officeMinimapFootprints()
+      : minimapFootprints(this.levelObjects));
     this.hud?.setScore(this.score.balance);
     this.hud?.setGoals(this.goals ? this.goals.progress : []);
     this.goalHudTimer = 0;

@@ -1857,6 +1857,11 @@ export class HUD {
     this.mapWrap.style.opacity = '';
     this.appliedCalm = -1;      // re-apply the fade once there is a map to fade
     if (!prints || prints.length === 0) return;
+    // The map is drawn rotated 180 degrees (screen-up = world +z, screen-right = world -x),
+    // which is what the heading arrow below was always drawn for: with the chair's +z forward,
+    // facing into the level is UP on the map. The footprints used to be drawn unrotated, so
+    // the arrow and the map disagreed about which way was which.
+    prints = prints.map((p) => ({ ...p, x: -p.x, z: -p.z }));
 
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const p of prints) {
@@ -1901,8 +1906,8 @@ export class HUD {
 
   /** Per-frame player position in world space plus heading (radians, THREE yaw). */
   setMinimapPlayer(x: number, z: number, yaw: number): void {
-    this.mapPlayer.x = x;
-    this.mapPlayer.z = z;
+    this.mapPlayer.x = -x;
+    this.mapPlayer.z = -z;
     this.mapPlayer.yaw = yaw;
     this.mapDirty = true;
   }

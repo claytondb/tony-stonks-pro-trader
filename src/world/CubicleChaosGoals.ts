@@ -36,8 +36,14 @@ function pickupSpot(it: SkateItem): V3 {
 const loop = [...L].sort((a, b) => Math.atan2(a.x, a.z) - Math.atan2(b.x, b.z));
 
 /** S-T-O-N-K-S: six features spread evenly round that loop. */
-export const OFFICE_LETTERS: V3[] = Array.from({ length: 6 }, (_, i) =>
-  rv(pickupSpot(loop[Math.floor((i * loop.length) / 6) % loop.length])));
+// Four round the atrium, and one in each wing: the letters are what sends a new player down
+// the corridors to find the pool and the server room at all. The pool's is over the deep-end
+// coping (vert air to reach it); the server room's is over the middle of the east cable tray.
+export const OFFICE_LETTERS: V3[] = [
+  ...Array.from({ length: 4 }, (_, i) => rv(pickupSpot(loop[Math.floor((i * loop.length) / 4) % loop.length]))),
+  [41.0, 3.4, -14.8],
+  [-35.5, 0.7, -11.5],
+];
 
 /** Every kicker's air is a named gap; so is every quarter pipe's. */
 export const OFFICE_GAPS = [
