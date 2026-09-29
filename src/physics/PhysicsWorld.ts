@@ -650,6 +650,17 @@ export class PhysicsWorld {
     return hit ? hit.toi : null;
   }
 
+  /** castRay, plus the surface normal at the hit (for wall rides). */
+  castRayNormal(origin: { x: number; y: number; z: number }, dir: { x: number; y: number; z: number },
+    maxDist: number, exclude?: RAPIER.RigidBody, onlyFixed = false): { toi: number; normal: THREE.Vector3 } | null {
+    if (!this.initialized) return null;
+    const ray = new RAPIER.Ray(origin, dir);
+    const hit = this.world.castRayAndGetNormal(ray, maxDist, true,
+      onlyFixed ? RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC : undefined, undefined, undefined, exclude);
+    if (!hit) return null;
+    return { toi: hit.toi, normal: new THREE.Vector3(hit.normal.x, hit.normal.y, hit.normal.z) };
+  }
+
   raycastGround(
     origin: THREE.Vector3,
     maxGap: number = 2.0,

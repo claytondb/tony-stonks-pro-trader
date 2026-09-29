@@ -362,6 +362,18 @@ export class Game {
    */
   private vertAir = false;
   private vertTurnDir = 0;
+  // WALLRIDE state (see updateWallride).
+  private wallriding = false;
+  private wallN = new THREE.Vector3();          // wall normal, horizontal, pointing away from the wall
+  private wallT = new THREE.Vector3();          // ride direction along the wall
+  private wallSpeed = 0;
+  private wallVy = 0;
+  private wallTime = 0;
+  private wallCooldown = 0;
+  private wallRoll = 0;                          // visual lean off the wall (rad, on chairTilt.z)
+  private wallRollTarget = 0;
+  private wallPromptShown = false;
+  private wallCoachCache: number | null = null;
   private readonly VERT_TURN_RATE = 6.0;   // rad/s: the auto 180 takes ~0.5 s of a ~1 s vert air
   private vertCoping = new THREE.Vector3();
   private vertNormal = new THREE.Vector3();
@@ -918,6 +930,7 @@ export class Game {
     this.activeTrick = null;
     this.trickAnimator?.releaseTrick();
     this.bailRecovery = 0.9;
+    if (this.wallriding) { this.wallriding = false; this.wallRollTarget = 0; proceduralSounds.stopGrindLoop(); }
 
     // A bail costs you the special, THPS-style.
     if (this.specialMeter > 0) {
@@ -1233,6 +1246,7 @@ export class Game {
       this.activeTrick = null;
       this.heldGrabId = null;
       this.endGrind();
+      this.wallriding = false; this.wallRollTarget = 0;
       
       // Restart chase if active
       if (this.currentStoryLevel?.hasChaseMechanic) {
@@ -3876,6 +3890,7 @@ export class Game {
     // ---- 4. GRIND ---------------------------------------------------------------------
     this.grindSystem.updateCooldown(dt);
     this.updateGrind(dt, intent, speedNow);
+    this.updateWallride(dt, intent);
 
     // ---- 5. MANUAL / REVERT / BALANCE -------------------------------------------------
     this.updateBalance(dt, intent, speedNow);
@@ -3896,14 +3911,15 @@ export class Game {
     }
 
     // ---- 6. MOVEMENT ------------------------------------------------------------------
-    if (!this.grindSystem.isGrinding()) {
+    if (!this.grindSystem.isGrinding() && !this.wallriding) {
       this.applyMovement(intent, dt);
       this.grindParticles.update(dt, false);
     }
     this.landingParticles.update(dt);
 
     // ---- 7. PHYSICS -------------------------------------------------------------------
-    if (!this.grindSystem.isGrinding()) {
+    // A wallride, like a grind, moves the body itself (updateWallride) and skips the solver.
+    if (!this.grindSystem.isGrinding() && !this.wallriding) {
       this.physics.step(dt);
     }
 
@@ -3950,8 +3966,9 @@ export class Game {
       target = Math.max(-CAP, Math.min(CAP, target));
       this.ridePitch += (target - this.ridePitch) * (1 - Math.exp(-11 * dt));
 
+      this.wallRoll += (this.wallRollTarget - this.wallRoll) * (1 - Math.exp(-14 * dt));
       this.chairTilt.rotation.x = pitchRad + this.ridePitch;
-      this.chairTilt.rotation.z = rollRad;
+      this.chairTilt.rotation.z = rollRad + this.wallRoll;
     }
 
     // ---- 9. SCORE TICK ----------------------------------------------------------------
@@ -4116,6 +4133,22 @@ export class Game {
     if (this.grindCoachCache === 0) this.hud?.setGrindPrompt('none');
   }
 
+  /** Wallrides still to land before the "E to wallride" coaching retires (same scheme as grinds). */
+  private wallCoachLeft(): number {
+    if (this.wallCoachCache === null) {
+      let n = 0;
+      try { n = parseInt(localStorage.getItem('tsp_wallrides_landed') ?? '0', 10) || 0; } catch { /* private mode */ }
+      this.wallCoachCache = Math.max(0, 3 - n);
+    }
+    return this.wallCoachCache;
+  }
+  private noteWallrideLanded(): void {
+    const left = this.wallCoachLeft();
+    if (left <= 0) return;
+    this.wallCoachCache = left - 1;
+    try { localStorage.setItem('tsp_wallrides_landed', String(3 - this.wallCoachCache)); } catch { /* ignore */ }
+  }
+
   private updateGrind(dt: number, intent: ControlIntent, speed: number): void {
     if (!this.grindSystem.isGrinding()) {
       const pos = this.physics.getPosition(this.chairBody);
@@ -4207,6 +4240,141 @@ export class Game {
 
     // The grind system can drop the grind on its own (ran off the end of the rail).
     if (!this.grindSystem.isGrinding()) this.endGrind();
+  }
+
+  /**
+   * WALLRIDE — THPS2's signature move, which the game did not have. In the air beside a wall,
+   * press or hold E (the grind button, as in THPS) and the chair sticks to the wall: it rolls
+   * along it on a shallow arc (reduced gravity, gentle speed loss) for up to 1.3 s, sparks and
+   * all. Space pops off it (a Wallie), away from the wall. It ends by itself when the wall
+   * does, when something is in the way, when you sink to the floor, or on the timer.
+   *
+   * An office is mostly walls: partitions, rack rows, the corridor walls, the building shell.
+   * Like a grind, the ride moves the body directly and the solver is skipped while it lasts.
+   */
+  private updateWallride(dt: number, intent: ControlIntent): void {
+    if (this.wallCooldown > 0) this.wallCooldown = Math.max(0, this.wallCooldown - dt);
+    const WALL_DIST = 0.47;        // chair capsule radius 0.4 + a skin
+    if (!this.wallriding) {
+      this.wallRollTarget = 0;
+      const coaching = this.wallCoachLeft() > 0;
+      const hidePrompt = () => { if (this.wallPromptShown) { this.wallPromptShown = false; this.hud?.setGrindPrompt('none'); } };
+      if ((!intent.grind && !coaching) || this.wallCooldown > 0 || this.bailRecovery > 0) { hidePrompt(); return; }
+      if (!this.playerState.isAirborne || this.grindSystem.isGrinding() || this.vertAir) { hidePrompt(); return; }
+      const pos = this.physics.getPosition(this.chairBody);
+      const vel = this.physics.getVelocity(this.chairBody);
+      const hs = Math.hypot(vel.x, vel.z);
+      if (hs < 5) return;
+      // Some air under you: a hop off the floor that grazes a wall is not a wallride.
+      const floor = this.physics.raycastGround(new THREE.Vector3(pos.x, pos.y, pos.z), 3, this.chairBody);
+      if (floor && pos.y - floor.point.y < 1.05) return;
+      // Look for a wall to either side of the line, forward-biased.
+      const head = Math.atan2(vel.x, vel.z);
+      let best: { toi: number; normal: THREE.Vector3 } | null = null;
+      for (const off of [0.8, -0.8, 1.2, -1.2, 1.57, -1.57]) {
+        const d = { x: Math.sin(head + off), y: 0, z: Math.cos(head + off) };
+        const hit = this.physics.castRayNormal({ x: pos.x, y: pos.y - 0.1, z: pos.z }, d, 1.35, this.chairBody, true);
+        if (!hit || Math.abs(hit.normal.y) > 0.3) continue;
+        if (hit.normal.x * d.x + hit.normal.z * d.z > -0.3) continue;       // must face us
+        // A real wall, not a ledge: it has to be there above the chair too.
+        const up = this.physics.castRayNormal({ x: pos.x, y: pos.y + 0.6, z: pos.z }, d, hit.toi + 0.4, this.chairBody, true);
+        if (!up) continue;
+        if (!best || hit.toi < best.toi) best = hit;
+      }
+      if (!best) { hidePrompt(); return; }
+      const n = new THREE.Vector3(best.normal.x, 0, best.normal.z).normalize();
+      const vn = vel.x * n.x + vel.z * n.z;
+      const along = new THREE.Vector3(vel.x - n.x * vn, 0, vel.z - n.z * vn);
+      if (along.length() < 4) { hidePrompt(); return; }
+      if (!intent.grind) {
+        // First few times: tell them this wall can be ridden.
+        if (coaching) { this.wallPromptShown = true; this.hud?.setGrindPrompt('wall'); }
+        return;
+      }
+      hidePrompt();
+      this.noteWallrideLanded();
+      // START
+      this.wallriding = true;
+      this.wallN.copy(n);
+      this.wallT.copy(along.normalize());
+      this.wallSpeed = Math.min(this.MAX_SPEED, Math.hypot(vel.x, vel.z) * 0.95);
+      this.wallVy = Math.max(vel.y, 2.2);
+      this.wallTime = 0;
+      const yaw0 = yawOf(this.chair.quaternion);
+      const yaw1 = Math.atan2(this.wallT.x, this.wallT.z);
+      this.airAlignDegrees += Math.abs(wrapPi(yaw1 - yaw0)) * (180 / Math.PI);
+      this.physics.setRotationY(this.chairBody, yaw1);
+      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+      this.turnRate = 0; this.turnCommand = 0;
+      // Lean the chair's top away from the wall so the wheels are on it.
+      const right = new THREE.Vector3(-Math.cos(yaw1), 0, Math.sin(yaw1));
+      this.wallRollTarget = (right.dot(n) < 0 ? -1 : 1) * 0.5;
+      this.score.addTrick({ id: 'wallride', name: 'Wallride', basePoints: 250, kind: 'grind' });
+      this.goals?.notifyTrickAt('wallride', this.zoneIdAtPlayer());
+      proceduralSounds.playGrindStart();
+      proceduralSounds.startGrindLoop();
+      return;
+    }
+
+    // RIDING
+    this.wallTime += dt;
+    const pos = this.physics.getPosition(this.chairBody);
+    const end = (vx: number, vy: number, vz: number) => {
+      this.wallriding = false;
+      this.wallCooldown = 0.45;
+      this.wallRollTarget = 0;
+      this.physics.setVelocity(this.chairBody, new THREE.Vector3(vx, vy, vz));
+      this.grindParticles.update(dt, false);
+      proceduralSounds.stopGrindLoop();
+    };
+    if (this.bailRecovery > 0) { end(0, 0, 0); return; }
+    if (intent.olliePopped) {
+      // WALLIE: off the wall, up and away.
+      const s = this.wallSpeed, n = this.wallN, t = this.wallT;
+      end(t.x * s + n.x * 3.5, 8.5 * this.jumpMultiplier, t.z * s + n.z * 3.5);
+      this.olliePopHandledAt = this.simTime;
+      this.ollieLiftLeft = this.OLLIE_LIFT_SECONDS;
+      this.score.addTrick({ id: 'wallie', name: 'Wallie', basePoints: 250, kind: 'flip' });
+      proceduralSounds.playOllie(1);
+      return;
+    }
+    this.wallSpeed *= Math.exp(-0.3 * dt);
+    this.wallVy -= 11 * dt;
+    const s = this.wallSpeed;
+    const np = new THREE.Vector3(pos.x + this.wallT.x * s * dt, pos.y + this.wallVy * dt, pos.z + this.wallT.z * s * dt);
+    // Stay on the wall (and follow it round a gentle curve); no wall = ride over.
+    const back = this.physics.castRayNormal({ x: np.x, y: np.y - 0.1, z: np.z }, { x: -this.wallN.x, y: 0, z: -this.wallN.z }, 1.8, this.chairBody, true);
+    if (!back || Math.abs(back.normal.y) > 0.3 || this.wallTime > 1.3 || s < 3) {
+      end(this.wallT.x * s + this.wallN.x * 0.8, Math.min(this.wallVy, 1), this.wallT.z * s + this.wallN.z * 0.8);
+      return;
+    }
+    const nn = new THREE.Vector3(back.normal.x, 0, back.normal.z).normalize();
+    if (nn.dot(this.wallN) < 0.8) {               // a corner, not a curve
+      end(this.wallT.x * s * 0.6 + this.wallN.x * 1.5, Math.min(this.wallVy, 0.5), this.wallT.z * s * 0.6 + this.wallN.z * 1.5);
+      return;
+    }
+    this.wallN.copy(nn);
+    const td = this.wallT.dot(nn);
+    this.wallT.set(this.wallT.x - nn.x * td, 0, this.wallT.z - nn.z * td).normalize();
+    // Ease onto the wall (you arrive up to 1.35 m off it), then hold the gap.
+    const pull = (WALL_DIST - back.toi) * Math.min(1, 12 * dt);
+    np.x += nn.x * pull; np.z += nn.z * pull;
+    // Something ahead on the wall (a return, a rack end): come off it.
+    const aheadHit = this.physics.castRayNormal({ x: np.x, y: np.y - 0.1, z: np.z }, { x: this.wallT.x, y: 0, z: this.wallT.z }, 0.75, this.chairBody, true);
+    const ahead = aheadHit ? aheadHit.toi : null;
+    const floor = this.physics.raycastGround(np.clone(), 3, this.chairBody);
+    if (ahead !== null || (floor && np.y - floor.point.y < 0.85)) {
+      end(this.wallT.x * s * (ahead !== null ? 0.3 : 1) + this.wallN.x, Math.min(this.wallVy, 0), this.wallT.z * s * (ahead !== null ? 0.3 : 1) + this.wallN.z);
+      return;
+    }
+    this.physics.setPosition(this.chairBody, np);
+    this.physics.setVelocity(this.chairBody, new THREE.Vector3(this.wallT.x * s, this.wallVy, this.wallT.z * s));
+    const yaw = Math.atan2(this.wallT.x, this.wallT.z);
+    this.airAlignDegrees += Math.abs(wrapPi(yaw - yawOf(this.chair.quaternion))) * (180 / Math.PI);
+    this.physics.setRotationY(this.chairBody, yaw);
+    this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+    const spark = np.clone().addScaledVector(nn, -WALL_DIST).setY(np.y - 0.4);
+    this.grindParticles.update(dt, true, spark, this.wallT, s);
   }
 
   /** Close a grind without bailing. The combo stays open. */

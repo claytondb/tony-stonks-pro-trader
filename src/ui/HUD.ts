@@ -1204,7 +1204,7 @@ export class HUD {
     this.controlsHint.className = 'hud-controls hud-panel';
     this.controlsHint.innerHTML = `
       W - Push &nbsp; S - Brake &nbsp; A/D - Turn &nbsp; (let go of W to coast to a stop)<br>
-      SPACE - Ollie (hold to charge) &nbsp; E - Grind (near a rail or ledge)<br>
+      SPACE - Ollie (hold to charge) &nbsp; E - Grind a rail, or Wallride (in the air beside a wall)<br>
       Q - Flip &nbsp; R - Grab (hold) &nbsp; + W/A/S/D for different tricks<br>
       Z/C - Spin &nbsp; F - Revert &nbsp; S then W - Manual<br>
       Balance: A/D on a grind, W/S in a manual<br>
@@ -2036,13 +2036,13 @@ export class HUD {
    * Called on first input to remember the player knows the controls
    */
   private grindPrompt?: HTMLElement;
-  private grindPromptMode: 'none' | 'ollie' | 'grind' = 'none';
+  private grindPromptMode: 'none' | 'ollie' | 'grind' | 'wall' = 'none';
   /**
    * Contextual "how do I grind" coaching, shown near a rail until the player has landed a
    * few grinds. 'ollie' = rail in reach but too high to lock onto from where you are;
    * 'grind' = press/hold E now and you lock on.
    */
-  setGrindPrompt(mode: 'none' | 'ollie' | 'grind'): void {
+  setGrindPrompt(mode: 'none' | 'ollie' | 'grind' | 'wall'): void {
     if (mode === this.grindPromptMode) return;
     this.grindPromptMode = mode;
     if (!this.grindPrompt) {
@@ -2061,6 +2061,7 @@ export class HUD {
       + `border-radius:0.25em;background:#FFD23F;color:#111;text-align:center">${k}</span>`;
     if (mode === 'ollie') this.grindPrompt.innerHTML = `Press ${key('E')} to hop on the rail`;
     else if (mode === 'grind') this.grindPrompt.innerHTML = `Hold ${key('E')} to GRIND`;
+    else if (mode === 'wall') this.grindPrompt.innerHTML = `Hold ${key('E')} to WALLRIDE`;
     this.grindPrompt.style.opacity = mode === 'none' ? '0' : '1';
   }
 
