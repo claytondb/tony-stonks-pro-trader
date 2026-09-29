@@ -8,20 +8,22 @@ A Tony Hawk-style skating game featuring a burned-out office worker escaping fin
 
 | Key | Action |
 |-----|--------|
-| **W** | Push forward |
+| **W** | Push (let go to coast to a stop) |
 | **S** | Brake |
-| **A/D** | Turn left/right |
-| **Space** | Jump (Ollie) |
-| **Q/E** | Spin left/right (in air) |
-| **↑** | Flip tricks / Start grind |
-| **↓** | Grab tricks / Manual |
-| **←/→** | Rotate tricks |
-| **Escape** | Pause game |
+| **A/D** | Steer; balance on a grind; drift along the wall in a vert air (transfer) |
+| **Space** | Ollie (hold to charge); Wallie off a wall |
+| **E** | Grind (near a rail or ledge) — or **Wallride** in the air beside a wall |
+| **Q** | Flip trick (+ W/A/S/D for the variant) |
+| **R** | Grab trick (hold) |
+| **Z/C** | Spin |
+| **F** | Revert (landing from a transition) |
+| **S then W** | Manual (W/S to balance) |
+| **Q+R** | Special (meter full) |
+| **Escape** | Pause |
 
-### Grinding
-- Approach a rail and press **↑** to lock onto it
-- Use **A/D** to balance while grinding
-- Press **Space** to jump off the rail
+### Grinding and wallriding
+- Ride alongside a rail, ledge, planter or coping and hold **E** to lock on; **A/D** balance, **Space** pops off.
+- Jump beside a wall and hold **E** to ride it; **Space** for a Wallie.
 
 ### Combos
 Chain tricks together without landing to build multipliers. Land clean to bank your points!

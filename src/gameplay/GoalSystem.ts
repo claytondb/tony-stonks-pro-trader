@@ -1908,11 +1908,15 @@ register({
     trickAtGoal(
       'grind_desk_rails',
       'Grind 3 rails or ledges',
-      { id: 'desk_rails', label: 'the rails', center: [0, 1.0, 0], radius: 30, height: 8 },
+      // Radius 60: the whole building, wings included (at 30 the pool and server-room grinds
+      // did not count).
+      { id: 'desk_rails', label: 'the rails', center: [0, 1.0, 0], radius: 60, height: 10 },
       GRIND_TRICK_IDS,
       3,
       1500
     ),
+    // Teaches the wallride (hold E in the air beside a wall). No zone: any wall counts.
+    { id: 'wallrides', kind: 'trickAt', description: 'Wallride 3 times', target: 3, reward: 1500, trickIds: ['wallride'] },
     scoreTierGoal('high', 8000, 2000),
     smashGoal('Smash both water coolers', 2, 1000,
       OFFICE_COOLERS.map((p, i) => ({ id: i === 0 ? 'cooler_nw' : 'cooler_se', label: 'Water Cooler', position: p }))),
