@@ -9,6 +9,7 @@
 import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
 import { inSkateLane } from './SkateLayoutUtil';
 import { WELLNESS_GAPS } from './WellnessWing';
+import { SERVER_GAPS } from './ServerWing';
 
 type V3 = [number, number, number];
 const L = CUBICLE_CHAOS_LAYOUT;
@@ -41,6 +42,7 @@ export const OFFICE_LETTERS: V3[] = Array.from({ length: 6 }, (_, i) =>
 /** Every kicker's air is a named gap; so is every quarter pipe's. */
 export const OFFICE_GAPS = [
   ...WELLNESS_GAPS,
+  ...SERVER_GAPS,
   ...L.filter((it) => it.type === 'kicker').map((it, i) => ({
     id: `kicker_air_${i}`, name: i === 0 ? 'Kicker Air' : `Kicker Air ${i + 1}`, bonus: 600,
     from: rv(fwd(it, 0, 0)), to: rv(fwd(it, it.hd + 8, 0)), radius: 3.2,

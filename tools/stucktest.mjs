@@ -22,7 +22,7 @@ const pg = await (await b.newContext({viewport:{width:320,height:180}})).newPage
 await pg.goto(url,{waitUntil:'domcontentloaded'});
 await pg.waitForFunction(()=>!!window.game,null,{timeout:90000});
 await pg.waitForTimeout(400);
-const out = await pg.evaluate(async ({level}) => {
+const out = await pg.evaluate(async ({level, xmin, xmax}) => {
   const g = window.game; const DT = 1/60;
   window.gameState?.setState?.('playing'); g.loadLevel(level); g.start(); g.resume?.();
   await new Promise(r=>setTimeout(r,900));
@@ -33,7 +33,7 @@ const out = await pg.evaluate(async ({level}) => {
   const spd=()=>{const v=g.physics.getVelocity(g.chairBody);return Math.hypot(v.x,v.z);};
   const bounds = 24; const STEPGRID = 3;
   const trapped = []; let tested = 0, escaped = 0;
-  for (let x=-bounds; x<=bounds; x+=STEPGRID) {
+  for (let x=(xmin ?? -bounds); x<=(xmax ?? bounds); x+=STEPGRID) {
     for (let z=-bounds; z<=bounds; z+=STEPGRID) {
       let best = 0;
       for (const yawDeg of [0,90,180,270]) {
@@ -54,6 +54,6 @@ const out = await pg.evaluate(async ({level}) => {
   return { tested, escaped, trappedCount: trapped.length,
            pctTrapped: +(100*trapped.length/tested).toFixed(1),
            worst: trapped.slice(0,20) };
-}, {level: LEVEL});
+}, {level: LEVEL, xmin: process.env.STUCK_XMIN ? +process.env.STUCK_XMIN : null, xmax: process.env.STUCK_XMAX ? +process.env.STUCK_XMAX : null});
 console.log(JSON.stringify(out,null,1));
 await b.close(); try { process.kill(-server.pid, 'SIGKILL'); } catch { server.kill('SIGKILL'); }

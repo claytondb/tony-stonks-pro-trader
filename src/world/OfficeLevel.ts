@@ -164,6 +164,7 @@ import {
   wedgeShell,
 } from './OfficeProps';
 import { buildWellnessWing } from './WellnessWing';
+import { buildServerWing } from './ServerWing';
 import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
 
 
@@ -603,10 +604,13 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // WellnessWing.ts), with a lintel over the opening.
   const wing = buildWellnessWing();
   const { z0: DZ0, z1: DZ1, height: DOOR_HT } = wing.door;
+  const server = buildServerWing();
+  const { z0: SZ0, z1: SZ1, height: SDOOR_HT } = server.door;
   const wallSpecs: { w: number; x: number; z: number; rotY: number }[] = [
     { w: W, x: 0, z: -halfD, rotY: 0 },
     { w: W, x: 0, z: halfD, rotY: Math.PI },
-    { w: D, x: -halfW, z: 0, rotY: Math.PI / 2 },
+    { w: SZ0 + halfD, x: -halfW, z: (-halfD + SZ0) / 2, rotY: Math.PI / 2 },
+    { w: halfD - SZ1, x: -halfW, z: (SZ1 + halfD) / 2, rotY: Math.PI / 2 },
     { w: DZ0 + halfD, x: halfW, z: (-halfD + DZ0) / 2, rotY: -Math.PI / 2 },
     { w: halfD - DZ1, x: halfW, z: (DZ1 + halfD) / 2, rotY: -Math.PI / 2 },
   ];
@@ -655,6 +659,18 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     root.add(wing.root);
     acc.colliders.push(...wing.colliders);
     acc.rails.push(...wing.rails);
+
+    // And the same over the Server Wing's door in the west wall.
+    const sw = SZ1 - SZ0, sh = H - SDOOR_HT;
+    const slintel = new THREE.Mesh(plane(sw, sh, WALL_UV), wallMat);
+    place(acc, slintel, -halfW, SDOOR_HT + sh / 2, (SZ0 + SZ1) / 2, Math.PI / 2, { collide: false });
+    acc.colliders.push({
+      position: new THREE.Vector3(-halfW - 0.3, SDOOR_HT + sh / 2 + 0.5, (SZ0 + SZ1) / 2),
+      halfExtents: new THREE.Vector3(0.3, sh / 2 + 0.5, sw / 2), rotationY: 0,
+    });
+    root.add(server.root);
+    acc.colliders.push(...server.colliders);
+    acc.rails.push(...server.rails);
   }
 
   // ---------------------------------------------------- BUILDING SHELL ------
@@ -665,7 +681,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   const SHELL_H = H + 6;
   const shell = new THREE.Mesh(
     // Wide enough to take in the Wellness Wing off the east wall.
-    withUV1(new THREE.BoxGeometry(W / 2 + wing.maxX + 4, SHELL_H, D + 4)),
+    withUV1(new THREE.BoxGeometry(wing.maxX - server.minX + 4, SHELL_H, D + 4)),
     MaterialLibrary.get('drywall', {
       repeat: [6, 3],
       color: 0xb3ad9f,
@@ -674,7 +690,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     }),
   );
   shell.material.side = THREE.BackSide;
-  shell.position.set((wing.maxX - W / 2) / 2, SHELL_H / 2 - 0.6, 0);
+  shell.position.set((wing.maxX + server.minX) / 2, SHELL_H / 2 - 0.6, 0);
   shell.name = 'officeBuildingShell';
   shell.castShadow = false;
   shell.receiveShadow = false;
@@ -1375,7 +1391,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     movers,
     lights,
     size: { width: W, depth: D, height: H },
-    groundHalf: Math.max(W / 2, wing.maxX + 1),
+    groundHalf: Math.max(W / 2, wing.maxX + 1, -server.minX + 1),
     triangles: Math.round(triangles),
   };
 }
