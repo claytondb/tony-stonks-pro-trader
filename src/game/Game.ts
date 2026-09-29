@@ -361,6 +361,8 @@ export class Game {
    * points away from the wall, into the room.
    */
   private vertAir = false;
+  private vertTurnDir = 0;
+  private readonly VERT_TURN_RATE = 6.0;   // rad/s: the auto 180 takes ~0.5 s of a ~1 s vert air
   private vertCoping = new THREE.Vector3();
   private vertNormal = new THREE.Vector3();
   private readonly VERT_ANGLE = 50;
@@ -5873,6 +5875,37 @@ export class Game {
     // line eases round to face it. The rate grows with the error and tops out below the
     // player's own air turn, so it reads as the rider squaring up, not as a snap. The
     // degrees it turns are subtracted from the spin accumulator: tidying up is not a trick.
+    // VERT 180. In THPS a straight vert air comes down FORWARDS: the skater turns round at the
+    // top by himself, and only rotation beyond that is a spin. Here the chair used to hang in
+    // the air facing the wall and then snap 180 degrees on the touchdown frame (the fakie fix
+    // in the landing code). Now, unless the player is spinning, the rider turns to face down
+    // the ramp during the air, the way the along-wall line is already carrying him, finishing
+    // well before the coping. A/D keep drifting the line (transfer) but no longer twist the
+    // rider against it. Not scored: it is the game's turn, not the player's.
+    if (this.playerState.isAirborne && this.vertAir && !this.grindSystem.isGrinding()
+        && Math.abs(intent.spin) < 0.05 && this.cumulativeSpinDegrees < 45) {
+      const face = Math.atan2(fwdFlat.x, fwdFlat.z);
+      const target = Math.atan2(this.vertNormal.x, this.vertNormal.z);
+      let err = wrapPi(target - face);
+      if (Math.abs(err) > 2.6) {
+        // Near-exact 180: turn the way the line is drifting (screen-right = (-n.z, n.x)).
+        const av = this.physics.getVelocity(this.chairBody);
+        const side = av.x * -this.vertNormal.z + av.z * this.vertNormal.x;
+        const dir = Math.abs(side) > 0.3 ? -Math.sign(side) : (this.vertTurnDir || 1);
+        this.vertTurnDir = dir;
+        if (Math.sign(err) !== dir) err = err + dir * 2 * Math.PI;
+      }
+      if (Math.abs(err) > 0.02) {
+        const swing = Math.sign(err) * Math.min(Math.abs(err), this.VERT_TURN_RATE * dt);
+        this.physics.setRotationY(this.chairBody, face + swing);
+        this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+        this.turnRate = 0; this.turnCommand = 0;
+        this.airAlignDegrees += Math.abs(swing) * (180 / Math.PI);
+      }
+    } else if (!this.vertAir) {
+      this.vertTurnDir = 0;
+    }
+
     if (this.playerState.isAirborne && !this.grindSystem.isGrinding() && !this.vertAir
         && Math.abs(intent.turn) < 0.05 && Math.abs(intent.spin) < 0.05
         && this.cumulativeSpinDegrees < 45) {
