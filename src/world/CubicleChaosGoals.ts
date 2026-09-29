@@ -6,7 +6,7 @@
  * gaps between kickers that no longer exist. Everything here is computed from the layout, so
  * a re-optimised layout keeps a checklist that still walks you through its lines.
  */
-import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
+import { CUBICLE_CHAOS_LAYOUT, MEZZANINE_KICKERS, type SkateItem } from './CubicleChaosLayout';
 import { inSkateLane } from './SkateLayoutUtil';
 import { WELLNESS_GAPS } from './WellnessWing';
 import { SERVER_GAPS } from './ServerWing';
@@ -49,6 +49,12 @@ export const OFFICE_LETTERS: V3[] = [
 export const OFFICE_GAPS = [
   ...WELLNESS_GAPS,
   ...SERVER_GAPS,
+  // The mezzanine drop kickers: off the deck, through the kerb gap, 4.2 m down into the atrium.
+  // Measured landings (9-15 m/s run-up) are 8-11 m out from the lip, all clean.
+  ...MEZZANINE_KICKERS.map((k, i) => ({
+    id: `mezz_drop_${i}`, name: i === 0 ? 'Boardroom Drop' : 'Corner Office Drop', bonus: 1200,
+    from: [k.x, 5.9, 8.0] as V3, to: [k.x, 0.7, -1.5] as V3, radius: 3.5,
+  })),
   ...L.filter((it) => it.type === 'kicker').map((it, i) => ({
     id: `kicker_air_${i}`, name: i === 0 ? 'Kicker Air' : `Kicker Air ${i + 1}`, bonus: 600,
     from: rv(fwd(it, 0, 0)), to: rv(fwd(it, it.hd + 8, 0)), radius: 3.2,

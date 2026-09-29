@@ -52,3 +52,14 @@ export const CUBICLE_CHAOS_LAYOUT: readonly SkateItem[] = [
   { type: 'kicker', x: -2.58, z: -15.41, yaw: 1.309, hw: 1.7, hd: 0.9, h: 0.85 },
   { type: 'ledge', x: 4.89, z: -10.05, yaw: 0, hw: 0.6, hd: 1.98, h: 0.42 },
 ];
+
+/**
+ * Hand-placed, not simulated: whiteboard kickers on the MEZZANINE, aimed south through the two
+ * open gaps in the balcony kerb (x -16..-11 and 11..16). The pockets between the conference
+ * room and the corner offices are their run-ups; the 4.2 m drop into the atrium is the gap.
+ * Deck-relative: y is added to the deck height by the builder.
+ */
+export const MEZZANINE_KICKERS: readonly SkateItem[] = [
+  { type: 'kicker', x: -13.5, z: 9.4, yaw: Math.PI, hw: 1.5, hd: 0.9, h: 0.7 },
+  { type: 'kicker', x: 13.5, z: 9.4, yaw: Math.PI, hw: 1.5, hd: 0.9, h: 0.7 },
+];

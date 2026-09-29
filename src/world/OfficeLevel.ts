@@ -167,7 +167,7 @@ import {
 import { buildWellnessWing } from './WellnessWing';
 import { buildServerWing } from './ServerWing';
 import { buildWrapTransition, pathArc, pathStraight } from './WrapTransition';
-import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
+import { CUBICLE_CHAOS_LAYOUT, MEZZANINE_KICKERS, type SkateItem } from './CubicleChaosLayout';
 
 
 // ---------------------------------------------------------------------------
@@ -564,7 +564,7 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
   // Floor: commercial loop-pile carpet. The repeat stays at one map tile per 2.6 m on purpose —
   // MaterialLibrary's officeCarpet spec applies repeatScale 2.9 on top of it.
   const carpetMat = MaterialLibrary.get('officeCarpet', { repeat: [W / 2.6, D / 2.6], color: 0xb99a6c });
-  const deckFloorMat = MaterialLibrary.get('concreteFloor', { repeat: [1, 1], color: 0xc9c4ba });
+  const deckFloorMat = MaterialLibrary.get('concreteFloor', { repeat: [1, 1], color: 0xa29e97 });
   const floor = new THREE.Mesh(plane(W, D), carpetMat);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -1346,6 +1346,11 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       place(acc, makePlanterLedge({ width: 3.0, depth: 1.0, seed: iseed(px, 7, 93) }), px, DECK_Y, 7.4, 0,
         { collide: true, grind: true });
     }
+    // Drop kickers: launch off the deck through a kerb gap into the atrium (see MEZZANINE_KICKERS).
+    MEZZANINE_KICKERS.forEach((k, i) => {
+      place(acc, makeWhiteboardKicker({ width: k.hw * 2, depth: k.hd * 2, height: k.h, seed: 4700 + i }),
+        k.x, DECK_Y, k.z, k.yaw, { collide: true, grind: true });
+    });
     // A ledge run down the middle of the upper hallway, north of the promenade.
     runLedge(-1.0, 11.0, -1.0, 15.0, { y: DECK_Y, seed: 4200, wear: false });
     runLedge(9.5, 10.8, 9.5, 15.2, { y: DECK_Y, seed: 4300, wear: false });

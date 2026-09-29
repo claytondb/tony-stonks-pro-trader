@@ -3959,6 +3959,10 @@ function whiteboardDoodleMaterial(): THREE.MeshStandardMaterial {
     g.strokeStyle = '#c0392b'; g.lineWidth = 5;
     g.beginPath(); g.ellipse(335, 318, 110, 38, -0.1, 0, Math.PI * 2); g.stroke();
   });
+  // A kicker face is tilted up at the ceiling: on the mezzanine, 3.8 m nearer the troffers, it
+  // bloomed to a white slab. Matte and a shade down keeps the doodles readable on both floors.
+  WHITEBOARD_DOODLE_MAT.roughness = 0.85;
+  WHITEBOARD_DOODLE_MAT.color.setHex(0xc2c6ca);
   return WHITEBOARD_DOODLE_MAT;
 }
 
