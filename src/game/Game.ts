@@ -3968,6 +3968,7 @@ export class Game {
         const planarV = Math.hypot(av.x, av.z);
         target = -Math.atan2(av.y, Math.max(2.5, planarV)) * 0.7;
       }
+      if (this.lipping) target = -0.95;   // nose up over the coping: an axle stall reads as one
       const CAP = 1.15;   // ~66 degrees
       target = Math.max(-CAP, Math.min(CAP, target));
       this.ridePitch += (target - this.ridePitch) * (1 - Math.exp(-11 * dt));
@@ -4050,8 +4051,9 @@ export class Game {
     this.cameraController.updateFOVFromSpeed(currentSpeed, 18);
     this.cameraController.setTrickZoom(this.playerState.isAirborne, this.playerState.airTime);
     this.cameraController.setManualing(this.playerState.isManualing);
-    this.cameraController.setVertAir(this.vertAir && this.playerState.isAirborne, this.vertCoping, this.vertNormal);
+    this.cameraController.setVertAir(this.vertAir && this.playerState.isAirborne && !this.lipping, this.vertCoping, this.vertNormal);
     this.cameraController.setWallride(this.wallriding, this.wallN);
+    this.cameraController.setLip(this.lipping, this.lipPos, this.vertNormal);
 
     // ---- 11. HUD COMBO + BALANCE ------------------------------------------------------
     const comboState = this.score.state;

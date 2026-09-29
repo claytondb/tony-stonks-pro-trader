@@ -248,6 +248,12 @@ export class CameraController {
   private vertActive = false;
   private vertBlend = 0;
   private wallActive = false;
+  private lipActive = false;
+  private lipBlend = 0;
+  private lipAt = new THREE.Vector3();
+  private lipN = new THREE.Vector3();
+  private _lipPos = new THREE.Vector3();
+  private _lipLook = new THREE.Vector3();
   private wallBlend = 0;
   private wallN = new THREE.Vector3();
   private vertCoping = new THREE.Vector3();
@@ -256,6 +262,12 @@ export class CameraController {
   private _vertLook = new THREE.Vector3();
 
   /** Game tells the rig when the rider is in a vert air, where the lip is and which way the room is. */
+  /** Lip-trick framing: out in the room, facing the ramp, so the stall on the coping is the shot. */
+  setLip(active: boolean, coping?: THREE.Vector3, normal?: THREE.Vector3): void {
+    this.lipActive = active;
+    if (active && coping && normal) { this.lipAt.copy(coping); this.lipN.copy(normal); }
+  }
+
   /** Wallride framing: swing the lens out from the wall so the rider is not shot from inside it. */
   setWallride(active: boolean, normal?: THREE.Vector3): void {
     this.wallActive = active;
@@ -701,6 +713,20 @@ export class CameraController {
       const b = this.wallBlend * this.wallBlend * (3 - 2 * this.wallBlend);
       this._desiredPos.addScaledVector(this.wallN, 1.8 * b);
       this._desiredPos.y += 0.5 * b;
+    }
+
+    // ---- 7d. lip trick: stand in the room and look at the ramp.
+    this.lipBlend += ((this.lipActive ? 1 : 0) - this.lipBlend) * damp(this.lipActive ? 5.0 : 3.0, dt);
+    if (this.lipBlend > 0.002) {
+      const n = this.lipN;
+      this._lipPos.copy(this.lipAt).addScaledVector(n, 4.6);
+      this._lipPos.x += -n.z * 1.4; this._lipPos.z += n.x * 1.4;
+      this._lipPos.y = this.lipAt.y + 0.6;
+      this._lipLook.copy(this.target.position); this._lipLook.y -= 0.3;
+      const b = this.lipBlend * this.lipBlend * (3 - 2 * this.lipBlend);
+      this._desiredPos.lerp(this._lipPos, b);
+      this._desiredLookAt.lerp(this._lipLook, b);
+      posFollow = Math.max(posFollow, 8);
     }
 
     // ---- 8. chase ------------------------------------------------------------
