@@ -21,7 +21,7 @@
  *   ramp  — a wedge up the corridor
  */
 import * as THREE from 'three';
-import { wedgeShell } from './OfficeProps';
+import { wedgeShell, mergePropsByMaterial } from './OfficeProps';
 
 /** Named gaps in the wing, for GoalSystem: the drop-in off the corridor deck, and vert at the deep end. */
 export const WELLNESS_GAPS = [
@@ -395,6 +395,16 @@ export function buildWellnessWing(): WellnessWing {
     s2.position.set(OFFICE_EAST - 0.05, DOOR_H + 0.55, cz); s2.rotation.y = -Math.PI / 2; root.add(s2);
   }
 
-  root.traverse((o) => { const m = o as THREE.Mesh; if (m.isMesh && m.castShadow === undefined) m.castShadow = false; });
+  // One draw call per material: the coping alone is ~100 cylinder segments, and every mesh here
+  // is drawn three times a frame (shadow, AO prepass, main). Lights stay as they are.
+  const meshes: THREE.Object3D[] = [];
+  const keep: THREE.Object3D[] = [];
+  for (const c of [...root.children]) ((c as THREE.Mesh).isMesh ? meshes : keep).push(c);
+  for (const c of [...root.children]) root.remove(c);
+  root.updateMatrixWorld(true);
+  const merged = mergePropsByMaterial(meshes);
+  merged.name = 'wellnessWingMerged';
+  root.add(merged);
+  for (const k of keep) root.add(k);
   return { root, colliders, rails, door: { z0: DOOR_Z0, z1: DOOR_Z1, height: DOOR_H }, maxX: ROOM_X1 };
 }

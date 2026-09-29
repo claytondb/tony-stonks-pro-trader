@@ -557,11 +557,20 @@ async function runPass({ level }) {
     // instead of being smuggled into the retention number.
     if (runUpFrames > 0) up('KeyW');
 
+    // The hold frames are part of the flight: track height and air through them too. This
+    // used to step(holdFrames) blind, so once the pop got brisk enough that a long hold
+    // outlasted the rise, the probe measured the jump from the RELEASE and reported a
+    // 35-frame hold as 0.86 m — "not monotonic" — when it actually peaks at 1.93 m.
+    let peak = groundY, airFrames = 0, leftGround = false, landedAt = null;
     down('Space');
-    step(holdFrames);
+    for (let k = 0; k < holdFrames; k++) {
+      step();
+      const yk = pos().y;
+      peak = Math.max(peak, yk);
+      if (yk > groundY + 0.05) { leftGround = true; airFrames++; }
+    }
     up('Space');
     const speedAfterPop = spd();
-    let peak = groundY, airFrames = 0, leftGround = false, landedAt = null;
     let speedBeforeLanding = speedAfterPop, prevSpeed = speedAfterPop;
     const AIR_EPS = 0.05;
     for (let i = 1; i <= 240; i++) {
@@ -762,7 +771,7 @@ async function runPass({ level }) {
     // Every frame across the interesting range, not every other one. At 2-frame
     // resolution ch1_office read 8 and story_3_lobby read 6 for what is one constant,
     // purely because the boundary trial landed on different sides of a skipped frame.
-    for (const delay of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16]) {
+    for (const delay of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12]) {
       if (!liftOff()) { up('KeyW'); trials.push({ delay, ok: false }); continue; }
       step(delay);
       const control = riseWhileAirborne(24);
