@@ -4008,6 +4008,14 @@ export function makeWhiteboardKicker(o?: { width?: number; depth?: number; heigh
  * QUARTER PIPE: the curved town-hall projection screen. The plywood transition underneath,
  * with the STONKS chart projected on the ride face.
  */
+/** The plywood and coping steel every quarter pipe is built from, for swept transitions. */
+export function rampMaterials(): { plywood: THREE.MeshStandardMaterial; coping: THREE.MeshStandardMaterial } {
+  // Smooth-shaded copies: the library's flatShading reads as authored planes on a box, but on a
+  // surface curved both ways it turns every quad of the sweep into a visible tile.
+  const smooth = (m: THREE.MeshStandardMaterial) => { const c = m.clone(); c.flatShading = false; return c; };
+  return { plywood: smooth(mat(MAT.plywood)), coping: smooth(mat(MAT.grindPolish)) };
+}
+
 export function makeScreenQuarterPipe(o?: QuarterPipeOptions): THREE.Group {
   const g = makeQuarterPipe(o);
   const w = o?.width ?? 4.2, d = o?.depth ?? 1.9, h = o?.height ?? 1.5;

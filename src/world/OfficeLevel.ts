@@ -139,6 +139,7 @@ import {
   makeGlazedScreen,
   makeWhiteboardKicker,
   makeScreenQuarterPipe,
+  rampMaterials,
   makeLoungeTable,
   makeGrindRail,
   makeKitchenCounter,
@@ -165,6 +166,7 @@ import {
 } from './OfficeProps';
 import { buildWellnessWing } from './WellnessWing';
 import { buildServerWing } from './ServerWing';
+import { buildWrapTransition, pathArc, pathStraight } from './WrapTransition';
 import { CUBICLE_CHAOS_LAYOUT, type SkateItem } from './CubicleChaosLayout';
 
 
@@ -1033,6 +1035,45 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
       const clash = items.some((it) => it.type === 'qp' && Math.abs(it.x - cx) < it.hw + CH + 0.5 && Math.abs(it.z - cz) < CH + 2);
       if (clash) continue;
       runWall(cx - sx * CH, cz, cx, cz - sz * CH, { grind: true });
+    }
+
+    // CORNER WRAPS. A quarter pipe that runs to within a metre of a side wall is a trap: carve
+    // along it and you meet the wall at full speed (in the swerve test the south-east corner took
+    // a quarter of all hard hits). Where a QP's coping runs to a corner, the transition is swept
+    // round the corner (radius 2.6 m) and tapered out 2 m along the side wall, so the carve
+    // comes off as a line back up the room.
+    const rm = rampMaterials();
+    for (const it of items) {
+      if (it.type !== 'qp') continue;
+      const zx = Math.sin(it.yaw), zz = Math.cos(it.yaw);           // QP local +z (toward its wall) in world
+      const cz = it.z + zz * it.hd;                                   // coping line
+      if (Math.abs(zx) > 0.01) continue;                             // only the end-wall QPs (along x)
+      const nz = -Math.sign(zz), RC = 2.6, LEG = 2.0;
+      for (const side of [1, -1]) {
+        const endX = it.x + side * it.hw, wallX = side * halfW, copX = wallX - side * 0.6;
+        if (Math.abs(copX - side * RC - endX) > 0.15) continue;      // this end doesn't run into a wall
+        const ccx = copX - side * RC, ccz = cz + nz * RC;           // arc centre
+        const aStart = Math.atan2(cz - ccz, 0), aEnd = side > 0 ? 0 : Math.PI;
+        let da = aEnd - aStart; while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
+        const path = [
+          ...pathArc(ccx, ccz, RC, aStart, aStart + da, 12, false),
+          ...pathStraight(copX, ccz, copX, ccz + nz * LEG, -side, 0, 6, true),
+        ];
+        const wallZ = cz - nz * 0.6;
+        const wrap = buildWrapTransition(path, {
+          height: 1.75, depth: it.hd * 2, taperEnd: 3.0, uvScale: 5.2,   // ~ the QPs' RAMP_UV grain
+          deck: (p) => {
+            const tx = Math.abs(p.nx) > 1e-3 ? Math.abs(wallX - p.x) / Math.abs(p.nx) : 1e9;
+            const tz = Math.abs(p.nz) > 1e-3 ? Math.abs(wallZ - p.z) / Math.abs(p.nz) : 1e9;
+            return Math.min(tx, tz);
+          },
+        });
+        const m = new THREE.Mesh(wrap.geometry, rm.plywood); m.receiveShadow = true;
+        acc.staticProps.push(m);
+        const pipe = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(wrap.coping), 48, 0.05, 8, false), rm.coping);
+        pipe.castShadow = true; acc.staticProps.push(pipe);
+        acc.colliders.push({ position: new THREE.Vector3(0, 0, 0), halfExtents: new THREE.Vector3(RC, 0.9, RC), rotationY: 0, trimesh: wrap.trimesh });
+      }
     }
 
     // WALL DRESSING — the office, pushed to the walls. Only north of the balcony (the atrium

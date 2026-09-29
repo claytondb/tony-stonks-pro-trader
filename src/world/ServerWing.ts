@@ -23,6 +23,7 @@
  */
 import * as THREE from 'three';
 import { makeServerRack, mergePropsByMaterial } from './OfficeProps';
+import { buildWrapTransition, pathArc, pathStraight, type CopingPt } from './WrapTransition';
 
 export interface ServerWingCollider {
   position: THREE.Vector3;
@@ -192,62 +193,36 @@ export function buildServerWing(): ServerWing {
   for (const s of [1, -1]) buildDuct(s);
   function buildDuct(s: number) {
     const zWall = s > 0 ? RZ1 : RZ0;
-    // Local plan coords (x, b): b = distance in from the end wall. World z = zWall - s*b.
-    const g = QP_GAP, rc = DUCT_RC, L = DUCT_LEG, T = DUCT_TAPER;
-    const xa = RX0 + g, xb = RX1 - g;
-    const path: { x: number; b: number; nx: number; nb: number }[] = [];
-    const push = (x: number, b: number, nx: number, nb: number) => path.push({ x, b, nx, nb });
-    for (let i = 0; i <= 6; i++) push(xa, g + rc + L * (1 - i / 6), 1, 0);                    // west leg, heading to the wall
-    for (let i = 1; i <= 10; i++) { const th = Math.PI + (i / 10) * Math.PI / 2; push(xa + rc + rc * Math.cos(th), g + rc + rc * Math.sin(th), -Math.cos(th), -Math.sin(th)); }
-    const xs0 = xa + rc, xs1 = xb - rc;
-    for (let i = 1; i < 8; i++) push(xs0 + (xs1 - xs0) * (i / 8), g, 0, 1);                    // across the end wall
-    for (let i = 0; i <= 10; i++) { const th = 1.5 * Math.PI + (i / 10) * Math.PI / 2; push(xb - rc + rc * Math.cos(th), g + rc + rc * Math.sin(th), -Math.cos(th), -Math.sin(th)); }
-    for (let i = 1; i <= 6; i++) push(xb, g + rc + L * (i / 6), -1, 0);                        // east leg, away from the wall
-    // Arc length along the coping, and the taper: full size except the last T metres of each leg.
-    const acc = [0];
-    for (let i = 1; i < path.length; i++) acc.push(acc[i - 1] + Math.hypot(path[i].x - path[i - 1].x, path[i].b - path[i - 1].b));
-    const tot = acc[acc.length - 1];
-    const size = (i: number) => { const u = Math.min(1, Math.min(acc[i], tot - acc[i]) / T); return Math.max(0.03, u * u * (3 - 2 * u)); };
-    const wz = (b: number) => zWall - s * b;
-    const SEG = 12;
-    const pos: number[] = [], uv: number[] = [], idx: number[] = [];
-    const row = SEG + 2;                                   // profile points + the wall-side deck point
-    for (let i = 0; i < path.length; i++) {
-      const p = path[i], f = size(i), H = QP_H * f, D = QP_D * f;
-      for (let k = 0; k <= SEG; k++) {
-        const t = (k / SEG) * Math.PI / 2;                 // 0 = floor edge, π/2 = coping
-        const d = D * (1 - Math.sin(t));
-        pos.push(p.x + p.nx * d, H * (1 - Math.cos(t)), wz(p.b + p.nb * d));
-        uv.push(acc[i] / 1.2, (t * Math.max(H, 0.2)) / 1.2);
-      }
-      // Deck: from the coping straight back to whichever wall is nearer along -n.
+    const g = QP_GAP, rc = DUCT_RC, L = DUCT_LEG;
+    const zc = zWall - s * g;                            // coping line across the end wall
+    const xa = RX0 + g, xb = RX1 - g, xs0 = xa + rc, xs1 = xb - rc;
+    // West leg toward the wall, corner, across, corner, east leg away (angles: x = cos, z = sin).
+    const a0 = Math.PI, a1 = s > 0 ? Math.PI / 2 : 1.5 * Math.PI;
+    const path = [
+      ...pathStraight(xa, zc - s * (rc + L), xa, zc - s * rc, 1, 0, 6),
+      ...pathArc(xs0, zc - s * rc, rc, a0, a1, 10),
+      ...pathStraight(xs0, zc, xs1, zc, 0, -s, 8, true),
+      ...pathArc(xs1, zc - s * rc, rc, s > 0 ? Math.PI / 2 : 1.5 * Math.PI, s > 0 ? 0 : 2 * Math.PI, 10),
+      ...pathStraight(xb, zc - s * rc, xb, zc - s * (rc + L), -1, 0, 6, true),
+    ];
+    const deck = (p: CopingPt) => {
       const tx = p.nx > 1e-3 ? (p.x - RX0) / p.nx : p.nx < -1e-3 ? (RX1 - p.x) / -p.nx : 1e9;
-      const tb = p.nb > 1e-3 ? p.b / p.nb : 1e9;
-      const tw = Math.min(tx, tb);
-      pos.push(p.x - p.nx * tw, H, wz(p.b - p.nb * tw));
-      uv.push(acc[i] / 1.2, (Math.PI / 2 * Math.max(H, 0.2) + tw) / 1.2);
-    }
-    for (let i = 0; i < path.length - 1; i++) for (let k = 0; k < row - 1; k++) {
-      const a = i * row + k, b2 = a + 1, c = a + row, e = c + 1;
-      if (s > 0) idx.push(a, b2, c, b2, e, c); else idx.push(a, c, b2, b2, c, e);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    geo.setIndex(idx); geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, ductMat); mesh.castShadow = mesh.receiveShadow = true; add(mesh);
+      const tz = Math.abs(p.nz) > 1e-3 ? Math.abs(zWall - p.z) / Math.abs(p.nz) : 1e9;
+      return Math.min(tx, tz);
+    };
+    const wrap = buildWrapTransition(path, { height: QP_H, depth: QP_D, taperStart: DUCT_TAPER, taperEnd: DUCT_TAPER, deck });
+    const mesh = new THREE.Mesh(wrap.geometry, ductMat); mesh.castShadow = mesh.receiveShadow = true; add(mesh);
     colliders.push({
       position: new THREE.Vector3(0, 0, 0), halfExtents: new THREE.Vector3(rw / 2, QP_H / 2, QP_D / 2), rotationY: 0,
-      trimesh: { vertices: new Float32Array(pos), indices: new Uint32Array(idx) },
+      trimesh: wrap.trimesh,
     });
     // Coping pipe the whole way round; the straight run is the grind.
-    const cop = path.map((p, i) => new THREE.Vector3(p.x, QP_H * size(i) + 0.02, wz(p.b)));
-    const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(cop), 96, 0.045, 6, false), steelMat);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(wrap.coping), 96, 0.045, 6, false), steelMat);
     tube.castShadow = true; add(tube);
-    rails.push({ start: new THREE.Vector3(xs0, QP_H + 0.06, wz(g + 0.045)), end: new THREE.Vector3(xs1, QP_H + 0.06, wz(g + 0.045)) });
+    rails.push({ start: new THREE.Vector3(xs0, QP_H + 0.06, zc - s * 0.045), end: new THREE.Vector3(xs1, QP_H + 0.06, zc - s * 0.045) });
     // Duct grille above the coping.
     const grille = new THREE.Mesh(new THREE.BoxGeometry(xs1 - xs0 + 2 * rc, 1.2, 0.1), steelMat);
-    grille.position.set(rcx, QP_H + 1.1, wz(0.12)); add(grille);
+    grille.position.set(rcx, QP_H + 1.1, zWall - s * 0.12); add(grille);
   }
 
   // ---- the NOC wall: the dead end of the cross aisle gets something to look at

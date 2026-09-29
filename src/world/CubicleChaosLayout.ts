@@ -37,7 +37,7 @@ export interface SkateItem {
 export const CUBICLE_CHAOS_LAYOUT: readonly SkateItem[] = [
   { type: 'ledge', x: 11.68, z: 16.08, yaw: 2.0944, hw: 0.6, hd: 3.25, h: 0.42 },
   { type: 'ledge', x: 13.04, z: -10.06, yaw: -0.7854, hw: 0.6, hd: 1.5, h: 0.42 },
-  { type: 'qp', x: 16.68, z: -21.25, yaw: 3.1416, hw: 5.31, hd: 1.15, h: 1.6 },
+  { type: 'qp', x: 15.58, z: -21.25, yaw: 3.1416, hw: 4.21, hd: 1.15, h: 1.6 },   // hand edit: ends at x 19.8 where OfficeLevel's corner wrap takes over
   { type: 'ledge', x: 8.72, z: -14.84, yaw: 2.0944, hw: 0.6, hd: 1.5, h: 0.42 },
   { type: 'pad', x: -15.48, z: 11.65, yaw: -2.3562, hw: 1, hd: 2.64, h: 0.3 },
   { type: 'qp', x: 5.65, z: -21.25, yaw: 3.1416, hw: 4.42, hd: 1.15, h: 1.6 },
