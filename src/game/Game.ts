@@ -373,6 +373,10 @@ export class Game {
   private wallRoll = 0;                          // visual lean off the wall (rad, on chairTilt.z)
   private wallRollTarget = 0;
   private wallPromptShown = false;
+  // LIP TRICK state (see updateLip).
+  private lipping = false;
+  private lipTime = 0;
+  private lipPos = new THREE.Vector3();
   private wallCoachCache: number | null = null;
   private readonly VERT_TURN_RATE = 6.0;   // rad/s: the auto 180 takes ~0.5 s of a ~1 s vert air
   private vertCoping = new THREE.Vector3();
@@ -931,6 +935,7 @@ export class Game {
     this.trickAnimator?.releaseTrick();
     this.bailRecovery = 0.9;
     if (this.wallriding) { this.wallriding = false; this.wallRollTarget = 0; proceduralSounds.stopGrindLoop(); }
+    this.lipping = false;
 
     // A bail costs you the special, THPS-style.
     if (this.specialMeter > 0) {
@@ -1246,7 +1251,7 @@ export class Game {
       this.activeTrick = null;
       this.heldGrabId = null;
       this.endGrind();
-      this.wallriding = false; this.wallRollTarget = 0;
+      this.wallriding = false; this.wallRollTarget = 0; this.lipping = false;
       
       // Restart chase if active
       if (this.currentStoryLevel?.hasChaseMechanic) {
@@ -3891,6 +3896,7 @@ export class Game {
     this.grindSystem.updateCooldown(dt);
     this.updateGrind(dt, intent, speedNow);
     this.updateWallride(dt, intent);
+    this.updateLip(dt, intent);
 
     // ---- 5. MANUAL / REVERT / BALANCE -------------------------------------------------
     this.updateBalance(dt, intent, speedNow);
@@ -3911,7 +3917,7 @@ export class Game {
     }
 
     // ---- 6. MOVEMENT ------------------------------------------------------------------
-    if (!this.grindSystem.isGrinding() && !this.wallriding) {
+    if (!this.grindSystem.isGrinding() && !this.wallriding && !this.lipping) {
       this.applyMovement(intent, dt);
       this.grindParticles.update(dt, false);
     }
@@ -3919,7 +3925,7 @@ export class Game {
 
     // ---- 7. PHYSICS -------------------------------------------------------------------
     // A wallride, like a grind, moves the body itself (updateWallride) and skips the solver.
-    if (!this.grindSystem.isGrinding() && !this.wallriding) {
+    if (!this.grindSystem.isGrinding() && !this.wallriding && !this.lipping) {
       this.physics.step(dt);
     }
 
@@ -4384,6 +4390,58 @@ export class Game {
     this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
     const spark = np.clone().addScaledVector(nn, -WALL_DIST).setY(np.y - 0.4);
     this.grindParticles.update(dt, true, spark, this.wallT, s);
+  }
+
+  /**
+   * LIP TRICK — go straight up a quarter pipe, press E at the lip, and the chair stalls on the
+   * coping (Axle Stall) for as long as you hold it (up to 2.5 s). Let go of E, or press Space,
+   * and it drops back in facing down the ramp. Scored by the hold. Only for a STRAIGHT vert
+   * air: with speed along the wall, E catches the coping as a grind instead (updateGrind runs
+   * first and wins).
+   */
+  private updateLip(dt: number, intent: ControlIntent): void {
+    if (!this.lipping) {
+      if (!intent.grindEdge || !this.vertAir || !this.playerState.isAirborne) return;
+      if (this.grindSystem.isGrinding() || this.wallriding || this.bailRecovery > 0) return;
+      const pos = this.physics.getPosition(this.chairBody);
+      const vel = this.physics.getVelocity(this.chairBody);
+      const n = this.vertNormal;
+      const along = Math.hypot(vel.x - n.x * (vel.x * n.x + vel.z * n.z), vel.z - n.z * (vel.x * n.x + vel.z * n.z));
+      if (along > 2.5) return;
+      if (Math.abs(pos.y - this.vertCoping.y) > 1.3) return;       // at the lip, not high above it
+      this.lipping = true;
+      this.lipTime = 0;
+      this.lipPos.set(this.vertCoping.x - n.x * 0.1, this.vertCoping.y + 0.3, this.vertCoping.z - n.z * 0.1);
+      const face = Math.atan2(-n.x, -n.z);                          // nose to the wall, up and over
+      this.airAlignDegrees += Math.abs(wrapPi(face - yawOf(this.chair.quaternion))) * (180 / Math.PI);
+      this.physics.setRotationY(this.chairBody, face);
+      this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+      this.turnRate = 0; this.turnCommand = 0;
+      this.score.addTrick({ id: 'axle_stall', name: 'Axle Stall', basePoints: 350, kind: 'grind' });
+      this.goals?.notifyTrickAt('axle_stall', this.zoneIdAtPlayer());
+      this.trickAnimator?.playTrick('50_50', 'grind', 0);
+      proceduralSounds.playGrindStart();
+      return;
+    }
+    this.lipTime += dt;
+    const release = !intent.grindHeld || intent.olliePopped || this.lipTime > 2.5 || this.bailRecovery > 0;
+    if (!release) {
+      this.physics.setPosition(this.chairBody, this.lipPos);
+      this.physics.setVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+      return;
+    }
+    // DROP BACK IN: turn round to face down the ramp and fall onto the transition.
+    this.lipping = false;
+    this.trickAnimator?.releaseTrick();
+    const n = this.vertNormal;
+    const face = Math.atan2(n.x, n.z);
+    this.airAlignDegrees += Math.abs(wrapPi(face - yawOf(this.chair.quaternion))) * (180 / Math.PI);
+    this.physics.setRotationY(this.chairBody, face);
+    this.physics.setPosition(this.chairBody, new THREE.Vector3(this.lipPos.x + n.x * 0.35, this.lipPos.y, this.lipPos.z + n.z * 0.35));
+    this.physics.setVelocity(this.chairBody, new THREE.Vector3(n.x * 2.0, -2.5, n.z * 2.0));
+    if (this.lipTime >= 0.4 && this.bailRecovery <= 0) {
+      this.score.addTrick({ id: 'lip_hold', name: `Held ${this.lipTime.toFixed(1)}s`, basePoints: Math.round(250 * this.lipTime), kind: 'grind' });
+    }
   }
 
   /** Close a grind without bailing. The combo stays open. */
