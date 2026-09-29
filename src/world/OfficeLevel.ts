@@ -1049,11 +1049,34 @@ export function buildOfficeInterior(opts: OfficeInteriorOptions = {}): OfficeInt
     // partition across each free corner turns the hit into a deflection (and a grind). Corners
     // with a quarter pipe running into them are left alone.
     const CH = 4.0;
+    const planterSoilMat = new THREE.MeshStandardMaterial({ color: 0x4a3b2c, roughness: 1.0 });
     for (const [sx, sz] of [[-1, 1], [1, 1], [-1, -1], [1, -1]] as [number, number][]) {
       const cx = sx * halfW, cz = sz * halfD;
       const clash = items.some((it) => it.type === 'qp' && Math.abs(it.x - cx) < it.hw + CH + 0.5 && Math.abs(it.z - cz) < CH + 2);
       if (clash) continue;
       runWall(cx - sx * CH, cz, cx, cz - sz * CH, { grind: true });
+      // Fill the dead triangle behind it to the cap height. An ollie over the partition used to
+      // drop you into a 4 m pocket with no run-up to ollie back out; now you land on a planter
+      // deck level with the cap and roll straight back off it.
+      {
+        const T = PART_H - 0.02;
+        const tri: [number, number][] = [[cx, cz], [cx - sx * CH, cz], [cx, cz - sz * CH]];
+        const v: number[] = [];
+        for (const y of [0, T]) for (const [x, z] of tri) v.push(x, y, z);
+        const idx = [0, 1, 2, 3, 5, 4, 0, 3, 4, 0, 4, 1, 1, 4, 5, 1, 5, 2, 2, 5, 3, 2, 3, 0];
+        acc.colliders.push({ position: new THREE.Vector3(0, 0, 0), halfExtents: new THREE.Vector3(CH / 2, T / 2, CH / 2), rotationY: 0,
+          trimesh: { vertices: new Float32Array(v), indices: new Uint32Array(idx) } });
+        const top = new THREE.BufferGeometry();
+        top.setAttribute('position', new THREE.Float32BufferAttribute(v.slice(9), 3));
+        top.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, CH / 2, 0, 0, CH / 2], 2));
+        top.setAttribute('uv1', top.getAttribute('uv'));
+        top.setIndex(sx * sz > 0 ? [0, 2, 1] : [0, 1, 2]); top.computeVertexNormals();
+        const soil = new THREE.Mesh(top, planterSoilMat); soil.receiveShadow = true; acc.staticProps.push(soil);
+        for (const [f1, f2] of [[0.22, 0.22], [0.5, 0.18], [0.18, 0.5]]) {
+          place(acc, makePottedPlant({ seed: 5200 + Math.round(cx * 3 + cz * 7 + f1 * 10) }),
+            cx - sx * CH * f1, T, cz - sz * CH * f2, 0, { collide: false });
+        }
+      }
     }
 
     // CORNER WRAPS. A quarter pipe that runs to within a metre of a side wall is a trap: carve
