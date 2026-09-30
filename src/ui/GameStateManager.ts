@@ -1589,8 +1589,11 @@ export class GameStateManager {
       height: 100%;
       display: flex;
       flex-direction: column;
-      justify-content: center;
+      justify-content: safe center;
       align-items: center;
+      overflow-y: auto;
+      box-sizing: border-box;
+      padding: 24px 16px;
       background: rgba(0, 0, 0, 0.95);
       z-index: 1000;
       pointer-events: auto;
@@ -1608,7 +1611,7 @@ export class GameStateManager {
       <div style="
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 20px 60px;
+        gap: 12px 48px;
         font-family: 'Kanit', sans-serif;
         max-width: 700px;
       ">
@@ -1650,6 +1653,9 @@ export class GameStateManager {
 
         <div style="text-align: right; color: #FFD700; font-size: 16px;">S then W</div>
         <div style="color: #fff; font-size: 16px;">Manual (balance with W / S)</div>
+
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">Q + R</div>
+        <div style="color: #fff; font-size: 16px;">Special (when the meter is full)</div>
 
         <div style="text-align: right; color: #FFD700; font-size: 16px;">Mouse Drag</div>
         <div style="color: #fff; font-size: 16px;">Rotate Camera</div>
