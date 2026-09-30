@@ -1622,10 +1622,19 @@ export class GameStateManager {
         <div style="color: #fff; font-size: 16px;">Turn Left / Right</div>
         
         <div style="text-align: right; color: #FFD700; font-size: 16px;">SPACE</div>
-        <div style="color: #fff; font-size: 16px;">Jump (Ollie)</div>
+        <div style="color: #fff; font-size: 16px;">Jump (Ollie) &mdash; hold for height</div>
         
         <div style="text-align: right; color: #FFD700; font-size: 16px;">E near rail</div>
         <div style="color: #fff; font-size: 16px;">Grind (hold near a rail or ledge)</div>
+
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">E beside a wall (in air)</div>
+        <div style="color: #fff; font-size: 16px;">Wallride &mdash; SPACE for a Wallie</div>
+
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">E at a ramp's lip</div>
+        <div style="color: #fff; font-size: 16px;">Axle Stall (let go to drop in)</div>
+
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">A / D in a vert air</div>
+        <div style="color: #fff; font-size: 16px;">Transfer to the next ramp</div>
         
         <div style="text-align: right; color: #FFD700; font-size: 16px;">Q + W/A/S/D</div>
         <div style="color: #fff; font-size: 16px;">Flip Tricks (in air)</div>
