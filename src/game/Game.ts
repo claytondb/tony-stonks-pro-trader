@@ -4266,6 +4266,7 @@ export class Game {
     const WALL_DIST = 0.47;        // chair capsule radius 0.4 + a skin
     if (!this.wallriding) {
       this.wallRollTarget = 0;
+      if (this.tryWallplant(intent)) return;
       const coaching = this.wallCoachLeft() > 0;
       const hidePrompt = () => { if (this.wallPromptShown) { this.wallPromptShown = false; this.hud?.setGrindPrompt('none'); } };
       if ((!intent.grind && !coaching) || this.wallCooldown > 0 || this.bailRecovery > 0) { hidePrompt(); return; }
@@ -4444,6 +4445,44 @@ export class Game {
     if (this.lipTime >= 0.4 && this.bailRecovery <= 0) {
       this.score.addTrick({ id: 'lip_hold', name: `Held ${this.lipTime.toFixed(1)}s`, basePoints: Math.round(250 * this.lipTime), kind: 'grind' });
     }
+  }
+
+  /**
+   * WALLPLANT — flying at a wall nose-first, press Space just before you hit it: plant on the
+   * wall and kick off it, back the way you came, with a fresh pop. What used to be a dead stop
+   * against a wall becomes a trick that keeps the line going.
+   */
+  private tryWallplant(intent: ControlIntent): boolean {
+    if (!intent.olliePopped || !this.playerState.isAirborne || this.vertAir) return false;
+    if (this.grindSystem.isGrinding() || this.bailRecovery > 0 || this.wallCooldown > 0) return false;
+    const pos = this.physics.getPosition(this.chairBody);
+    const vel = this.physics.getVelocity(this.chairBody);
+    const hs = Math.hypot(vel.x, vel.z);
+    if (hs < 4) return false;
+    const d = { x: vel.x / hs, y: 0, z: vel.z / hs };
+    // 2.2 m of reach from the chair's centre: ~0.15 s of warning at cruise, which is the window.
+    const hit = this.physics.castRayNormal({ x: pos.x, y: pos.y - 0.1, z: pos.z }, d, 2.2, this.chairBody, true);
+    if (!hit || Math.abs(hit.normal.y) > 0.3) return false;
+    const n = new THREE.Vector3(hit.normal.x, 0, hit.normal.z).normalize();
+    if (-(n.x * d.x + n.z * d.z) < 0.75) return false;              // head-on-ish (within ~40 deg)
+    const floor = this.physics.raycastGround(new THREE.Vector3(pos.x, pos.y, pos.z), 3, this.chairBody);
+    if (floor && pos.y - floor.point.y < 0.95) return false;
+    // Reflect the line off the wall, keep 80% of it, and pop.
+    const vn = vel.x * n.x + vel.z * n.z;
+    const rx = (vel.x - 2 * vn * n.x) * 0.8, rz = (vel.z - 2 * vn * n.z) * 0.8;
+    this.physics.setVelocity(this.chairBody, new THREE.Vector3(rx, 7.5 * this.jumpMultiplier, rz));
+    const face = Math.atan2(rx, rz);
+    this.airAlignDegrees += Math.abs(wrapPi(face - yawOf(this.chair.quaternion))) * (180 / Math.PI);
+    this.physics.setRotationY(this.chairBody, face);
+    this.physics.setAngularVelocity(this.chairBody, new THREE.Vector3(0, 0, 0));
+    this.turnRate = 0; this.turnCommand = 0;
+    this.olliePopHandledAt = this.simTime;
+    this.ollieLiftLeft = this.OLLIE_LIFT_SECONDS;
+    this.wallCooldown = 0.3;
+    this.score.addTrick({ id: 'wallplant', name: 'Wallplant', basePoints: 300, kind: 'flip' });
+    proceduralSounds.playOllie(1);
+    if (this.chair) this.landingParticles?.trickPop(this.chair.position, 0.5);
+    return true;
   }
 
   /** Close a grind without bailing. The combo stays open. */

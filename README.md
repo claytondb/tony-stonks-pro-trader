@@ -24,6 +24,7 @@ A Tony Hawk-style skating game featuring a burned-out office worker escaping fin
 ### Grinding and wallriding
 - Ride alongside a rail, ledge, planter or coping and hold **E** to lock on; **A/D** balance, **Space** pops off.
 - Jump beside a wall and hold **E** to ride it; **Space** for a Wallie.
+- Flying nose-first at a wall, tap **Space** just before it for a **Wallplant** (kick off, back the way you came).
 - Go straight up a quarter pipe and press **E** at the lip for an **Axle Stall**; let go to drop back in.
 
 ### Combos

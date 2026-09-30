@@ -1633,6 +1633,9 @@ export class GameStateManager {
         <div style="text-align: right; color: #FFD700; font-size: 16px;">E beside a wall (in air)</div>
         <div style="color: #fff; font-size: 16px;">Wallride &mdash; SPACE for a Wallie</div>
 
+        <div style="text-align: right; color: #FFD700; font-size: 16px;">SPACE flying at a wall</div>
+        <div style="color: #fff; font-size: 16px;">Wallplant (kick off it)</div>
+
         <div style="text-align: right; color: #FFD700; font-size: 16px;">E at a ramp's lip</div>
         <div style="color: #fff; font-size: 16px;">Axle Stall (let go to drop in)</div>
 
