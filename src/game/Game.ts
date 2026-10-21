@@ -32,7 +32,7 @@ import { EnvironmentRig, type EnvPreset } from '../rendering/Environment';
 import { PostFX } from '../rendering/PostFX';
 import { MaterialLibrary } from '../materials/MaterialLibrary';
 import { configureFromRenderer, warmup } from '../materials/ProceduralTextures';
-import { buildGarageInterior, garageMinimapFootprints, garageScatterOk } from '../world/GarageLevel';
+import { BUILT_LEVELS } from '../world/LevelRegistry';
 import { buildOfficeInterior, disposeOfficeInterior, officeMoverY, type OfficeInterior, type OfficeMover } from '../world/OfficeLevel';
 import { batchStaticLevelObjects, makeFilingCabinet, makeGrindRail, makeKickerRamp, makePrinter, makeTrashCan, makeWaterCooler } from '../world/OfficeProps';
 import { buildOfficeChair, spinCasters, type ChairParts } from '../world/ChairModel';
@@ -2236,7 +2236,7 @@ export class Game {
     this.hud?.reset();
     this.hud?.setMinimapLayout(this.isOfficeLevel()
       ? officeMinimapFootprints()
-      : this.currentLevelId === 'ch1_garage' ? garageMinimapFootprints()
+      : BUILT_LEVELS[this.currentLevelId] ? BUILT_LEVELS[this.currentLevelId].minimap()
       : minimapFootprints(this.levelObjects));
     this.hud?.setScore(this.score.balance);
     this.hud?.setGoals(this.goals ? this.goals.progress : []);
@@ -2264,7 +2264,7 @@ export class Game {
       [/plant|ficus/i, 'pottedPlant'],
       [/box|carton/i, 'cardboardBox'],
       [/mug|coffee/i, 'mug'],
-      [/bin|trash|waste/i, 'trashCan'],
+      [/bin|trash|waste|bucket/i, 'trashCan'],
       [/chair/i, 'chairEmpty'],
       [/cone/i, 'coneStack'],
     ];
@@ -2276,7 +2276,8 @@ export class Game {
       defs.push({
         kind,
         id: t.id,
-        position: new THREE.Vector3(t.position[0], groundY, t.position[2]),
+        // Authored height counts (stairwell landings, decks); on the floor it is 0 anyway.
+        position: new THREE.Vector3(t.position[0], Math.max(groundY, t.position[1] ?? 0), t.position[2]),
         rotationY: 0,
       });
     }
@@ -2288,7 +2289,7 @@ export class Game {
     const scattered = scatterDestructibles(
       new THREE.Vector3(spawnPos.x, groundY, spawnPos.z),
       half * 2, half * 2,
-      this.isOfficeLevel() ? 30 : this.currentLevelId === 'ch1_garage' ? 400 : 20,
+      this.isOfficeLevel() ? 30 : BUILT_LEVELS[this.currentLevelId] ? (BUILT_LEVELS[this.currentLevelId].scatterCandidates ?? 0) : 20,
       seed,
     );
     if (this.isOfficeLevel()) {
@@ -2296,8 +2297,9 @@ export class Game {
       // and on the rail approaches — the obstacles nobody placed. Keep the ones that sit off
       // the lines levelsim laid out, and at most a dozen of those.
       defs.push(...scattered.filter((d) => !inSkateLane(CUBICLE_CHAOS_LAYOUT, d.position.x, d.position.z)).slice(0, 12));
-    } else if (this.currentLevelId === 'ch1_garage') {
-      defs.push(...scattered.filter((d) => garageScatterOk(d.position.x, d.position.z)).slice(0, 10));
+    } else if (BUILT_LEVELS[this.currentLevelId]) {
+      const ok = BUILT_LEVELS[this.currentLevelId].scatterOk;
+      if (ok) defs.push(...scattered.filter((d) => ok(d.position.x, d.position.z)).slice(0, 10));
     } else {
       defs.push(...scattered);
     }
@@ -2496,8 +2498,8 @@ export class Game {
     // ceiling, cubicle farm) instead of a bare ground quad under open sky.
     if (this.isOfficeLevel()) {
       this.buildOfficeFloorplate();
-    } else if (this.currentLevelId === 'ch1_garage') {
-      this.installInterior(buildGarageInterior());
+    } else if (BUILT_LEVELS[this.currentLevelId]) {
+      this.installInterior(BUILT_LEVELS[this.currentLevelId].build());
     } else {
       this.createLevelGround(groundSize, groundColor);
     }

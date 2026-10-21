@@ -46,6 +46,7 @@ export type GoalKind =
 
 /** World-space position, matching the [x, y, z] tuples used everywhere in level data. */
 import { OFFICE_LETTERS, OFFICE_GAPS, OFFICE_COOLERS, OFFICE_CASH, OFFICE_HIDDEN } from '../world/CubicleChaosGoals';
+import { STAIR_LETTERS, STAIR_BUCKETS, STAIR_HIDDEN, STAIR_GAPS, STAIR_EXIT_ZONE } from '../world/StairwellLevel';
 import { GARAGE_LETTERS, GARAGE_GAPS, GARAGE_CONES, GARAGE_HIDDEN, GARAGE_EXIT_ZONE } from '../world/GarageLevel';
 
 export type Vec3 = [number, number, number];
@@ -1307,7 +1308,9 @@ register({
 });
 
 // =========================================================================
-// STORY 2 — Stairwell Descent. A 50-floor helix from y=50 down to y=0, bounds +/-18.
+// STORY 2 — Stairwell Descent. src/world/StairwellLevel.ts: eight stacked switchback flights
+// from the top landing (18.4 m) to the lobby door, a U-bank on every landing, railings over the
+// well. Positions come from that file.
 // =========================================================================
 register({
   levelId: 'story_2_stairwell',
@@ -1318,32 +1321,17 @@ register({
   goals: [
     ...scoreTierGoals(12000, 95000, 195000, { high: 1750, pro: 4500, sick: 11000 }),
 
-    lettersGoal(
-      letters([
-        [0, 52.0, -10], // S — over the top rail
-        [8, 42.0, 0], // T — floor 45 rail
-        [0, 32.0, 10], // O — floor 40 rail
-        [-8, 22.0, 0], // N — floor 35 rail
-        [0, 12.0, -10], // K — floor 30 rail
-        [0, 3.0, 5], // S — the last landing
-      ]),
-      3500
-    ),
+    lettersGoal(letters(STAIR_LETTERS), 3500),
 
-    hiddenFileGoal([5, 11.0, -5], 5000, 'on the floor-30 ramp ledge'),
+    hiddenFileGoal(STAIR_HIDDEN, 5000, 'high in the corner of a landing bank'),
 
-    smashGoal('Smash 4 fire buckets on the landings', 4, 2000, [
-      { id: 'bucket_50', label: 'Fire Bucket', position: [-4, 50, -8] },
-      { id: 'bucket_45', label: 'Fire Bucket', position: [6, 40, 3] },
-      { id: 'bucket_40', label: 'Fire Bucket', position: [3, 30, 8] },
-      { id: 'bucket_35', label: 'Fire Bucket', position: [-6, 20, -3] },
-      { id: 'bucket_30', label: 'Fire Bucket', position: [4, 10, -8] },
-    ]),
+    smashGoal('Smash 4 fire buckets on the landings', 4, 2000,
+      STAIR_BUCKETS.map((p, i) => ({ id: `bucket_${49 - i}`, label: 'Fire Bucket', position: p }))),
 
     trickAtGoal(
       'grind_handrails',
       'Grind 5 stairwell handrails',
-      { id: 'stairwell_shaft', label: 'the stairwell', center: [0, 25, 0], radius: 20, height: 56 },
+      { id: 'stairwell_shaft', label: 'the stairwell', center: [0, 10, 0], radius: 24, height: 30 },
       GRIND_TRICK_IDS,
       5,
       2500
@@ -1351,22 +1339,14 @@ register({
 
     comboGoal(70000, 3500),
 
-    gapListGoal(
-      [
-        { id: 'floor_45_gap', name: 'Floor 45 Drop', bonus: 750, from: [0, 50, -6], to: [8, 40, 0], radius: 5 },
-        { id: 'floor_40_gap', name: 'Landing Leap', bonus: 900, from: [8, 40, 4], to: [0, 30, 10], radius: 5 },
-        { id: 'floor_35_gap', name: 'Switchback Gap', bonus: 1100, from: [0, 30, 4], to: [-8, 20, 0], radius: 5 },
-        { id: 'lobby_drop', name: 'Ten Floor Drop', bonus: 2000, from: [0, 10, -10], to: [0, 2, 5], radius: 6 },
-      ],
-      3000
-    ),
+    gapListGoal(STAIR_GAPS, 3000),
 
     escapeReachGoal('Reach the lobby', {
       id: 'lobby_exit',
       label: 'the lobby door',
-      center: [0, 0.8, 10],
-      radius: 8,
-      height: 10,
+      center: STAIR_EXIT_ZONE.center,
+      radius: STAIR_EXIT_ZONE.radius,
+      height: STAIR_EXIT_ZONE.height,
     }, 2500),
 
     timeGoal('under', 60, 3000, 'Hit the lobby in under 60 seconds'),

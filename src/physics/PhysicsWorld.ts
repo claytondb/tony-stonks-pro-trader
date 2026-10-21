@@ -955,8 +955,10 @@ export class PhysicsWorld {
     // This makes movement follow the ramp angle
     const up = new THREE.Vector3(0, 1, 0);
     
-    // If surface is flat, just return forward
-    if (surfaceNormal.dot(up) > 0.99) {
+    // If surface is flat, just return forward. (This used to be > 0.99, i.e. anything under
+    // 8 degrees counted as flat: on a gentle ramp the chair was driven level, lifted off the
+    // slope and flickered between ground and air all the way down — the stairwell flights.)
+    if (surfaceNormal.dot(up) > 0.99995) {
       return forward.clone();
     }
     

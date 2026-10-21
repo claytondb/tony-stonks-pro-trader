@@ -422,8 +422,6 @@ const LEVEL_1_OFFICE: StoryLevelData = {
   ]
 };
 
-const LEVEL_2_PENS = holdingPens([-15, -18], 22.5, 'wall_indoor');
-
 const LEVEL_2_STAIRWELL: StoryLevelData = {
   id: 'story_2_stairwell',
   chapter: 1,
@@ -453,49 +451,21 @@ const LEVEL_2_STAIRWELL: StoryLevelData = {
   groundColor: '#444455',
 
   spawnPoint: {
-    position: [-15, 0.6, -18],   // Top landing, facing down the east handrail run
+    position: [-4.1, 19.0, -15.5],   // StairwellLevel.STAIR_SPAWN: the top landing, facing down flight 1
     rotation: 0
   },
 
   bounds: {
-    minX: -25,
-    maxX: 25,
-    minZ: -25,
-    maxZ: 25
+    minX: -7,
+    maxX: 7,
+    minZ: -19,
+    maxZ: 19
   },
 
   checkpoints: [],  // No checkpoints - it's one continuous descent
 
-  objects: [
-    // ---- the shaft ---------------------------------------------------------
-    { type: 'wall_indoor', position: [0, 5, 25], params: { width: 50, height: 10, depth: 1 } },
-    { type: 'wall_indoor', position: [0, 5, -25], params: { width: 50, height: 10, depth: 1 } },
-    { type: 'wall_indoor', position: [25, 5, 0], rotation: [0, 90, 0], params: { width: 50, height: 10, depth: 1 } },
-    { type: 'wall_indoor', position: [-25, 5, 0], rotation: [0, 90, 0], params: { width: 50, height: 10, depth: 1 } },
-    { type: 'ceiling_slab', position: [0, 10, 0], params: { width: 50, depth: 50 } },
-    { type: 'ceiling_panel', position: [-12.5, 9.5, -12.5], params: { width: 8, depth: 1.2 } },
-    { type: 'ceiling_panel', position: [12.5, 9.5, 12.5], params: { width: 8, depth: 1.2 } },
-    { type: 'ceiling_panel', position: [2.5, 9.5, 2.5], params: { width: 8, depth: 1.2 } },
-
-    // ---- the lanes, and the kickers and pads staged on the bay centres
-    // between them. Anything that would end up buried in a blockhouse is
-    // dropped rather than left inside it.
-    ...clearOf([...skateFloor(24, 5, 12), ...bayStaging(5)], LEVEL_2_PENS),
-
-    // ---- the lift core the switchbacks wrap: a blockhouse standing on the police patrol post
-    // that lands inside the floorplate. See THE HOLDING PENS above.
-    ...LEVEL_2_PENS,
-
-    // ---- landings, stairs and litter, all on bay centres -------------------
-    { type: 'stairs', position: [-17.5, 0, -17.5], rotation: [0, 45, 0], params: { steps: 3 } },
-    { type: 'stairs', position: [17.5, 0, 17.5], rotation: [0, 225, 0], params: { steps: 3 } },
-    { type: 'stairs', position: [0, 0, 24], rotation: [0, 180, 0], params: { steps: 3 } },
-    { type: 'exit_sign', position: [0, 6, 24.4], params: { width: 5, height: 1.4 } },
-    { type: 'trash_can', position: [-21.25, 0, 7.5] },
-    { type: 'trash_can', position: [21.25, 0, -7.5] },
-    { type: 'trash_can', position: [-7.5, 0, 21.25] },
-    { type: 'trash_can', position: [7.5, 0, -21.25] },
-  ],
+  // Built by src/world/StairwellLevel.ts: eight stacked switchback flights, 18.4 m of descent.
+  objects: [],
 
   goals: [
     { type: 'escape', target: 1, description: 'Reach the lobby!', reward: 2500 },
