@@ -75,7 +75,7 @@ for (let a = 0; a < AGENTS; a++) {
     if (hit && !inHit) { tot.hardHit++; tot.hits.push([+p.x.toFixed(1), +p.z.toFixed(1), +prevSpeed.toFixed(1), +sp2.toFixed(1), +(h * 57.3).toFixed(0)]); }
     inHit = hit;
     slowT = sp2 < 1 ? slowT + DT : 0;
-    if (slowT > 1.5) { tot.stuck++; slowT = 0; }
+    if (slowT > 1.5) { tot.stuck++; slowT = 0; (tot.stuckAt ??= []).push([+p.x.toFixed(1), +p.y.toFixed(2), +p.z.toFixed(1), g.playerState.isGrounded ? "G" : "A", g.bailRecovery > 0 ? "bail" : ""]); }
     if (t - lastTrick < 2.6) tot.comboTime += DT;
     tot.dist += sp2 * DT;
     if (i % 30 === 0) tot.heat.push([+p.x.toFixed(1), +p.z.toFixed(1)]);
@@ -89,5 +89,5 @@ for (let a = 0; a < AGENTS; a++) {
   tot.seconds += SECONDS;
 }
 const pm = (k) => +(tot[k] / (tot.seconds / 60)).toFixed(2);
-return { perMin: { air: pm('air'), qpAir: pm('qpAir'), grind: pm('grind'), manual: pm('manual'), tricks: +((tot.air + tot.grind + tot.manual) / (tot.seconds / 60)).toFixed(2), hardHit: pm('hardHit'), stuck: pm('stuck'), bails: pm('bails') },
+return { stuckAt: tot.stuckAt, perMin: { air: pm('air'), qpAir: pm('qpAir'), grind: pm('grind'), manual: pm('manual'), tricks: +((tot.air + tot.grind + tot.manual) / (tot.seconds / 60)).toFixed(2), hardHit: pm('hardHit'), stuck: pm('stuck'), bails: pm('bails') },
   comboShare: +(tot.comboTime / tot.seconds).toFixed(3), meanSpeed: +(tot.dist / tot.seconds).toFixed(2), heat: tot.heat, hits: tot.hits };

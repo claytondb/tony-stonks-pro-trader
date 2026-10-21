@@ -4954,6 +4954,20 @@ export class Game {
           ));
         }
       }
+      // TOUCHDOWN ON THE FLAT KILLS THE FALL. A landing used to leave the fall speed in the
+      // body: the capsule sank ~0.2 m into the floor slab, the step-up feeler (now below the
+      // floor) read the slab as a kerb and lifted the chair back out, and the next step sank it
+      // again — a quarter-second of the rider buried to the axles on every drop, while the
+      // fall speed grew to -18 m/s. Transitions keep theirs (the landing code turns it into
+      // speed down the ramp).
+      if (this.playerState.isGrounded && vNormal < -0.5 && perpGap < 0.04 && this.surfaceAngle < this.TRANSITION_ANGLE) {
+        const v2 = this.physics.getVelocity(this.chairBody);
+        const n = this.surfaceNormal;
+        const vn2 = v2.x * n.x + v2.y * n.y + v2.z * n.z;
+        if (vn2 < 0) {
+          this.physics.setVelocity(this.chairBody, new THREE.Vector3(v2.x - n.x * vn2, v2.y - n.y * vn2, v2.z - n.z * vn2));
+        }
+      }
     } else {
       // No ground detected - airborne
       this.playerState.isGrounded = false;
