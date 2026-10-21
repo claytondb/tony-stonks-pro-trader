@@ -234,48 +234,20 @@ export const LEVELS: LevelData[] = [
     groundColor: '#444444',
     
     spawnPoint: {
-      position: [0, 0.5, -40],
+      // GarageLevel.GARAGE_SPAWN: the south end of the west aisle, facing north up the loop.
+      position: [-10, 0.5, -22],
       rotation: 0
     },
     
     bounds: {
-      minX: -45,
-      maxX: 45,
-      minZ: -45,
-      maxZ: 45
+      minX: -19.5,
+      maxX: 19.5,
+      minZ: -52,
+      maxZ: 35
     },
     
-    objects: [
-      // Car rows (obstacles and grind surfaces)
-      { type: 'car', position: [-20, 0, -30], rotation: [0, 0, 0] },
-      { type: 'car', position: [-20, 0, -20], rotation: [0, 0, 0] },
-      { type: 'car', position: [-20, 0, -10], rotation: [0, 0, 0] },
-      { type: 'car', position: [-20, 0, 0], rotation: [0, 0, 0] },
-      
-      { type: 'car', position: [20, 0, -30], rotation: [0, 180, 0] },
-      { type: 'car', position: [20, 0, -20], rotation: [0, 180, 0] },
-      { type: 'car', position: [20, 0, -10], rotation: [0, 180, 0] },
-      { type: 'car', position: [20, 0, 0], rotation: [0, 180, 0] },
-      
-      // Concrete barriers (rails)
-      { type: 'rail', position: [0, 0, -35], params: { length: 30 } },
-      { type: 'rail', position: [0, 0, -15], params: { length: 30 } },
-      { type: 'rail', position: [0, 0, 5], params: { length: 30 } },
-      
-      // Ramps
-      { type: 'ramp', position: [-10, 0, 25], rotation: [0, 0, 0] },
-      { type: 'ramp', position: [10, 0, 25], rotation: [0, 0, 0] },
-      
-      // Quarter pipes at edges
-      { type: 'quarter_pipe', position: [-40, 0, 0], rotation: [0, 90, 0] },
-      { type: 'quarter_pipe', position: [40, 0, 0], rotation: [0, -90, 0] },
-      
-      // Cones and barriers
-      { type: 'cone', position: [-5, 0, 30] },
-      { type: 'cone', position: [0, 0, 30] },
-      { type: 'cone', position: [5, 0, 30] },
-      { type: 'barrier', position: [0, 0, 35], params: { length: 10 } },
-    ],
+    // The garage is built by src/world/GarageLevel.ts (columns, bays, cars, banks, exit ramp).
+    objects: [],
     
     goals: [
       { type: 'score', target: 10000, description: 'Score 10,000 points', reward: 2000 },

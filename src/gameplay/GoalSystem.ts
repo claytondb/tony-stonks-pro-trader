@@ -46,6 +46,7 @@ export type GoalKind =
 
 /** World-space position, matching the [x, y, z] tuples used everywhere in level data. */
 import { OFFICE_LETTERS, OFFICE_GAPS, OFFICE_COOLERS, OFFICE_CASH, OFFICE_HIDDEN } from '../world/CubicleChaosGoals';
+import { GARAGE_LETTERS, GARAGE_GAPS, GARAGE_CONES, GARAGE_HIDDEN, GARAGE_EXIT_ZONE } from '../world/GarageLevel';
 
 export type Vec3 = [number, number, number];
 
@@ -1933,8 +1934,9 @@ register({
 });
 
 // =========================================================================
-// FREE SKATE — ch1_garage. 90x90 parking deck, car rows at x = +/-20,
-// concrete barrier rails across z, quarter pipes on the side walls.
+// FREE SKATE — ch1_garage. The underground level built by src/world/GarageLevel.ts: a loop
+// round a parked-car island (west aisle north, the north U-bank, east aisle south, the
+// cross-through), with the exit ramp out of the south wall. Positions come from that file.
 // =========================================================================
 register({
   levelId: 'ch1_garage',
@@ -1945,52 +1947,35 @@ register({
   goals: [
     ...scoreTierGoals(12000, 105000, 200000, { high: 1750, pro: 4500, sick: 11000 }),
 
-    lettersGoal(
-      letters([
-        [-20, 2.5, -30], // S — on the first parked car
-        [0, 2.0, -35], // T — over the north barrier rail
-        [20, 2.5, -10], // O — on an east-row car
-        [0, 2.0, -15], // N — the middle barrier rail
-        [-38, 4.0, 0], // K — in the west quarter pipe
-        [0, 2.0, 5], // S — the south barrier rail
-      ]),
-      2500
-    ),
+    lettersGoal(letters(GARAGE_LETTERS), 2500),
 
-    hiddenFileGoal([38, 4.0, 0], 4000, 'in the east quarter pipe'),
+    hiddenFileGoal(GARAGE_HIDDEN, 4000, 'high in the corner of the north bank'),
 
-    smashGoal('Flatten the cone line', 3, 1500, [
-      { id: 'cone_w', label: 'Traffic Cone', position: [-5, 0, 30] },
-      { id: 'cone_c', label: 'Traffic Cone', position: [0, 0, 30] },
-      { id: 'cone_e', label: 'Traffic Cone', position: [5, 0, 30] },
-    ]),
+    smashGoal('Flatten the cone line', 3, 1500, GARAGE_CONES.map((p, i) => ({
+      id: ['cone_w', 'cone_c', 'cone_e'][i], label: 'Traffic Cone', position: p,
+    }))),
 
     trickAtGoal(
       'grind_barriers',
       'Grind the concrete barriers',
-      { id: 'concrete_barriers', label: 'the concrete barriers', center: [0, 1.0, -15], radius: 40, height: 8 },
+      { id: 'concrete_barriers', label: 'the concrete barriers', center: [0, 1.0, -8], radius: 50, height: 10 },
       GRIND_TRICK_IDS,
       5,
       2000
     ),
 
+    { id: 'garage_wallrides', kind: 'trickAt', description: 'Wallride 3 times', target: 3, reward: 1500, trickIds: ['wallride'] },
+
     comboGoal(40000, 2500),
 
-    gapListGoal(
-      [
-        { id: 'row_gap', name: 'Parking Row Gap', bonus: 800, from: [-20, 0, -25], to: [-20, 0, -15], radius: 5 },
-        { id: 'aisle_gap', name: 'Garage Aisle Gap', bonus: 1000, from: [-10, 0, 25], to: [10, 0, 25], radius: 6 },
-        { id: 'pipe_transfer', name: 'Pipe Transfer', bonus: 1500, from: [-38, 0, 0], to: [38, 0, 0], radius: 8 },
-      ],
-      2500
-    ),
+    gapListGoal(GARAGE_GAPS, 2500),
 
     escapeReachGoal('Reach the exit ramp', {
       id: 'exit_ramp',
       label: 'the exit ramp',
-      center: [0, 1, 36],
-      radius: 12,
-      height: 10,
+      center: GARAGE_EXIT_ZONE.center,
+      radius: GARAGE_EXIT_ZONE.radius,
+      height: GARAGE_EXIT_ZONE.height,
     }, 3000),
 
     timeGoal('under', 120, 2000, 'Clear the garage in under 2 minutes'),
