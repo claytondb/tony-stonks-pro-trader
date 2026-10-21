@@ -340,8 +340,6 @@ const clearOf = (objs: LevelObject[], pens: LevelObject[], pad = 0.9): LevelObje
 // CHAPTER 1: THE ESCAPE
 // ===========================================
 
-const LEVEL_1_PENS = holdingPens([-20, -22], 28.5, 'wall_indoor');
-
 const LEVEL_1_OFFICE: StoryLevelData = {
   id: 'story_1_office',
   chapter: 1,
@@ -370,65 +368,28 @@ const LEVEL_1_OFFICE: StoryLevelData = {
   groundColor: '#8B8B8B',  // Medium gray carpet
 
   spawnPoint: {
-    position: [-20, 0.6, -22],  // In the west aisle, facing straight up a desk row
-    rotation: 0
+    position: [-6.2, 0.5, -8.6],  // the Cubicle Chaos spawn: facing the long rail across the atrium
+    rotation: 60
   },
 
   bounds: {
-    minX: -30,
-    maxX: 30,
-    minZ: -30,
-    maxZ: 30
+    minX: -49,
+    maxX: 49,
+    minZ: -23,
+    maxZ: 23
   },
 
   checkpoints: [
     {
-      position: [0, 0.6, 27],
+      position: [8, 4.9, 20.5],
       rotation: 0,
       name: 'Reached the stairwell',
       dialogue: ['TONY: There\'s the stairs! Time to ride!']
     }
   ],
 
-  objects: [
-    // ---- the room ---------------------------------------------------------
-    { type: 'wall_indoor', position: [0, 6, 31], params: { width: 62, height: 12, depth: 1 } },
-    { type: 'wall_indoor', position: [0, 6, -31], params: { width: 62, height: 12, depth: 1 } },
-    { type: 'wall_indoor', position: [31, 6, 0], rotation: [0, 90, 0], params: { width: 62, height: 12, depth: 1 } },
-    { type: 'wall_indoor', position: [-31, 6, 0], rotation: [0, 90, 0], params: { width: 62, height: 12, depth: 1 } },
-    { type: 'ceiling_slab', position: [0, 12, 0], params: { width: 62, depth: 62 } },
-    { type: 'ceiling_panel', position: [-17.5, 11.5, -17.5], params: { width: 8, depth: 1.2 } },
-    { type: 'ceiling_panel', position: [17.5, 11.5, -17.5], params: { width: 8, depth: 1.2 } },
-    { type: 'ceiling_panel', position: [-17.5, 11.5, 17.5], params: { width: 8, depth: 1.2 } },
-    { type: 'ceiling_panel', position: [17.5, 11.5, 17.5], params: { width: 8, depth: 1.2 } },
-    { type: 'ceiling_panel', position: [2.5, 11.5, 2.5], params: { width: 8, depth: 1.2 } },
-
-    // ---- the lanes, and the kickers and pads staged on the bay centres
-    // between them. Anything that would end up buried in a blockhouse is
-    // dropped rather than left inside it.
-    ...clearOf([...skateFloor(30, 5, 15), ...bayStaging(5)], LEVEL_1_PENS),
-
-    // ---- the server cabinet the aisle bends around: a blockhouse standing on the police patrol post
-    // that lands inside the floorplate. See THE HOLDING PENS above.
-    ...LEVEL_1_PENS,
-
-    // ---- scenery, all of it on bay centres ---------------------------------
-    { type: 'cubicle', position: [-27.5, 0, -12.5], params: { width: 3, depth: 3, height: 1.5 } },
-    { type: 'cubicle', position: [-27.5, 0, 12.5], params: { width: 3, depth: 3, height: 1.5 } },
-    { type: 'cubicle', position: [27.5, 0, -12.5], params: { width: 3, depth: 3, height: 1.5 } },
-    { type: 'cubicle', position: [27.5, 0, 12.5], params: { width: 3, depth: 3, height: 1.5 } },
-    { type: 'cubicle', position: [-12.5, 0, -27.5], params: { width: 3, depth: 3, height: 1.5 } },
-    { type: 'cubicle', position: [12.5, 0, 27.5], params: { width: 3, depth: 3, height: 1.5 } },
-    { type: 'filing_cabinet', position: [-27.5, 0, -27.5] },
-    { type: 'filing_cabinet', position: [27.5, 0, 27.5] },
-    { type: 'planter', position: [27.5, 0, -27.5] },
-    { type: 'planter', position: [-27.5, 0, 27.5] },
-
-    // ---- the way out: in the metre between the wall ledge and the wall,
-    // so the exit is a landmark and never an obstacle in a lane.
-    { type: 'stairs', position: [0, 0, 30], rotation: [0, 180, 0], params: { steps: 3 } },
-    { type: 'exit_sign', position: [0, 7, 30.4], params: { width: 6, height: 1.6 } },
-  ],
+  // Built by src/world/OfficeLevel.ts — the same building as Cubicle Chaos (see Game.isOfficeLevel).
+  objects: [],
 
   collectibles: [
     { type: 'document', position: [-6, 1.2, -14], value: 200 },

@@ -2234,7 +2234,7 @@ export class Game {
 
     // Reset HUD
     this.hud?.reset();
-    this.hud?.setMinimapLayout(this.currentLevelId === 'ch1_office'
+    this.hud?.setMinimapLayout(this.isOfficeLevel()
       ? officeMinimapFootprints()
       : this.currentLevelId === 'ch1_garage' ? garageMinimapFootprints()
       : minimapFootprints(this.levelObjects));
@@ -2288,10 +2288,10 @@ export class Game {
     const scattered = scatterDestructibles(
       new THREE.Vector3(spawnPos.x, groundY, spawnPos.z),
       half * 2, half * 2,
-      this.currentLevelId === 'ch1_office' ? 30 : this.currentLevelId === 'ch1_garage' ? 400 : 20,
+      this.isOfficeLevel() ? 30 : this.currentLevelId === 'ch1_garage' ? 400 : 20,
       seed,
     );
-    if (this.currentLevelId === 'ch1_office') {
+    if (this.isOfficeLevel()) {
       // Owner: "too chaotic". Thirty loose props dropped at random landed in the kicker lanes
       // and on the rail approaches — the obstacles nobody placed. Keep the ones that sit off
       // the lines levelsim laid out, and at most a dozen of those.
@@ -2494,7 +2494,7 @@ export class Game {
   private loadLevelObjects(objects: LevelObject[], groundSize: number, groundColor: string = '#555555'): void {
     // Enclosed office levels build a full interior shell (carpet, walls, suspended
     // ceiling, cubicle farm) instead of a bare ground quad under open sky.
-    if (this.currentLevelId === 'ch1_office') {
+    if (this.isOfficeLevel()) {
       this.buildOfficeFloorplate();
     } else if (this.currentLevelId === 'ch1_garage') {
       this.installInterior(buildGarageInterior());
@@ -2705,6 +2705,16 @@ export class Game {
     });
 
     this.installInterior(interior);
+  }
+
+  /**
+   * The office floorplate hosts two levels: Cubicle Chaos (free skate) and story chapter 1,
+   * Office Escape. The story level used to be its own 64 m grid of handrails — exactly the
+   * clutter the owner rejected for the free-skate office — so it now plays the same building
+   * with its own goals (see GoalSystem 'story_1_office').
+   */
+  private isOfficeLevel(): boolean {
+    return this.currentLevelId === 'ch1_office' || this.currentLevelId === 'story_1_office';
   }
 
   /** Add a built interior (office, garage) to the scene, physics and grind system. */

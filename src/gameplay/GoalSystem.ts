@@ -1258,8 +1258,9 @@ function register(set: LevelGoalSet): void {
 }
 
 // =========================================================================
-// STORY 1 — Office Escape. 390x390 floor, cubicle blocks at |x| = 70 and 130,
-// wide-open centre aisle, stairwell exit at z = +160.
+// STORY 1 — Office Escape. The Cubicle Chaos building (src/world/OfficeLevel.ts), played as
+// an escape: the SEC are on the ground floor and the fire exit to the stairwell is upstairs,
+// on the mezzanine's north wall. Positions come from the office's own goal constants.
 // =========================================================================
 register({
   levelId: 'story_1_office',
@@ -1270,66 +1271,38 @@ register({
   goals: [
     ...scoreTierGoals(10000, 90000, 190000, { high: 1500, pro: 4000, sick: 10000 }),
 
-    lettersGoal(
-      letters([
-        [-80, 4.5, -140], // S — over the welcome ramp in front of spawn
-        [0, 7.5, -160], // T — on top of the big fun box
-        [-40, 3.0, -100], // O — beside the west water cooler
-        [0, 3.5, -25], // N — floating over the long boardroom rail
-        [40, 7.0, 75], // K — on the east fun box
-        [0, 4.0, 150], // S — at the foot of the stairwell
-      ]),
-      3000
-    ),
+    lettersGoal(letters(OFFICE_LETTERS), 3000),
 
-    hiddenFileGoal([-186, 2.0, -80], 5000, 'behind the west filing cabinets'),
+    hiddenFileGoal(OFFICE_HIDDEN, 5000, 'ride the longest grind out to its very end'),
 
-    smashGoal('Smash 5 water coolers and printers', 5, 2500, [
-      { id: 'cooler_w', label: 'Water Cooler', position: [-40, 0, -100] },
-      { id: 'cooler_e', label: 'Water Cooler', position: [40, 0, -100] },
-      { id: 'cooler_c', label: 'Water Cooler', position: [0, 0, -20] },
-      { id: 'printer_nw', label: 'Printer', position: [-90, 0, -155] },
-      { id: 'printer_ne', label: 'Printer', position: [90, 0, -155] },
-      { id: 'printer_sw', label: 'Printer', position: [-90, 0, 45] },
-      { id: 'printer_se', label: 'Printer', position: [90, 0, 45] },
-    ]),
+    smashGoal('Smash both water coolers', 2, 2500,
+      OFFICE_COOLERS.map((p, i) => ({ id: i === 0 ? 'cooler_w' : 'cooler_e', label: 'Water Cooler', position: p }))),
 
     trickAtGoal(
       'grind_boardroom',
       'Grind the boardroom table',
-      { id: 'boardroom_table', label: 'the boardroom table', center: [0, 1.2, -25], radius: 42, height: 10 },
+      { id: 'boardroom_table', label: 'the boardroom table (upstairs)', center: [0, 5.2, 19.4], radius: 5, height: 3 },
       GRIND_TRICK_IDS,
-      3,
+      1,
       2000
     ),
 
-    comboGoal(60000, 3000),
+    comboGoal(40000, 3000),
 
-    gapListGoal(
-      [
-        { id: 'copier_gap', name: 'Copier Gap', bonus: 500, from: [-25, 0, -60], to: [-5, 0, -60], radius: 4 },
-        { id: 'aisle_gap', name: 'Cubicle Aisle Gap', bonus: 750, from: [25, 0, -60], to: [5, 0, -60], radius: 4 },
-        { id: 'watercooler_gap', name: 'Water Cooler Gap', bonus: 600, from: [-14, 0, -20], to: [14, 0, -20], radius: 5 },
-        { id: 'breakroom_gap', name: 'Break Room Gap', bonus: 1000, from: [0, 0, 90], to: [0, 0, 120], radius: 6 },
-      ],
-      2500
-    ),
+    gapListGoal(OFFICE_GAPS, 2500),
 
-    cashGoal('shredded_docs', 'Grab the shredded documents', 1500, [
-      { id: 'doc_w', label: 'Shredded Document', position: [-100, 1.5, -90], value: 200 },
-      { id: 'doc_e', label: 'Shredded Document', position: [100, 1.5, -90], value: 200 },
-      { id: 'doc_c', label: 'Shredded Document', position: [0, 2, -25], value: 500 },
-    ]),
+    cashGoal('shredded_docs', 'Grab the shredded documents', 1500,
+      OFFICE_CASH.map((c, i) => ({ id: `doc_${i}`, label: c.value >= 500 ? 'Petty Cash' : 'Shredded Document', position: c.pos, value: c.value }))),
 
-    escapeReachGoal('Reach the stairwell', {
+    escapeReachGoal('Reach the fire exit (upstairs)', {
       id: 'stairwell_exit',
-      label: 'the stairwell',
-      center: [0, 2, 158],
-      radius: 18,
-      height: 14,
+      label: 'the fire exit',
+      center: [8, 5.2, 21.0],
+      radius: 3,
+      height: 4,
     }, 2000),
 
-    timeGoal('under', 90, 2500, 'Escape the floor in under 90 seconds'),
+    timeGoal('under', 120, 2500, 'Escape the floor in under 2 minutes'),
   ],
 });
 
